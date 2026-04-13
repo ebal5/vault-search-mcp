@@ -352,6 +352,7 @@ class VaultIndex:
 
     def update_single(self, rel_path: str) -> bool:
         """単一ファイルのインデックスを更新."""
+        rel_path = rel_path.replace("\\", "/")
         full_path = (self.vault_root / rel_path).resolve()
         try:
             full_path.relative_to(self.vault_root)
@@ -535,9 +536,11 @@ class VaultIndex:
         conn = self._connect()
         try:
             if folder:
+                folder = folder.replace("\\", "/")
+                escaped = folder.replace("%", "\\%").replace("_", "\\_")
                 rows = conn.execute(
-                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes WHERE folder LIKE ? ORDER BY file_mtime DESC LIMIT ?",
-                    (f"{folder}%", limit),
+                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes WHERE folder LIKE ? ESCAPE '\\' ORDER BY file_mtime DESC LIMIT ?",
+                    (escaped + "%", limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
