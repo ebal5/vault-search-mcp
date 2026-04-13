@@ -47,7 +47,10 @@ class SearchHit(BaseModel):
     )
     snippet: str = Field(
         default="",
-        description="マッチ位置の抜粋。'>>>' / '<<<' でハイライト箇所を囲む。3文字未満クエリのフォールバック時は空文字",
+        description=(
+            "マッチ位置の抜粋。'>>>' / '<<<' でハイライト箇所を囲む。"
+            "3文字未満クエリのフォールバック時は空文字"
+        ),
     )
     score: float = Field(
         default=0.0,
@@ -69,7 +72,9 @@ class SearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tier: Literal[0, 1, 2] = Field(
-        description="ヒットしたキャッシュ段。0=完全一致キャッシュ, 1=ファジーキャッシュ, 2=FTS5 検索",
+        description=(
+            "ヒットしたキャッシュ段。0=完全一致キャッシュ, 1=ファジーキャッシュ, 2=FTS5 検索"
+        ),
     )
     total: int = Field(
         description="フィルタ後の総件数 (limit/offset 適用前)",

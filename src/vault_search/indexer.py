@@ -84,7 +84,7 @@ class TieredCache:
                 best_score = 0.0
                 best_entry: CacheEntry | None = None
 
-                for k, entry in self._store.items():
+                for _k, entry in self._store.items():
                     if now - entry.created_at >= self._ttl:
                         continue
                     score = self._jaccard(query_tokens, entry.tokens)
@@ -321,7 +321,10 @@ class VaultIndex:
 
     def _upsert_note(self, conn: sqlite3.Connection, note: ParsedNote, mtime: float) -> None:
         conn.execute(
-            """INSERT INTO notes (path, title, folder, tags, aliases, created_at, modified_at, file_mtime, content, frontmatter)
+            """INSERT INTO notes (
+                   path, title, folder, tags, aliases,
+                   created_at, modified_at, file_mtime, content, frontmatter
+               )
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
                    title=excluded.title, folder=excluded.folder, tags=excluded.tags,
@@ -502,7 +505,8 @@ class VaultIndex:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT path, title, folder, tags, aliases, created_at, modified_at, content, frontmatter FROM notes WHERE path = ?",
+                "SELECT path, title, folder, tags, aliases, created_at, modified_at, "
+                "content, frontmatter FROM notes WHERE path = ?",
                 (path,),
             ).fetchone()
             if row is None:
@@ -529,12 +533,14 @@ class VaultIndex:
                 folder = folder.replace("\\", "/")
                 escaped = folder.replace("%", "\\%").replace("_", "\\_")
                 rows = conn.execute(
-                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes WHERE folder LIKE ? ESCAPE '\\' ORDER BY file_mtime DESC LIMIT ?",
+                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
+                    "WHERE folder LIKE ? ESCAPE '\\' ORDER BY file_mtime DESC LIMIT ?",
                     (escaped + "%", limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes ORDER BY file_mtime DESC LIMIT ?",
+                    "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
+                    "ORDER BY file_mtime DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
             return [
@@ -617,8 +623,8 @@ class VaultWatcher:
     def start(self) -> bool:
         """監視開始。watchdog が利用可能なら True."""
         try:
+            from watchdog.events import FileSystemEvent, FileSystemEventHandler
             from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
             watcher = self
 
