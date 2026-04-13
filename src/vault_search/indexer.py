@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Cache
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CacheEntry:
     result: list[dict[str, Any]]
@@ -37,7 +38,9 @@ class CacheEntry:
 class TieredCache:
     """Tier 0 (exact) + Tier 1 (fuzzy) キャッシュ."""
 
-    def __init__(self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8):
+    def __init__(
+        self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8
+    ):
         self._store: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl
@@ -49,7 +52,9 @@ class TieredCache:
         return frozenset(query.lower().split())
 
     def _cache_key(self, query: str, filters: dict[str, Any] | None) -> str:
-        raw = query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
+        raw = (
+            query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
+        )
         return hashlib.md5(raw.encode()).hexdigest()
 
     def _jaccard(self, a: frozenset[str], b: frozenset[str]) -> float:
@@ -60,7 +65,9 @@ class TieredCache:
             return 0.0
         return len(a & b) / len(union)
 
-    def get(self, query: str, filters: dict[str, Any] | None = None) -> tuple[int, list[dict[str, Any]] | None]:
+    def get(
+        self, query: str, filters: dict[str, Any] | None = None
+    ) -> tuple[int, list[dict[str, Any]] | None]:
         """キャッシュ検索。返り値: (tier, results). tier=-1 はミス."""
         now = time.monotonic()
         key = self._cache_key(query, filters)
@@ -94,7 +101,9 @@ class TieredCache:
 
         return (-1, None)
 
-    def put(self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]) -> None:
+    def put(
+        self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]
+    ) -> None:
         key = self._cache_key(query, filters)
         tokens = self._tokenize(query)
 
@@ -257,7 +266,7 @@ class VaultIndex:
             # 現在のファイル一覧
             current_files: dict[str, float] = {}
             for md in self._iter_markdown_files():
-                rel = str(md.relative_to(self.vault_root))
+                rel = str(md.relative_to(self.vault_root)).replace("\\", "/")
                 try:
                     current_files[rel] = md.stat().st_mtime
                 except OSError:
@@ -305,15 +314,20 @@ class VaultIndex:
 
             logger.info(
                 "Index built: added=%d updated=%d deleted=%d skipped=%d errors=%d",
-                stats["added"], stats["updated"], stats["deleted"],
-                stats["skipped"], stats["errors"],
+                stats["added"],
+                stats["updated"],
+                stats["deleted"],
+                stats["skipped"],
+                stats["errors"],
             )
         finally:
             conn.close()
 
         return stats
 
-    def _upsert_note(self, conn: sqlite3.Connection, note: ParsedNote, mtime: float) -> None:
+    def _upsert_note(
+        self, conn: sqlite3.Connection, note: ParsedNote, mtime: float
+    ) -> None:
         conn.execute(
             """INSERT INTO notes (path, title, folder, tags, aliases, created_at, modified_at, file_mtime, content, frontmatter)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -323,16 +337,27 @@ class VaultIndex:
                    modified_at=excluded.modified_at, file_mtime=excluded.file_mtime,
                    content=excluded.content, frontmatter=excluded.frontmatter""",
             (
-                note.path, note.title, note.folder, note.tags_json,
+                note.path,
+                note.title,
+                note.folder,
+                note.tags_json,
                 json.dumps(note.aliases, ensure_ascii=False),
-                note.created_at, note.modified_at, mtime,
-                note.content, note.frontmatter_json,
+                note.created_at,
+                note.modified_at,
+                mtime,
+                note.content,
+                note.frontmatter_json,
             ),
         )
 
     def update_single(self, rel_path: str) -> bool:
         """単一ファイルのインデックスを更新."""
-        full_path = self.vault_root / rel_path
+        full_path = (self.vault_root / rel_path).resolve()
+        try:
+            full_path.relative_to(self.vault_root)
+        except ValueError:
+            logger.warning("Path traversal attempt blocked: %s", rel_path)
+            return False
         conn = self._connect()
         try:
             if not full_path.exists():
@@ -380,7 +405,9 @@ class VaultIndex:
             }
 
         # Tier 2: FTS5
-        results = self._fts5_search(query, tags=tags, folder=folder, limit=limit + offset)
+        results = self._fts5_search(
+            query, tags=tags, folder=folder, limit=limit + offset
+        )
         self._cache.put(query, filters, results)
 
         sliced = results[offset : offset + limit]
@@ -417,14 +444,16 @@ class VaultIndex:
                 "       rank",
                 "FROM notes_fts f",
                 "JOIN notes n ON n.id = f.rowid",
-                f"WHERE notes_fts MATCH ?",
+                "WHERE notes_fts MATCH ?",
             ]
             params: list[Any] = [fts_query]
 
             # メタデータフィルタ
             if folder:
-                sql_parts.append("AND n.folder LIKE ?")
-                params.append(f"{folder}%")
+                folder = folder.replace("\\", "/")
+                escaped = folder.replace("%", "\\%").replace("_", "\\_")
+                sql_parts.append("AND n.folder LIKE ? ESCAPE '\\'")
+                params.append(escaped + "%")
 
             if tags:
                 for tag in tags:
@@ -482,7 +511,9 @@ class VaultIndex:
         finally:
             conn.close()
 
-    def recent_notes(self, limit: int = 20, folder: str | None = None) -> list[dict[str, Any]]:
+    def recent_notes(
+        self, limit: int = 20, folder: str | None = None
+    ) -> list[dict[str, Any]]:
         """最近更新されたノート."""
         conn = self._connect()
         try:
@@ -534,7 +565,9 @@ class VaultIndex:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
-            return [{"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows]
+            return [
+                {"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows
+            ]
         finally:
             conn.close()
 
@@ -557,6 +590,7 @@ class VaultIndex:
 # ---------------------------------------------------------------------------
 # File Watcher
 # ---------------------------------------------------------------------------
+
 
 class VaultWatcher:
     """watchdog ベースのファイル監視.
@@ -589,15 +623,21 @@ class VaultWatcher:
                         return
                     # 隠しフォルダ除外
                     try:
-                        rel = str(Path(src).relative_to(watcher._index.vault_root))
+                        rel = str(
+                            Path(src).relative_to(watcher._index.vault_root)
+                        ).replace("\\", "/")
                     except ValueError:
                         return
-                    if any(p.startswith(".") for p in Path(rel).parts):
+                    if any(
+                        p.startswith(".") or p.startswith("_") for p in Path(rel).parts
+                    ):
                         return
                     watcher._schedule_update(rel)
 
             self._observer = Observer()
-            self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
+            self._observer.schedule(
+                Handler(), str(self._index.vault_root), recursive=True
+            )
             self._observer.daemon = True
             self._observer.start()
             logger.info("File watcher started: %s", self._index.vault_root)
