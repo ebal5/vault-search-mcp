@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Cache
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CacheEntry:
     result: list[dict[str, Any]]
@@ -37,7 +38,9 @@ class CacheEntry:
 class TieredCache:
     """Tier 0 (exact) + Tier 1 (fuzzy) キャッシュ."""
 
-    def __init__(self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8):
+    def __init__(
+        self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8
+    ):
         self._store: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl
@@ -49,7 +52,9 @@ class TieredCache:
         return frozenset(query.lower().split())
 
     def _cache_key(self, query: str, filters: dict[str, Any] | None) -> str:
-        raw = query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
+        raw = (
+            query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
+        )
         return hashlib.md5(raw.encode()).hexdigest()
 
     def _jaccard(self, a: frozenset[str], b: frozenset[str]) -> float:
@@ -60,7 +65,9 @@ class TieredCache:
             return 0.0
         return len(a & b) / len(union)
 
-    def get(self, query: str, filters: dict[str, Any] | None = None) -> tuple[int, list[dict[str, Any]] | None]:
+    def get(
+        self, query: str, filters: dict[str, Any] | None = None
+    ) -> tuple[int, list[dict[str, Any]] | None]:
         """キャッシュ検索。返り値: (tier, results). tier=-1 はミス."""
         now = time.monotonic()
         key = self._cache_key(query, filters)
@@ -94,7 +101,9 @@ class TieredCache:
 
         return (-1, None)
 
-    def put(self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]) -> None:
+    def put(
+        self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]
+    ) -> None:
         key = self._cache_key(query, filters)
         tokens = self._tokenize(query)
 
@@ -305,15 +314,20 @@ class VaultIndex:
 
             logger.info(
                 "Index built: added=%d updated=%d deleted=%d skipped=%d errors=%d",
-                stats["added"], stats["updated"], stats["deleted"],
-                stats["skipped"], stats["errors"],
+                stats["added"],
+                stats["updated"],
+                stats["deleted"],
+                stats["skipped"],
+                stats["errors"],
             )
         finally:
             conn.close()
 
         return stats
 
-    def _upsert_note(self, conn: sqlite3.Connection, note: ParsedNote, mtime: float) -> None:
+    def _upsert_note(
+        self, conn: sqlite3.Connection, note: ParsedNote, mtime: float
+    ) -> None:
         conn.execute(
             """INSERT INTO notes (path, title, folder, tags, aliases, created_at, modified_at, file_mtime, content, frontmatter)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -323,10 +337,16 @@ class VaultIndex:
                    modified_at=excluded.modified_at, file_mtime=excluded.file_mtime,
                    content=excluded.content, frontmatter=excluded.frontmatter""",
             (
-                note.path, note.title, note.folder, note.tags_json,
+                note.path,
+                note.title,
+                note.folder,
+                note.tags_json,
                 json.dumps(note.aliases, ensure_ascii=False),
-                note.created_at, note.modified_at, mtime,
-                note.content, note.frontmatter_json,
+                note.created_at,
+                note.modified_at,
+                mtime,
+                note.content,
+                note.frontmatter_json,
             ),
         )
 
@@ -379,8 +399,9 @@ class VaultIndex:
                 "results": sliced,
             }
 
-        # Tier 2: FTS5
-        results = self._fts5_search(query, tags=tags, folder=folder, limit=limit + offset)
+        # Tier 2: FTS5 — キャッシュ用に上限付きで取得
+        _MAX_RESULTS = 500
+        results = self._fts5_search(query, tags=tags, folder=folder, limit=_MAX_RESULTS)
         self._cache.put(query, filters, results)
 
         sliced = results[offset : offset + limit]
@@ -401,25 +422,40 @@ class VaultIndex:
         """FTS5 trigram 検索 + メタデータフィルタ."""
         conn = self._connect()
         try:
-            # FTS5 クエリ構築
-            # trigram トークナイザはそのまま文字列を渡せば部分文字列マッチ
-            # 複数語はそれぞれの AND で結合
             terms = query.strip().split()
             if not terms:
                 return []
 
-            # 各語を引用符で囲んで phrase 検索（trigram では部分一致になる）
-            fts_query = " AND ".join(f'"{t}"' for t in terms)
+            fts_terms = [t for t in terms if len(t) >= 3]
+            short_terms = [t for t in terms if len(t) < 3]
 
-            sql_parts = [
-                "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
-                "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
-                "       rank",
-                "FROM notes_fts f",
-                "JOIN notes n ON n.id = f.rowid",
-                f"WHERE notes_fts MATCH ?",
-            ]
-            params: list[Any] = [fts_query]
+            if fts_terms:
+                fts_query = " AND ".join(f'"{t}"' for t in fts_terms)
+                sql_parts: list[str] = [
+                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
+                    "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
+                    "       rank",
+                    "FROM notes_fts f",
+                    "JOIN notes n ON n.id = f.rowid",
+                    "WHERE notes_fts MATCH ?",
+                ]
+                params: list[Any] = [fts_query]
+            else:
+                # 全語が3文字未満 — LIKE フォールバック
+                sql_parts = [
+                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
+                    "       '' AS snippet,",
+                    "       0 AS rank",
+                    "FROM notes n",
+                    "WHERE 1=1",
+                ]
+                params = []
+
+            # 短い語は LIKE で補完
+            for term in short_terms:
+                like_param = "%" + term + "%"
+                sql_parts.append("AND (n.title LIKE ? OR n.content LIKE ?)")
+                params.extend([like_param, like_param])
 
             # メタデータフィルタ
             if folder:
@@ -431,7 +467,10 @@ class VaultIndex:
                     sql_parts.append("AND n.tags LIKE ?")
                     params.append(f'%"{tag}"%')
 
-            sql_parts.append("ORDER BY rank")
+            if fts_terms:
+                sql_parts.append("ORDER BY rank")
+            else:
+                sql_parts.append("ORDER BY n.file_mtime DESC")
             sql_parts.append("LIMIT ?")
             params.append(limit)
 
@@ -482,7 +521,9 @@ class VaultIndex:
         finally:
             conn.close()
 
-    def recent_notes(self, limit: int = 20, folder: str | None = None) -> list[dict[str, Any]]:
+    def recent_notes(
+        self, limit: int = 20, folder: str | None = None
+    ) -> list[dict[str, Any]]:
         """最近更新されたノート."""
         conn = self._connect()
         try:
@@ -534,7 +575,9 @@ class VaultIndex:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
-            return [{"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows]
+            return [
+                {"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows
+            ]
         finally:
             conn.close()
 
@@ -557,6 +600,7 @@ class VaultIndex:
 # ---------------------------------------------------------------------------
 # File Watcher
 # ---------------------------------------------------------------------------
+
 
 class VaultWatcher:
     """watchdog ベースのファイル監視.
@@ -597,7 +641,9 @@ class VaultWatcher:
                     watcher._schedule_update(rel)
 
             self._observer = Observer()
-            self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
+            self._observer.schedule(
+                Handler(), str(self._index.vault_root), recursive=True
+            )
             self._observer.daemon = True
             self._observer.start()
             logger.info("File watcher started: %s", self._index.vault_root)

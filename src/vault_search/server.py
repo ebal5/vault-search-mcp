@@ -76,7 +76,9 @@ def vault_search(
         total: フィルタ後の総件数
         results: [{path, title, folder, tags, snippet, score, ...}]
     """
-    return _get_index().search(query, tags=tags, folder=folder, limit=limit, offset=offset)
+    return _get_index().search(
+        query, tags=tags, folder=folder, limit=limit, offset=offset
+    )
 
 
 @mcp.tool()
@@ -159,6 +161,7 @@ def vault_stats() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # エントリポイント
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="vault-search-mcp server")

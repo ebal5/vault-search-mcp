@@ -97,7 +97,9 @@ def _normalize_tags(raw: Any) -> list[str]:
 
 def _extract_inline_tags(content: str) -> list[str]:
     """本文中の #tag を抽出（ただし見出しの # は除外）."""
-    return re.findall(r"(?:^|(?<=\s))#([a-zA-Z\u3000-\u9fff\uff00-\uffef][\w/\-]*)", content)
+    return re.findall(
+        r"(?:^|(?<=\s))#([a-zA-Z\u3000-\u9fff\uff00-\uffef][\w/\-]*)", content
+    )
 
 
 def _extract_title(content: str, path: str) -> str:
