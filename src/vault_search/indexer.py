@@ -38,9 +38,7 @@ class CacheEntry:
 class TieredCache:
     """Tier 0 (exact) + Tier 1 (fuzzy) キャッシュ."""
 
-    def __init__(
-        self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8
-    ):
+    def __init__(self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8):
         self._store: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl
@@ -52,9 +50,7 @@ class TieredCache:
         return frozenset(query.lower().split())
 
     def _cache_key(self, query: str, filters: dict[str, Any] | None) -> str:
-        raw = (
-            query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
-        )
+        raw = query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(raw.encode()).hexdigest()
 
     def _jaccard(self, a: frozenset[str], b: frozenset[str]) -> float:
@@ -101,9 +97,7 @@ class TieredCache:
 
         return (-1, None)
 
-    def put(
-        self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]
-    ) -> None:
+    def put(self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]) -> None:
         key = self._cache_key(query, filters)
         tokens = self._tokenize(query)
 
@@ -325,9 +319,7 @@ class VaultIndex:
 
         return stats
 
-    def _upsert_note(
-        self, conn: sqlite3.Connection, note: ParsedNote, mtime: float
-    ) -> None:
+    def _upsert_note(self, conn: sqlite3.Connection, note: ParsedNote, mtime: float) -> None:
         conn.execute(
             """INSERT INTO notes (path, title, folder, tags, aliases, created_at, modified_at, file_mtime, content, frontmatter)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -529,9 +521,7 @@ class VaultIndex:
         finally:
             conn.close()
 
-    def recent_notes(
-        self, limit: int = 20, folder: str | None = None
-    ) -> list[dict[str, Any]]:
+    def recent_notes(self, limit: int = 20, folder: str | None = None) -> list[dict[str, Any]]:
         """最近更新されたノート."""
         conn = self._connect()
         try:
@@ -585,9 +575,7 @@ class VaultIndex:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
-            return [
-                {"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows
-            ]
+            return [{"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows]
         finally:
             conn.close()
 
@@ -643,21 +631,17 @@ class VaultWatcher:
                         return
                     # 隠しフォルダ除外
                     try:
-                        rel = str(
-                            Path(src).relative_to(watcher._index.vault_root)
-                        ).replace("\\", "/")
+                        rel = str(Path(src).relative_to(watcher._index.vault_root)).replace(
+                            "\\", "/"
+                        )
                     except ValueError:
                         return
-                    if any(
-                        p.startswith(".") or p.startswith("_") for p in Path(rel).parts
-                    ):
+                    if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
                         return
                     watcher._schedule_update(rel)
 
             self._observer = Observer()
-            self._observer.schedule(
-                Handler(), str(self._index.vault_root), recursive=True
-            )
+            self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
             self._observer.daemon = True
             self._observer.start()
             logger.info("File watcher started: %s", self._index.vault_root)
