@@ -20,11 +20,21 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from .indexer import VaultIndex, VaultWatcher
+from .schemas import (
+    FolderCount,
+    NoteDetail,
+    NoteNotFoundError,
+    RecentNote,
+    ReindexStats,
+    SearchHit,
+    SearchResponse,
+    TagCount,
+    VaultStats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +66,7 @@ def vault_search(
     folder: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> dict[str, Any]:
+) -> SearchResponse:
     """Vault 内のノートを全文検索する。
 
     3段階プログレッシブ検索:
@@ -72,34 +82,40 @@ def vault_search(
         offset: 開始位置（ページネーション用）。
 
     Returns:
-        tier: ヒットしたキャッシュ段（0=完全一致, 1=ファジー, 2=FTS5）
-        total: フィルタ後の総件数
-        results: [{path, title, folder, tags, snippet, score, ...}]
+        SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
+        results (limit/offset 適用後の SearchHit 一覧)。
     """
-    return _get_index().search(
+    raw = _get_index().search(
         query, tags=tags, folder=folder, limit=limit, offset=offset
+    )
+    return SearchResponse(
+        tier=raw["tier"],
+        total=raw["total"],
+        results=[SearchHit(**hit) for hit in raw["results"]],
     )
 
 
 @mcp.tool()
-def vault_get_note(path: str) -> dict[str, Any]:
+def vault_get_note(path: str) -> NoteDetail:
     """指定パスのノート全文とメタデータを取得する。
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
 
     Returns:
-        path, title, folder, tags, aliases, created_at, modified_at, content, frontmatter
-        見つからない場合は error フィールド付きの dict
+        NoteDetail: 本文 (frontmatter 除去済み) と全メタデータを含む構造体。
+
+    Raises:
+        NoteNotFoundError: 指定された path がインデックスに存在しない場合。
     """
     result = _get_index().get_note(path)
     if result is None:
-        return {"error": f"Note not found: {path}"}
-    return result
+        raise NoteNotFoundError(path)
+    return NoteDetail(**result)
 
 
 @mcp.tool()
-def vault_recent(limit: int = 20, folder: str | None = None) -> list[dict[str, Any]]:
+def vault_recent(limit: int = 20, folder: str | None = None) -> list[RecentNote]:
     """最近更新されたノート一覧を取得する。
 
     Args:
@@ -107,33 +123,36 @@ def vault_recent(limit: int = 20, folder: str | None = None) -> list[dict[str, A
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
 
     Returns:
-        [{path, title, folder, tags, created_at, modified_at}]
+        file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
     """
-    return _get_index().recent_notes(limit=limit, folder=folder)
+    return [
+        RecentNote(**note)
+        for note in _get_index().recent_notes(limit=limit, folder=folder)
+    ]
 
 
 @mcp.tool()
-def vault_tags() -> list[dict[str, Any]]:
+def vault_tags() -> list[TagCount]:
     """全タグとその使用回数を返す。出現回数降順。
 
     Returns:
-        [{tag: str, count: int}]
+        TagCount のリスト。frontmatter.tags と本文インライン #tag の両方が集計対象。
     """
-    return _get_index().list_tags()
+    return [TagCount(**row) for row in _get_index().list_tags()]
 
 
 @mcp.tool()
-def vault_folders() -> list[dict[str, Any]]:
+def vault_folders() -> list[FolderCount]:
     """フォルダ構造とノート数を返す。
 
     Returns:
-        [{folder: str, count: int}]
+        フォルダパス昇順の FolderCount リスト。ルート直下のノートは folder='(root)' に集約。
     """
-    return _get_index().list_folders()
+    return [FolderCount(**row) for row in _get_index().list_folders()]
 
 
 @mcp.tool()
-def vault_reindex(force: bool = False) -> dict[str, Any]:
+def vault_reindex(force: bool = False) -> ReindexStats:
     """インデックスを再構築する。
 
     通常はファイル監視が差分更新するため手動実行は不要。
@@ -143,19 +162,19 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
         force: True なら全件リビルド。False なら mtime ベースの差分更新。
 
     Returns:
-        {added, updated, deleted, skipped, errors} — 処理件数の内訳
+        ReindexStats: added / updated / deleted / skipped / errors の件数内訳。
     """
-    return _get_index().build_index(force=force)
+    return ReindexStats(**_get_index().build_index(force=force))
 
 
 @mcp.tool()
-def vault_stats() -> dict[str, Any]:
+def vault_stats() -> VaultStats:
     """インデックスの統計情報を返す。
 
     Returns:
-        {total_notes, db_size_bytes, db_size_mb, vault_root}
+        VaultStats: ノート総数, DB サイズ (bytes / MB), Vault ルート絶対パス。
     """
-    return _get_index().stats()
+    return VaultStats(**_get_index().stats())
 
 
 # ---------------------------------------------------------------------------
