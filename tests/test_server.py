@@ -6,6 +6,16 @@ import pytest
 
 from vault_search import server as server_mod
 from vault_search.indexer import VaultIndex
+from vault_search.schemas import (
+    FolderCount,
+    NoteDetail,
+    NoteNotFoundError,
+    RecentNote,
+    ReindexStats,
+    SearchResponse,
+    TagCount,
+    VaultStats,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +37,11 @@ def test_get_index_raises_when_uninitialized(monkeypatch: pytest.MonkeyPatch) ->
         server_mod._get_index()
 
 
+# ---------------------------------------------------------------------------
+# Indexer 層の dict インタフェース (server が Pydantic にラップする前の生データ)
+# ---------------------------------------------------------------------------
+
+
 def test_vault_search_happy(vault_index: VaultIndex) -> None:
     res = server_mod._get_index().search("obsidian")
     assert set(res.keys()) >= {"tier", "total", "results"}
@@ -46,17 +61,11 @@ def test_vault_get_note_happy(vault_index: VaultIndex) -> None:
     assert note["title"] == "Welcome"
 
 
-def test_vault_get_note_missing_returns_error_shape() -> None:
-    """server モジュールの挙動: 見つからないとき error dict."""
+def test_vault_get_note_missing_returns_none() -> None:
+    """indexer 層では見つからないとき None を返す (server 層で NoteNotFoundError に変換)."""
     idx = server_mod._get_index()
-    # server 内の実装ロジックを模倣 (tool body と同じ)
     result = idx.get_note("does-not-exist.md")
-    # 実際の tool 関数経由でもテスト
-    if result is None:
-        wrapped = {"error": "Note not found: does-not-exist.md"}
-    else:
-        wrapped = result
-    assert "error" in wrapped
+    assert result is None
 
 
 def test_vault_recent_happy(vault_index: VaultIndex) -> None:
@@ -93,52 +102,77 @@ def test_vault_stats_happy(vault_index: VaultIndex) -> None:
 
 # ---------------------------------------------------------------------------
 # FastMCP tool wrapper smoke tests — 実際の @mcp.tool() 関数を直に呼ぶ
+# ツール関数は Pydantic モデルを返すようになった (PR #2)。
 # ---------------------------------------------------------------------------
 
 
 def test_mcp_tool_vault_search(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian")
-    assert "results" in res
+    assert isinstance(res, SearchResponse)
+    assert res.tier in (0, 1, 2)
+    assert isinstance(res.total, int)
+    assert isinstance(res.results, list)
 
 
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
+    """存在しないパスでは NoteNotFoundError を送出する (旧 error dict から変更)."""
     fn = _fn(server_mod.vault_get_note)
-    res = fn("no/such/note.md")
-    assert "error" in res
+    with pytest.raises(NoteNotFoundError) as exc_info:
+        fn("no/such/note.md")
+    assert exc_info.value.path == "no/such/note.md"
 
 
 def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_get_note)
     res = fn("Welcome.md")
-    assert res.get("title") == "Welcome"
+    assert isinstance(res, NoteDetail)
+    assert res.title == "Welcome"
+    assert res.path == "Welcome.md"
 
 
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
     res = fn(5, None)
     assert isinstance(res, list)
+    for item in res:
+        assert isinstance(item, RecentNote)
 
 
 def test_mcp_tool_vault_tags(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_tags)
     res = fn()
     assert isinstance(res, list)
+    for item in res:
+        assert isinstance(item, TagCount)
+        assert isinstance(item.tag, str)
+        assert isinstance(item.count, int)
 
 
 def test_mcp_tool_vault_folders(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_folders)
     res = fn()
     assert isinstance(res, list)
+    for item in res:
+        assert isinstance(item, FolderCount)
 
 
 def test_mcp_tool_vault_reindex(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_reindex)
     res = fn(False)
-    assert "added" in res
+    assert isinstance(res, ReindexStats)
+    # ReindexStats は added/updated/deleted/skipped/errors を必須フィールドで持つ
+    assert res.added >= 0
+    assert res.updated >= 0
+    assert res.deleted >= 0
+    assert res.skipped >= 0
+    assert res.errors >= 0
 
 
 def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_stats)
     res = fn()
-    assert "total_notes" in res
+    assert isinstance(res, VaultStats)
+    assert res.total_notes > 0
+    assert res.db_size_bytes >= 0
+    assert res.vault_root  # non-empty path string

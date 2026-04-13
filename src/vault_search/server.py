@@ -85,9 +85,7 @@ def vault_search(
         SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
         results (limit/offset 適用後の SearchHit 一覧)。
     """
-    raw = _get_index().search(
-        query, tags=tags, folder=folder, limit=limit, offset=offset
-    )
+    raw = _get_index().search(query, tags=tags, folder=folder, limit=limit, offset=offset)
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],
@@ -125,10 +123,7 @@ def vault_recent(limit: int = 20, folder: str | None = None) -> list[RecentNote]
     Returns:
         file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
     """
-    return [
-        RecentNote(**note)
-        for note in _get_index().recent_notes(limit=limit, folder=folder)
-    ]
+    return [RecentNote(**note) for note in _get_index().recent_notes(limit=limit, folder=folder)]
 
 
 @mcp.tool()

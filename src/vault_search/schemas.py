@@ -40,9 +40,7 @@ class SearchHit(BaseModel):
 
     path: str = Field(description="Vault ルートからの相対パス (例: 'Notes/foo.md')")
     title: str = Field(description="ノートタイトル (frontmatter.title または最初の H1)")
-    folder: str = Field(
-        description="所属フォルダ (Vault ルートからの相対、ルート直下は '')"
-    )
+    folder: str = Field(description="所属フォルダ (Vault ルートからの相対、ルート直下は '')")
     tags: list[str] = Field(
         default_factory=list,
         description="タグ一覧 (frontmatter.tags + 本文インライン #tag)",
