@@ -404,10 +404,9 @@ class VaultIndex:
                 "results": sliced,
             }
 
-        # Tier 2: FTS5
-        results = self._fts5_search(
-            query, tags=tags, folder=folder, limit=limit + offset
-        )
+        # Tier 2: FTS5 — キャッシュ用に上限付きで取得
+        _MAX_RESULTS = 500
+        results = self._fts5_search(query, tags=tags, folder=folder, limit=_MAX_RESULTS)
         self._cache.put(query, filters, results)
 
         sliced = results[offset : offset + limit]
@@ -428,25 +427,40 @@ class VaultIndex:
         """FTS5 trigram 検索 + メタデータフィルタ."""
         conn = self._connect()
         try:
-            # FTS5 クエリ構築
-            # trigram トークナイザはそのまま文字列を渡せば部分文字列マッチ
-            # 複数語はそれぞれの AND で結合
             terms = query.strip().split()
             if not terms:
                 return []
 
-            # 各語を引用符で囲んで phrase 検索（trigram では部分一致になる）
-            fts_query = " AND ".join(f'"{t}"' for t in terms)
+            fts_terms = [t for t in terms if len(t) >= 3]
+            short_terms = [t for t in terms if len(t) < 3]
 
-            sql_parts = [
-                "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
-                "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
-                "       rank",
-                "FROM notes_fts f",
-                "JOIN notes n ON n.id = f.rowid",
-                "WHERE notes_fts MATCH ?",
-            ]
-            params: list[Any] = [fts_query]
+            if fts_terms:
+                fts_query = " AND ".join(f'"{t}"' for t in fts_terms)
+                sql_parts: list[str] = [
+                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
+                    "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
+                    "       rank",
+                    "FROM notes_fts f",
+                    "JOIN notes n ON n.id = f.rowid",
+                    "WHERE notes_fts MATCH ?",
+                ]
+                params: list[Any] = [fts_query]
+            else:
+                # 全語が3文字未満 — LIKE フォールバック
+                sql_parts = [
+                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
+                    "       '' AS snippet,",
+                    "       0 AS rank",
+                    "FROM notes n",
+                    "WHERE 1=1",
+                ]
+                params = []
+
+            # 短い語は LIKE で補完
+            for term in short_terms:
+                like_param = "%" + term + "%"
+                sql_parts.append("AND (n.title LIKE ? OR n.content LIKE ?)")
+                params.extend([like_param, like_param])
 
             # メタデータフィルタ
             if folder:
@@ -460,7 +474,10 @@ class VaultIndex:
                     sql_parts.append("AND n.tags LIKE ?")
                     params.append(f'%"{tag}"%')
 
-            sql_parts.append("ORDER BY rank")
+            if fts_terms:
+                sql_parts.append("ORDER BY rank")
+            else:
+                sql_parts.append("ORDER BY n.file_mtime DESC")
             sql_parts.append("LIMIT ?")
             params.append(limit)
 
