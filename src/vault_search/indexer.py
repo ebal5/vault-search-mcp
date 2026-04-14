@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .filter import MetadataCondition, parse_metadata_filter
+from .filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
 from .parser import ParsedNote, parse_note
 
 logger = logging.getLogger(__name__)
@@ -391,8 +391,28 @@ class VaultIndex:
     ) -> dict[str, Any]:
         """Tier 0-2 のプログレッシブ検索.
 
-        ``metadata_filter`` は frontmatter 任意プロパティを対象とする AND フィルタ。
-        構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
+        Parameters
+        ----------
+        query:
+            FTS5 trigram 検索に渡すスペース区切りクエリ。空文字も可
+            (その場合は ``tags`` / ``folder`` / ``metadata_filter`` の
+            いずれかが必要)。
+        tags:
+            AND 条件でマッチさせるタグのリスト。
+        folder:
+            フォルダパスの前方一致フィルタ。
+        metadata_filter:
+            frontmatter 任意プロパティを対象とする AND フィルタ。
+            構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
+            不正構造は :class:`ValidationError` を送出する。
+        limit, offset:
+            ページング用。
+
+        Notes
+        -----
+        ``query`` が空でも ``tags`` / ``folder`` / ``metadata_filter`` の
+        いずれかが指定されていれば、DB 全体を対象に構造化フィルタだけで
+        絞り込む。全引数が空の場合は空結果を返す。
         """
         # Validate (raises ValidationError on malformed input)
         conditions = parse_metadata_filter(metadata_filter)
@@ -442,7 +462,13 @@ class VaultIndex:
         metadata_conditions: list[MetadataCondition] | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """FTS5 trigram 検索 + メタデータフィルタ."""
+        """FTS5 trigram 検索 + 構造化メタデータフィルタ.
+
+        ``metadata_conditions`` は :func:`build_sql_fragment` 経由で
+        SQL WHERE 断片に展開される。クエリが空でも ``tags`` / ``folder`` /
+        ``metadata_conditions`` のいずれかがあれば、FTS5 を経由せず
+        フィルタ専用パスで DB 全体を走査する。
+        """
         conn = self._connect()
         try:
             terms = query.strip().split()
@@ -496,55 +522,14 @@ class VaultIndex:
                     params.append(f'%"{tag}"%')
 
             # frontmatter metadata_filter (Issue #5)
+            # 各条件を filter.build_sql_fragment で WHERE 断片に変換する。
+            # SQL 組み立てと条件表現の結合度を下げるため、indexer 側は
+            # 断片とパラメータを連結するだけに留める。
             if metadata_conditions:
                 for cond in metadata_conditions:
-                    # cond.key は validate_identifier 済み (A-Za-z0-9_-.) なので
-                    # JSON パスに直接埋め込んでも安全。
-                    json_path = f"$.{cond.key}"
-                    if cond.op == "eq":
-                        # スカラー一致 OR JSON 配列要素含有
-                        # json_each はスカラー/NULL に対して malformed JSON を投げるため
-                        # json_type() で配列ガード。
-                        sql_parts.append(
-                            "AND ("
-                            "json_extract(n.frontmatter, ?) = ? "
-                            "OR ("
-                            "  json_type(n.frontmatter, ?) = 'array' "
-                            "  AND EXISTS ("
-                            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
-                            "    WHERE value = ?"
-                            "  )"
-                            ")"
-                            ")"
-                        )
-                        params.extend([json_path, cond.value, json_path, json_path, cond.value])
-                    elif cond.op == "ne":
-                        # キーが存在し値が != の場合のみ true
-                        sql_parts.append(
-                            "AND json_extract(n.frontmatter, ?) IS NOT NULL "
-                            "AND json_extract(n.frontmatter, ?) != ?"
-                        )
-                        params.extend([json_path, json_path, cond.value])
-                    elif cond.op == "in":
-                        values = list(cond.value)  # tuple[str, ...]
-                        placeholders = ",".join("?" * len(values))
-                        sql_parts.append(
-                            "AND ("
-                            f"json_extract(n.frontmatter, ?) IN ({placeholders}) "
-                            "OR ("
-                            "  json_type(n.frontmatter, ?) = 'array' "
-                            "  AND EXISTS ("
-                            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
-                            f"    WHERE value IN ({placeholders})"
-                            "  )"
-                            ")"
-                            ")"
-                        )
-                        params.append(json_path)
-                        params.extend(values)
-                        params.append(json_path)
-                        params.append(json_path)
-                        params.extend(values)
+                    fragment, fragment_params = build_sql_fragment(cond)
+                    sql_parts.append(fragment)
+                    params.extend(fragment_params)
 
             if fts_terms:
                 sql_parts.append("ORDER BY rank")
