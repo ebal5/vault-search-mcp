@@ -194,7 +194,8 @@ def vault_folders() -> list[FolderCount]:
     """フォルダ構造とノート数を返す。
 
     Returns:
-        フォルダパス昇順の FolderCount リスト。ルート直下のノートは folder='(root)' に集約。
+        フォルダパス昇順の FolderCount リスト。ルート直下のノートは folder='' に集約
+        (SearchHit/RecentNote と同じ表現。そのまま vault_search/vault_recent の folder 引数に渡せる)。
     """
     return [FolderCount(**row) for row in _get_index().list_folders()]
 

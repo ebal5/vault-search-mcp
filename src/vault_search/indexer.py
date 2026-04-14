@@ -513,8 +513,10 @@ class VaultIndex:
             if folder:
                 folder = folder.replace("\\", "/")
                 escaped = folder.replace("%", "\\%").replace("_", "\\_")
-                sql_parts.append("AND n.folder LIKE ? ESCAPE '\\'")
-                params.append(escaped + "%")
+                # 「folder 自身 OR folder/ 以下」に限定 — 同プレフィックスの
+                # 別フォルダ (e.g. 'Projects Hermes') を誤ヒットさせない
+                sql_parts.append("AND (n.folder = ? OR n.folder LIKE ? ESCAPE '\\')")
+                params.extend([folder, escaped + "/%"])
 
             if tags:
                 for tag in tags:
@@ -589,10 +591,12 @@ class VaultIndex:
             if folder:
                 folder = folder.replace("\\", "/")
                 escaped = folder.replace("%", "\\%").replace("_", "\\_")
+                # folder 自身 OR その配下に限定（兄弟フォルダ混入防止）
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
-                    "WHERE folder LIKE ? ESCAPE '\\' ORDER BY file_mtime DESC LIMIT ?",
-                    (escaped + "%", limit),
+                    "WHERE (folder = ? OR folder LIKE ? ESCAPE '\\') "
+                    "ORDER BY file_mtime DESC LIMIT ?",
+                    (folder, escaped + "/%", limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -638,7 +642,7 @@ class VaultIndex:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
-            return [{"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows]
+            return [{"folder": r["folder"], "count": r["count"]} for r in rows]
         finally:
             conn.close()
 

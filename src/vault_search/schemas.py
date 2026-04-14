@@ -152,7 +152,11 @@ class FolderCount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     folder: str = Field(
-        description="フォルダパス (Vault ルートからの相対)。ルート直下は '(root)'",
+        description=(
+            "フォルダパス (Vault ルートからの相対)。ルート直下は '' "
+            "(SearchHit/RecentNote/NoteDetail.folder と同じ表現)。"
+            "この値はそのまま vault_search(folder=...) / vault_recent(folder=...) に渡せる"
+        ),
     )
     count: int = Field(description="このフォルダ直下のノート数")
 
