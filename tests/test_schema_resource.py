@@ -41,25 +41,50 @@ SEARCH_HIT_FIELDS = {
 
 
 def _get_properties(schema: dict[str, Any]) -> dict[str, Any]:
-    """JSON Schema の 'properties' を取得。ネストされた $defs も探索。
+    """JSON Schema の 'properties' を取得。ネストされた $defs / items.$ref も探索。
 
     Pydantic v2 の model_json_schema は、ルートに properties を持つ場合と
-    $ref + $defs で間接参照する場合がある。どちらでも拾えるようにする。
+    `$ref` + `$defs` でネストされたモデルを間接参照する場合がある。
+    SearchHit 相当 (path + title + snippet を併せ持つ) を優先して返す。
     """
-    if "properties" in schema:
-        return schema["properties"]
     defs = schema.get("$defs") or schema.get("definitions") or {}
+
+    # 候補 1: $defs の中に SearchHit 相当があれば優先的に返す
     for d in defs.values():
         if isinstance(d, dict) and "properties" in d:
-            # 最初に見つかったものを返すのではなく、SearchHit 相当 (path + title
-            # + snippet を併せ持つ) を優先して返す。
             props = d["properties"]
             if {"path", "title", "snippet"}.issubset(props.keys()):
                 return props
-    # fallback: 最初の defs を返す
+
+    # 候補 2: ルート直下に properties があり、SearchHit 相当ならそれを返す
+    if "properties" in schema:
+        props = schema["properties"]
+        if {"path", "title", "snippet"}.issubset(props.keys()):
+            return props
+
+    # 候補 3: ルートの properties に含まれる配列フィールドの items.$ref を辿る
+    root_props = schema.get("properties") or {}
+    for prop in root_props.values():
+        if not isinstance(prop, dict):
+            continue
+        ref = None
+        if isinstance(prop.get("items"), dict):
+            ref = prop["items"].get("$ref")
+        ref = ref or prop.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.split("/")[-1]
+            target = defs.get(name)
+            if isinstance(target, dict) and "properties" in target:
+                return target["properties"]
+
+    # fallback: 最初に見つかった properties 持ちの defs
     for d in defs.values():
         if isinstance(d, dict) and "properties" in d:
             return d["properties"]
+
+    # 最終 fallback: ルート properties
+    if "properties" in schema:
+        return schema["properties"]
     return {}
 
 

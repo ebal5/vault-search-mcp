@@ -188,7 +188,7 @@ class VaultStats(BaseModel):
 
 
 _TOOL_OUTPUT_MODELS: dict[str, tuple[str, type[BaseModel], bool]] = {
-    "vault_search": ("SearchHit", SearchHit, False),
+    "vault_search": ("SearchResponse", SearchResponse, False),
     "vault_get_note": ("NoteDetail", NoteDetail, False),
     "vault_recent": ("RecentNote", RecentNote, True),
     "vault_tags": ("TagCount", TagCount, True),
