@@ -200,6 +200,35 @@ def test_mcp_vault_recent_full_response_validates(vault_index: VaultIndex) -> No
     jsonschema.validate(structured, schema)
 
 
+def test_vault_reindex_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
+    """vault_reindex の structured content が ``result`` でラップされない.
+
+    ReindexStats (Pydantic) 戻り型のままだと FastMCP のバージョン依存で
+    wrap_output の挙動が変わる (silent regression 導線)。dict 統一後は
+    wrap が発生しないことを保証する。
+    """
+    _content, structured = _call_tool("vault_reindex", {})
+    assert isinstance(structured, dict)
+    assert "result" not in structured, f"vault_reindex wrap drift: keys={list(structured.keys())}"
+    assert {"added", "updated", "deleted", "skipped", "errors"}.issubset(structured.keys()), (
+        f"vault_reindex missing ReindexStats keys: {structured!r}"
+    )
+    schema = _get_tool_output_schema("vault_reindex")
+    jsonschema.validate(structured, schema)
+
+
+def test_vault_stats_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
+    """vault_stats の structured content が ``result`` でラップされない."""
+    _content, structured = _call_tool("vault_stats", {})
+    assert isinstance(structured, dict)
+    assert "result" not in structured, f"vault_stats wrap drift: keys={list(structured.keys())}"
+    assert {"total_notes", "db_size_bytes", "db_size_mb", "vault_root"}.issubset(
+        structured.keys()
+    ), f"vault_stats missing VaultStats keys: {structured!r}"
+    schema = _get_tool_output_schema("vault_stats")
+    jsonschema.validate(structured, schema)
+
+
 def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> None:
     """MCP tools/list の outputSchema が schema://tools と同じ rich schema であること.
 

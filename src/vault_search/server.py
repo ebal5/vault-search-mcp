@@ -214,7 +214,7 @@ def vault_folders() -> dict[str, Any]:
 
 
 @mcp.tool()
-def vault_reindex(force: bool = False) -> ReindexStats:
+def vault_reindex(force: bool = False) -> dict[str, Any]:
     """インデックスを再構築する。
 
     通常はファイル監視が差分更新するため手動実行は不要。
@@ -224,19 +224,20 @@ def vault_reindex(force: bool = False) -> ReindexStats:
         force: True なら全件リビルド。False なら mtime ベースの差分更新。
 
     Returns:
-        ReindexStats: added / updated / deleted / skipped / errors の件数内訳。
+        dict: ReindexStats に相当する flat JSON (added / updated / deleted / skipped / errors)。
     """
-    return ReindexStats(**_get_index().build_index(force=force))
+    return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
 
 
 @mcp.tool()
-def vault_stats() -> VaultStats:
+def vault_stats() -> dict[str, Any]:
     """インデックスの統計情報を返す。
 
     Returns:
-        VaultStats: ノート総数, DB サイズ (bytes / MB), Vault ルート絶対パス。
+        dict: VaultStats に相当する flat JSON
+            (total_notes / db_size_bytes / db_size_mb / vault_root)。
     """
-    return VaultStats(**_get_index().stats())
+    return VaultStats(**_get_index().stats()).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
