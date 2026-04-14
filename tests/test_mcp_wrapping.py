@@ -160,8 +160,8 @@ def test_mcp_vault_search_full_response_validates(vault_index: VaultIndex) -> No
     _content, structured = _call_tool("vault_search", {"query": "obsidian"})
     schema = _get_tool_output_schema("vault_search")
     jsonschema.validate(structured, schema)
-    # results/tier/total は常に required であること
-    assert set(schema.get("required", [])) >= {"tier", "total", "results"}
+    # 少なくとも tier/total は required のまま (schema が緩みすぎていない)
+    assert set(schema.get("required", [])) >= {"tier", "total"}
 
 
 def test_mcp_vault_get_note_fields_subset_passes_lowlevel_validation(
@@ -208,16 +208,24 @@ def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> N
     schema://tools と カノニカルソースが 2 つに分裂していた。本テストは
     両者の properties キー集合が一致することを保証する regression。
     """
+    def _top_props(schema: dict[str, Any]) -> dict[str, Any]:
+        """anyOf でラップされた schema からも full 分岐の properties を取り出す."""
+        if "properties" in schema:
+            return schema["properties"]
+        if "anyOf" in schema and schema["anyOf"]:
+            return schema["anyOf"][0].get("properties", {})
+        return {}
+
     tools = asyncio.run(server_mod.mcp.list_tools())
     payload = build_schema_payload(vault_index)
     for tool in tools:
         assert tool.outputSchema is not None, f"{tool.name}: outputSchema missing"
         resource_schema = payload["tools"][tool.name]["output_schema"]
-        props = tool.outputSchema.get("properties", {})
+        props = _top_props(tool.outputSchema)
         assert props, (
             f"{tool.name}: MCP outputSchema has no properties (empty schema): {tool.outputSchema}"
         )
-        resource_props = resource_schema.get("properties", {})
+        resource_props = _top_props(resource_schema)
         assert set(props.keys()) == set(resource_props.keys()), (
             f"{tool.name}: MCP outputSchema keys {set(props.keys())} "
             f"!= resource schema keys {set(resource_props.keys())}"

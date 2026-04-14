@@ -343,15 +343,53 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 }
 
 
-def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
+_FIELDS_AWARE_TOOLS: frozenset[str] = frozenset(
+    {"vault_search", "vault_get_note", "vault_recent"}
+)
+
+
+def _strip_required(schema: dict[str, Any]) -> dict[str, Any]:
+    """schema のトップレベル ``required`` を除去した浅いコピーを返す.
+
+    ``additionalProperties``/``properties`` などは維持するため、fields subset
+    (指定キーのみを持つ dict) を許容しつつ余計なキー混入は引き続き弾く。
+    """
+    clone = dict(schema)
+    clone.pop("required", None)
+    return clone
+
+
+def _subset_of(full_schema: dict[str, Any]) -> dict[str, Any]:
+    """完全形 schema から required を外した subset 形を返す (ヘルパ)."""
+    return _strip_required(full_schema)
+
+
+def _allow_subset(full_schema: dict[str, Any]) -> dict[str, Any]:
+    """full / subset のどちらも受け付ける anyOf schema を返す.
+
+    MCP lowlevel server (mcp/server/lowlevel/server.py) は structured content を
+    ``jsonschema.validate(instance, outputSchema)`` で強制検証するため、
+    fields 指定で subset dict を返す fields-aware ツールでは
+    required 違反が起きる。full と (required 抜き) subset の anyOf にすれば
+    両方が通る。fields=None 時のレスポンスは full 分岐で検証されるため
+    required は維持されスキーマは緩みすぎない。
+    """
+    return {"anyOf": [full_schema, _subset_of(full_schema)]}
+
+
+def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
     item_schema = spec.output_model.model_json_schema()
+    supports_fields = tool_name in _FIELDS_AWARE_TOOLS
     if spec.envelope_key is not None:
+        # envelope dict: {<envelope_key>: [item, item, ...]}
+        # envelope 自身の required は維持し、items の required だけを緩める。
+        items_schema = _allow_subset(item_schema) if supports_fields else item_schema
         output_schema: dict[str, Any] = {
             "type": "object",
             "properties": {
                 spec.envelope_key: {
                     "type": "array",
-                    "items": item_schema,
+                    "items": items_schema,
                     "description": (
                         f"{spec.output_model.__name__} の配列 "
                         "(list 戻り型の FastMCP wrap を回避する envelope)"
@@ -361,6 +399,23 @@ def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
             "required": [spec.envelope_key],
             "additionalProperties": False,
         }
+    elif supports_fields and tool_name == "vault_search":
+        # SearchResponse: {tier, total, results: [SearchHit, ...]}
+        # 外枠 (tier/total/results) の required は維持、
+        # results.items (SearchHit) のみ subset 許容。
+        # Pydantic 生成スキーマは results.items を {"$ref": "#/$defs/SearchHit"}
+        # と参照するため、$defs から SearchHit 本体を取り出して anyOf を組む。
+        output_schema = dict(item_schema)
+        hit_schema = output_schema["$defs"]["SearchHit"]
+        results_prop = dict(output_schema["properties"]["results"])
+        results_prop["items"] = _allow_subset(hit_schema)
+        output_schema["properties"] = {
+            **output_schema["properties"],
+            "results": results_prop,
+        }
+    elif supports_fields:
+        # vault_get_note: NoteDetail 全体が subset 可能
+        output_schema = _allow_subset(item_schema)
     else:
         output_schema = item_schema
     return {
@@ -377,7 +432,7 @@ def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
 # FastMCP は ``dict[str, Any]`` 戻り型から rich schema を自動生成できないため、
 # 登録後に本エントリの ``output_schema`` を手動で差し込んで両経路の出力を一致させる。
 _TOOL_ENTRIES: dict[str, dict[str, Any]] = {
-    name: _build_tool_entry(spec) for name, spec in _TOOL_SPECS.items()
+    name: _build_tool_entry(spec, name) for name, spec in _TOOL_SPECS.items()
 }
 
 
