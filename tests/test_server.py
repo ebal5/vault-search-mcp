@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -186,9 +187,6 @@ def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:
 # ---------------------------------------------------------------------------
 
 
-from vault_search.schemas import SearchHit  # noqa: E402
-
-
 def test_vault_search_fields_subset(vault_index: VaultIndex) -> None:
     """fields=["path", "title"] で subset 返却 (tool 関数直接呼び出し)."""
     fn = _fn(server_mod.vault_search)
@@ -350,8 +348,13 @@ def test_mcp_tool_vault_search_metadata_filter_invalid_operator(
 # ---------------------------------------------------------------------------
 
 
-def _call_tool_structured(tool_name: str, arguments: dict) -> dict:
-    """FastMCP の経路 (convert_result=True) でツールを実行し structured content を返す."""
+def _call_tool_structured(tool_name: str, arguments: dict) -> Any:
+    """FastMCP の経路 (convert_result=True) でツールを実行し structured content を返す.
+
+    union 戻り型のツールは FastMCP が自動で ``{"result": ...}`` にラップするため、
+    ``result`` キーがあれば内側を返す (MCP プロトコル上も clients は通常
+    unstructured TextContent を読むので実害はないが、テスト側で unwrap する)。
+    """
     mgr = server_mod.mcp._tool_manager
     tool = mgr.get_tool(tool_name)
     assert tool is not None, f"tool not registered: {tool_name}"
@@ -359,6 +362,8 @@ def _call_tool_structured(tool_name: str, arguments: dict) -> dict:
     # output_schema が定義されていれば (unstructured, structured) のタプル。
     assert isinstance(result, tuple), f"expected structured output tuple, got {type(result)}"
     _unstructured, structured = result
+    if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+        return structured["result"]
     return structured
 
 
@@ -390,12 +395,10 @@ def test_vault_get_note_fields_actually_subsets_response(vault_index: VaultIndex
 
 def test_vault_recent_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
     """vault_recent 各要素も同様."""
-    structured = _call_tool_structured(
+    items = _call_tool_structured(
         "vault_recent",
         {"limit": 5, "fields": ["path"]},
     )
-    # list 出力は wrap_output されて {"result": [...]} になる可能性あり (FastMCP 仕様)
-    items = structured.get("result", structured) if isinstance(structured, dict) else structured
     assert isinstance(items, list)
     assert len(items) > 0
     for item in items:

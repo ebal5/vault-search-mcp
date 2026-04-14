@@ -20,10 +20,9 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel
 
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
@@ -56,24 +55,9 @@ def _get_index() -> VaultIndex:
     return _index
 
 
-_M = TypeVar("_M", bound=BaseModel)
-
-
-def _build_row(
-    model_cls: type[_M],
-    data: dict[str, Any],
-    fields_set: frozenset[str] | None,
-) -> _M:
-    """fields_set=None なら通常コンストラクタで厳密検証。
-
-    fields_set 指定時は ``model_construct`` でバリデーションをバイパスし、
-    必須フィールドが欠けていても部分モデルを組み立てる。
-    未セットフィールドは JSON シリアライズ時に除外される。
-    """
-    if fields_set is None:
-        return model_cls(**data)
-    masked = {k: v for k, v in data.items() if k in fields_set}
-    return model_cls.model_construct(**masked)
+def _subset_row(data: dict[str, Any], fields_set: frozenset[str]) -> dict[str, Any]:
+    """data から fields_set に含まれるキーのみを残した dict を返す."""
+    return {k: v for k, v in data.items() if k in fields_set}
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +76,7 @@ def vault_search(
     offset: int = 0,
     fields: list[str] | None = None,
     metadata_filter: dict[str, Any] | None = None,
-) -> SearchResponse:
+) -> SearchResponse | dict[str, Any]:
     """Vault 内のノートを全文検索する。
 
     3段階プログレッシブ検索:
@@ -106,16 +90,19 @@ def vault_search(
         folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
-        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
+        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド返却。
                 空リストまたは不正名は ValidationError。context window 節約用。
+                **指定時のレスポンスは SearchResponse でなく plain dict** となり、
+                results の各要素も指定キーのみを持つ dict になる (output_schema の
+                default 値で補完されないため、MCP レスポンス JSON も指定キーのみ)。
         metadata_filter: frontmatter プロパティでの AND フィルタ。
             例: ``{"status": "active", "priority": {"in": ["high", "low"]}}``。
             対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
             リスト型 frontmatter 値は「含む」判定 (tags と同様)。
 
     Returns:
-        SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
-        results (limit/offset 適用後の SearchHit 一覧)。
+        通常: SearchResponse (tier, total, results[SearchHit])。
+        fields 指定時: dict {"tier", "total", "results": [dict(指定キーのみ)]}。
     """
     fields_set = validate_fields(SearchHit, fields)
     raw = _get_index().search(
@@ -126,24 +113,33 @@ def vault_search(
         limit=limit,
         offset=offset,
     )
-    return SearchResponse(
-        tier=raw["tier"],
-        total=raw["total"],
-        results=[_build_row(SearchHit, hit, fields_set) for hit in raw["results"]],
-    )
+    if fields_set is None:
+        return SearchResponse(
+            tier=raw["tier"],
+            total=raw["total"],
+            results=[SearchHit(**hit) for hit in raw["results"]],
+        )
+    return {
+        "tier": raw["tier"],
+        "total": raw["total"],
+        "results": [_subset_row(hit, fields_set) for hit in raw["results"]],
+    }
 
 
 @mcp.tool()
-def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail:
+def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail | dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
         fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
                 空リストまたは不正名は ValidationError。context window 節約用。
+                **指定時のレスポンスは NoteDetail でなく plain dict** となり、
+                指定キーのみを持つ (MCP レスポンス JSON も指定キーのみ)。
 
     Returns:
-        NoteDetail: 本文 (frontmatter 除去済み) と全メタデータを含む構造体。
+        通常: NoteDetail。
+        fields 指定時: dict (指定キーのみ)。
 
     Raises:
         NoteNotFoundError: 指定された path がインデックスに存在しない場合。
@@ -152,7 +148,9 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail:
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    return _build_row(NoteDetail, result, fields_set)
+    if fields_set is None:
+        return NoteDetail(**result)
+    return _subset_row(result, fields_set)
 
 
 @mcp.tool()
@@ -160,7 +158,7 @@ def vault_recent(
     limit: int = 20,
     folder: str | None = None,
     fields: list[str] | None = None,
-) -> list[RecentNote]:
+) -> list[RecentNote] | list[dict[str, Any]]:
     """最近更新されたノート一覧を取得する。
 
     Args:
@@ -168,15 +166,17 @@ def vault_recent(
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
         fields: 返却フィールドを限定 (例: ["path"])。None で全フィールド。
                 空リストまたは不正名は ValidationError。context window 節約用。
+                **指定時は各要素が RecentNote でなく plain dict** となり、
+                指定キーのみを持つ (MCP レスポンス JSON も指定キーのみ)。
 
     Returns:
-        file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
+        file_mtime 降順の一覧。通常: list[RecentNote]。fields 指定時: list[dict]。
     """
     fields_set = validate_fields(RecentNote, fields)
-    return [
-        _build_row(RecentNote, note, fields_set)
-        for note in _get_index().recent_notes(limit=limit, folder=folder)
-    ]
+    rows = _get_index().recent_notes(limit=limit, folder=folder)
+    if fields_set is None:
+        return [RecentNote(**note) for note in rows]
+    return [_subset_row(note, fields_set) for note in rows]
 
 
 @mcp.tool()

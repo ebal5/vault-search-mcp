@@ -19,7 +19,6 @@ import pytest
 
 from vault_search import server as server_mod
 from vault_search.indexer import VaultIndex
-from vault_search.schemas import SearchHit, SearchResponse
 from vault_search.validation import ValidationError
 
 
@@ -107,26 +106,25 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
     )
 
     # Step 5: 構造検証
-    assert isinstance(response, SearchResponse)
-    assert response.tier in (0, 1, 2)
-    assert isinstance(response.total, int)
+    # fields 指定時は FastMCP の model_dump が default を補完しないよう plain dict を返す
+    assert isinstance(response, dict)
+    assert response["tier"] in (0, 1, 2)
+    assert isinstance(response["total"], int)
     # status=active のノートが少なくとも 1 件ヒットすべき
-    assert response.total >= 1, (
-        f"expected at least one hit for status=active, got total={response.total}"
+    assert response["total"] >= 1, (
+        f"expected at least one hit for status=active, got total={response['total']}"
     )
-    assert len(response.results) >= 1
+    assert len(response["results"]) >= 1
 
-    for hit in response.results:
-        assert isinstance(hit, SearchHit)
-        # fields で指定した 2 つのフィールドが JSON シリアライズ時に含まれること
-        # (model_construct された部分モデルは model_dump(exclude_unset=True) で確認)
-        dumped = hit.model_dump(exclude_unset=True)
-        assert set(dumped.keys()) == set(selected_fields), (
-            f"expected only {selected_fields} in dumped hit, got {sorted(dumped.keys())}"
+    for hit in response["results"]:
+        assert isinstance(hit, dict)
+        # fields で指定した 2 つのフィールドのみを持つ dict
+        assert set(hit.keys()) == set(selected_fields), (
+            f"expected only {selected_fields} in hit, got {sorted(hit.keys())}"
         )
         # path は string として意味のある値を持つ
-        assert isinstance(dumped["path"], str) and dumped["path"].endswith(".md")
-        assert isinstance(dumped["title"], str)
+        assert isinstance(hit["path"], str) and hit["path"].endswith(".md")
+        assert isinstance(hit["title"], str)
 
 
 # ---------------------------------------------------------------------------
