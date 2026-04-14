@@ -522,3 +522,65 @@ def test_metadata_filter_invalid_value_raises(vault_index: VaultIndex) -> None:
     """制御文字を含む値は ValidationError / ValueError."""
     with pytest.raises((ValueError, ValidationError)):
         vault_index.search("obsidian", metadata_filter={"status": "a\x00b"})
+
+
+# ---------------------------------------------------------------------------
+# Issue #60: query の LIKE ワイルドカード / FTS5 特殊文字エスケープ
+# ---------------------------------------------------------------------------
+
+
+def test_search_like_underscore_not_wildcard(tmp_path: Path) -> None:
+    """<3 文字 query の LIKE fallback で '_' がワイルドカード扱いされない.
+
+    `query="_a"` (2 文字) は LIKE フォールバックに落ちる。従来は ``%_a%``
+    として LIKE に差し込まれ、'_' が任意 1 文字扱いで 'Xa' 等も誤ヒットした。
+    """
+    root = tmp_path / "vault"
+    root.mkdir()
+    # 'Xa' を含むが '_a' は含まないノート (LIKE '_' ワイルドカード経由で誤ヒットする危険)
+    (root / "bystander.md").write_text("# bystander\nthe Xa token here.\n", encoding="utf-8")
+    # '_a' を含むノート (正例)
+    (root / "target.md").write_text("# target\nliteral _a marker.\n", encoding="utf-8")
+    idx = VaultIndex(root, db_path=tmp_path / "q.db")
+    idx.build_index()
+
+    res = idx.search("_a")
+    paths = {r["path"] for r in res["results"]}
+    assert "target.md" in paths
+    assert "bystander.md" not in paths, (
+        f"LIKE underscore leaked as wildcard: matched bystander.md (paths={paths})"
+    )
+
+
+def test_search_like_percent_not_wildcard(tmp_path: Path) -> None:
+    """<3 文字 query の LIKE fallback で '%' がワイルドカード扱いされない."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / "bystander.md").write_text("# bystander\nthe aZZZZb token.\n", encoding="utf-8")
+    (root / "target.md").write_text("# target\nliteral %a marker.\n", encoding="utf-8")
+    idx = VaultIndex(root, db_path=tmp_path / "q.db")
+    idx.build_index()
+
+    res = idx.search("%a")
+    paths = {r["path"] for r in res["results"]}
+    assert "target.md" in paths
+    assert "bystander.md" not in paths, (
+        f"LIKE percent leaked as wildcard: matched bystander.md (paths={paths})"
+    )
+
+
+def test_search_query_with_double_quote_does_not_raise(vault_index: VaultIndex) -> None:
+    """query 内に `"` を含んでも sqlite3.OperationalError を漏らさない.
+
+    従来は FTS5 path で ``f'"{t}"'`` に term をそのまま差し込むため、term 内の
+    ``"`` が FTS5 構文エラーを引き起こし sqlite3.OperationalError が上流に漏れた。
+    エスケープされていれば例外を上げず、通常の結果を返す (0 件でも可)。
+    """
+    import sqlite3
+
+    try:
+        res = vault_index.search('abc"def')
+    except sqlite3.OperationalError as exc:  # pragma: no cover — regression
+        raise AssertionError(f"FTS5 quote leaked as syntax error: {exc}") from exc
+    # 結果の形式が壊れていないこと
+    assert isinstance(res["results"], list)
