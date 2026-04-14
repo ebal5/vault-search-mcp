@@ -509,7 +509,8 @@ class VaultIndex:
                 return []
 
             if fts_terms:
-                fts_query = " AND ".join(f'"{t}"' for t in fts_terms)
+                # FTS5 phrase 内の `"` は `""` にダブルして構文エラーを防ぐ
+                fts_query = " AND ".join('"' + t.replace('"', '""') + '"' for t in fts_terms)
                 sql_parts: list[str] = [
                     "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
                     "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
@@ -530,10 +531,11 @@ class VaultIndex:
                 ]
                 params = []
 
-            # 短い語は LIKE で補完
+            # 短い語は LIKE で補完。'%' '_' '\' はエスケープしてワイルドカード誤ヒットを防ぐ
             for term in short_terms:
-                like_param = "%" + term + "%"
-                sql_parts.append("AND (n.title LIKE ? OR n.content LIKE ?)")
+                escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like_param = "%" + escaped + "%"
+                sql_parts.append(r"AND (n.title LIKE ? ESCAPE '\' OR n.content LIKE ? ESCAPE '\')")
                 params.extend([like_param, like_param])
 
             # メタデータフィルタ — folder は同プレフィックス兄弟の誤マッチを避ける
