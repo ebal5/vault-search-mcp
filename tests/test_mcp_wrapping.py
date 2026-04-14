@@ -209,9 +209,7 @@ def test_vault_reindex_structured_content_not_wrapped(vault_index: VaultIndex) -
     """
     _content, structured = _call_tool("vault_reindex", {})
     assert isinstance(structured, dict)
-    assert "result" not in structured, (
-        f"vault_reindex wrap drift: keys={list(structured.keys())}"
-    )
+    assert "result" not in structured, f"vault_reindex wrap drift: keys={list(structured.keys())}"
     assert {"added", "updated", "deleted", "skipped", "errors"}.issubset(structured.keys()), (
         f"vault_reindex missing ReindexStats keys: {structured!r}"
     )

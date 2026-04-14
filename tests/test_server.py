@@ -14,10 +14,8 @@ from vault_search.schemas import (
     NoteDetail,
     NoteNotFoundError,
     RecentNote,
-    ReindexStats,
     SearchResponse,
     TagCount,
-    VaultStats,
 )
 
 
@@ -185,22 +183,19 @@ def test_mcp_tool_vault_folders_root_is_empty_string(vault_index: VaultIndex) ->
 def test_mcp_tool_vault_reindex(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_reindex)
     res = fn(False)
-    assert isinstance(res, ReindexStats)
-    # ReindexStats は added/updated/deleted/skipped/errors を必須フィールドで持つ
-    assert res.added >= 0
-    assert res.updated >= 0
-    assert res.deleted >= 0
-    assert res.skipped >= 0
-    assert res.errors >= 0
+    assert isinstance(res, dict)
+    # added/updated/deleted/skipped/errors を必須キーで持つ flat JSON
+    for key in ("added", "updated", "deleted", "skipped", "errors"):
+        assert res[key] >= 0
 
 
 def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_stats)
     res = fn()
-    assert isinstance(res, VaultStats)
-    assert res.total_notes > 0
-    assert res.db_size_bytes >= 0
-    assert res.vault_root  # non-empty path string
+    assert isinstance(res, dict)
+    assert res["total_notes"] > 0
+    assert res["db_size_bytes"] >= 0
+    assert res["vault_root"]  # non-empty path string
 
 
 # ---------------------------------------------------------------------------
