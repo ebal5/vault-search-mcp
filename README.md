@@ -94,6 +94,16 @@ AI エージェントが初回起動時に `read_resource` で取得すること
 `frontmatter_keys` は DB から毎回列挙されるため、エージェントが存在しないキー名を想像（ハルシネーション）するのを防止する。
 `metadata_filter` で使えるキーの正解セットとして参照する。
 
+#### output_schema は `schema://tools` が正 — MCP `tools/list.outputSchema` は弱い総称スキーマ
+
+ツール実装の戻り型は `dict[str, Any]` に統一している (FastMCP が Union 戻り型に対して
+`wrap_output=True` を自動設定し、structured content を `{"result": ...}` にラップしてしまう
+問題の回避)。このため MCP プロトコルの `tools/list` が返す `outputSchema` は一般的な
+`object` スキーマに退化する。エージェントが `SearchResponse` / `NoteDetail` / `RecentNote`
+の rich な JSON Schema を参照したい場合は、必ず `schema://tools` の
+`tools.<name>.output_schema` を真実の情報源として使うこと。実レスポンスの structured
+content はその schema が記述するフラットな形で返される (`{"result": ...}` でラップされない)。
+
 ### Breaking changes (Pydantic 移行)
 
 - 全ツールが `dict` / `list[dict]` ではなく Pydantic モデル（`extra="forbid"`）を返すよう変更。MCP プロトコル経由ではシリアライズ後の JSON 形状はほぼ同一だが、未知フィールドの混入が拒否される。
