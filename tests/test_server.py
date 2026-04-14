@@ -139,7 +139,7 @@ def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
 
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
-    res = fn(5, None)
+    res = fn(limit=5)
     # envelope dict `{"notes": [...]}` を返す (FastMCP の list wrap 回避のため)
     assert isinstance(res, dict)
     assert set(res.keys()) == {"notes"}
@@ -290,7 +290,7 @@ def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> No
 def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
     """fields=["path"] で subset 返却 (envelope dict `{"notes": [...]}`)."""
     fn = _fn(server_mod.vault_recent)
-    res = fn(5, None, ["path"])
+    res = fn(limit=5, fields=["path"])
     assert isinstance(res, dict)
     assert set(res.keys()) == {"notes"}
     notes = res["notes"]
@@ -306,14 +306,14 @@ def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
     """fields=[] は ValueError."""
     fn = _fn(server_mod.vault_recent)
     with pytest.raises(ValueError):
-        fn(5, None, [])
+        fn(limit=5, fields=[])
 
 
 def test_vault_recent_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
     """fields=["nope"] は ValueError."""
     fn = _fn(server_mod.vault_recent)
     with pytest.raises(ValueError):
-        fn(5, None, ["nope"])
+        fn(limit=5, fields=["nope"])
 
 
 # ---------------------------------------------------------------------------
@@ -494,12 +494,10 @@ def test_vault_search_rejects_limit_above_max(vault_index: VaultIndex) -> None:
 def test_vault_recent_accepts_offset_parameter(vault_index: VaultIndex) -> None:
     """vault_recent に offset 引数があり、指定分スキップする."""
     fn = _fn(server_mod.vault_recent)
-    full = fn(5, None)
+    full = fn(limit=5)
     assert len(full["notes"]) >= 2, "テスト前提: 最低 2 件の recent notes が必要"
     skipped = fn(limit=5, offset=1)
-    assert skipped["notes"] == full["notes"][1:], (
-        "offset=1 は先頭 1 件を省いた結果を返すこと"
-    )
+    assert skipped["notes"] == full["notes"][1:], "offset=1 は先頭 1 件を省いた結果を返すこと"
 
 
 def test_vault_recent_rejects_negative_offset(vault_index: VaultIndex) -> None:
