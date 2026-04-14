@@ -120,6 +120,31 @@ def test_validate_identifier_rejects_disallowed_symbols(name: str) -> None:
         validate_identifier(name)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "..",
+        ".a",
+        "a.",
+        "a..",
+        "a..b",
+        ".",
+        ".a.b",
+        "a.b.",
+        "a...b",
+    ],
+)
+def test_validate_identifier_rejects_malformed_dots(name: str) -> None:
+    """Empty dot-segments expand to malformed SQLite JSON paths.
+
+    See issue #14: inputs like ``a..b`` used to pass ``_IDENTIFIER_RE``
+    and produced ``$.a..b`` which SQLite rejects with
+    ``sqlite3.OperationalError``. They must raise ``ValidationError``.
+    """
+    with pytest.raises(ValidationError):
+        validate_identifier(name)
+
+
 def test_validate_identifier_rejects_non_ascii_japanese() -> None:
     with pytest.raises(ValidationError):
         validate_identifier("重要")
