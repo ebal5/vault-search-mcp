@@ -26,6 +26,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
+    _TOOL_ENTRIES,
     FolderCount,
     NoteDetail,
     NoteNotFoundError,
@@ -239,13 +240,63 @@ def vault_stats() -> VaultStats:
 
 
 # ---------------------------------------------------------------------------
+# MCP outputSchema injection
+# ---------------------------------------------------------------------------
+#
+# 背景:
+#   各ツールは戻り型を ``dict[str, Any]`` に統一している (Round 3)。これは
+#   ``SearchResponse | dict[str, Any]`` の Union が FastMCP の wrap_output=True を
+#   誘発し structured content が ``{"result": ...}`` にラップされる問題 (Round 2-3)
+#   と、fields 指定時に rich model で再バリデートされて subset dict が拒否される
+#   問題を同時に回避するため。
+#
+# 副作用:
+#   ``dict[str, Any]`` 戻り型から FastMCP が自動生成する outputSchema は
+#   ``{"type": "object", "additionalProperties": true}`` 相当の空 schema になり、
+#   schema://tools リソースが公開する rich schema と drift する (カノニカルソース 2 つ問題)。
+#
+# 対応:
+#   登録済み Tool の ``fn_metadata.output_schema`` を _TOOL_ENTRIES の rich schema に
+#   差し替え、MCP tools/list の outputSchema を schema://tools と同じカノニカル形に
+#   揃える。``fn_metadata.output_model`` はダミーのゆるい RootModel のまま保持して
+#   実行時 validation を緩く保つ (fields subset dict を壊さない)。
+#   ``Tool.output_schema`` は cached_property のため、instance dict に直接書き込んで
+#   プロパティ評価をバイパスする。
+#
+# TODO(FastMCP):
+#   FastMCP が @tool(output_schema=...) のような公式 API を提供したら移行する。
+#   参考: mcp/server/fastmcp/server.py の tool() シグネチャ (2026-04 現在 output_schema なし)。
+
+
+def _inject_rich_output_schemas() -> None:
+    """登録済み MCP ツールの outputSchema を schema://tools と同じ rich schema に差し替える."""
+    tool_manager = mcp._tool_manager  # noqa: SLF001 — FastMCP 公式 API 不在のため内部参照
+    for tool_name, entry in _TOOL_ENTRIES.items():
+        tool = tool_manager._tools.get(tool_name)  # noqa: SLF001
+        if tool is None:  # pragma: no cover — 実装ミス以外では起きない
+            raise RuntimeError(f"Tool not registered: {tool_name}")
+        rich_schema = entry["output_schema"]
+        tool.fn_metadata.output_schema = rich_schema
+        # cached_property をバイパスして MCP list_tools 経路に rich schema を公開
+        tool.__dict__["output_schema"] = rich_schema
+
+
+_inject_rich_output_schemas()
+
+
+# ---------------------------------------------------------------------------
 # MCP Resources
 # ---------------------------------------------------------------------------
 
 
 @mcp.resource("schema://tools")
 def schema_resource() -> dict[str, Any]:
-    """全ツールの入出力スキーマと frontmatter キー一覧を返す."""
+    """全ツールの入出力スキーマと frontmatter キー一覧を返す.
+
+    schema://tools の output_schema と MCP tools/list の outputSchema は
+    _TOOL_ENTRIES を共通のカノニカルソースとして同一内容になる
+    (_inject_rich_output_schemas 参照)。
+    """
     return build_schema_payload(_get_index())
 
 
