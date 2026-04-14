@@ -329,9 +329,7 @@ def test_folder_filter_matches_folder_itself(vault_index: VaultIndex, tmp_vault:
     assert "Projects/日本語ノート.md" in paths
 
 
-def test_folder_filter_trailing_slash_normalized(
-    vault_index: VaultIndex, tmp_vault: Path
-) -> None:
+def test_folder_filter_trailing_slash_normalized(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """末尾スラッシュ付き folder ('Projects/') も 'Projects' と同等に扱う.
 
     Issue #34: `folder='Projects/'` で silent 0 件になる regression の防止。

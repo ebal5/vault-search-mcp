@@ -196,7 +196,7 @@ def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, lis
         ``(clause, params)``。clause は前置詞を含まない WHERE 断片
         ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
     """
-    folder = folder.replace("\\", "/")
+    folder = folder.replace("\\", "/").rstrip("/")
     escaped = folder.replace("%", "\\%").replace("_", "\\_")
     clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
     return clause, [folder, escaped + "/%"]
