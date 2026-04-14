@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
@@ -68,8 +69,26 @@ def _subset_row(data: dict[str, Any], fields_set: frozenset[str]) -> dict[str, A
 
 mcp = FastMCP("vault-search")
 
+# MCP tool annotations (issue #22).
+# 全ツールはローカル vault のみを扱うため openWorldHint=False。
+# 読み取り系は readOnly=True / destructive=False / idempotent=True。
+# vault_reindex は DB を書き換える唯一の writer (destructive=True) だが、同一入力
+# に対し同一結果に収束するため idempotent=True。
+_READ_ONLY_HINTS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_REINDEX_HINTS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
-@mcp.tool()
+
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_search(
     query: str,
     tags: list[str] | None = None,
@@ -130,7 +149,7 @@ def vault_search(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
@@ -156,7 +175,7 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]
     return _subset_row(result, fields_set)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_recent(
     limit: int = 20,
     offset: int = 0,
@@ -191,7 +210,7 @@ def vault_recent(
     return {"notes": notes}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
@@ -203,7 +222,7 @@ def vault_tags() -> dict[str, Any]:
     return {"tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
 
@@ -220,7 +239,7 @@ def vault_folders() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_REINDEX_HINTS)
 def vault_reindex(force: bool = False) -> dict[str, Any]:
     """インデックスを再構築する。
 
@@ -236,7 +255,7 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_HINTS)
 def vault_stats() -> dict[str, Any]:
     """インデックスの統計情報を返す。
 
