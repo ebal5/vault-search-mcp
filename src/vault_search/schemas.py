@@ -397,7 +397,8 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
         # 外枠 (tier/total/results) の required は維持、
         # results.items (SearchHit) のみ subset 許容。
         # Pydantic 生成スキーマは results.items を {"$ref": "#/$defs/SearchHit"}
-        # と参照するため、$defs から SearchHit 本体を取り出して anyOf を組む。
+        # と参照するため、$defs から SearchHit 本体を取り出して inline anyOf に
+        # 差し替え、もはや参照先がない $defs は削除する (dead schema を残さない)。
         output_schema = dict(item_schema)
         hit_schema = output_schema["$defs"]["SearchHit"]
         results_prop = dict(output_schema["properties"]["results"])
@@ -406,9 +407,13 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
             **output_schema["properties"],
             "results": results_prop,
         }
+        output_schema.pop("$defs", None)
     elif supports_fields:
-        # vault_get_note: NoteDetail 全体が subset 可能
-        output_schema = _allow_subset(item_schema)
+        # vault_get_note: トップレベルは {"type": "object", "properties": ...} の
+        # 対称 shape を維持し、required のみ外して subset を許容する。
+        # fields=None 時の全フィールド存在は server 側 Pydantic が保証するため、
+        # schema 層で required を緩めても runtime 契約は崩れない。
+        output_schema = _without_required(item_schema)
     else:
         output_schema = item_schema
     return {

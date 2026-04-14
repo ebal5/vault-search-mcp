@@ -41,49 +41,48 @@ SEARCH_HIT_FIELDS = {
 
 
 def _get_properties(schema: dict[str, Any]) -> dict[str, Any]:
-    """JSON Schema の 'properties' を取得。ネストされた $defs / items.$ref も探索。
+    """JSON Schema から SearchHit 相当 (path + title + snippet) の properties を探索.
 
-    Pydantic v2 の model_json_schema は、ルートに properties を持つ場合と
-    `$ref` + `$defs` でネストされたモデルを間接参照する場合がある。
-    SearchHit 相当 (path + title + snippet を併せ持つ) を優先して返す。
+    Pydantic 生成 schema は (a) ルート直下の properties、(b) $defs 参照、
+    (c) 配列項目へのインライン or $ref、(d) anyOf ブランチ内の properties、
+    のいずれにも該当モデルが現れ得る。いずれのパターンでも SearchHit 相当を
+    優先的に返す。
     """
-    defs = schema.get("$defs") or schema.get("definitions") or {}
+    target_keys = {"path", "title", "snippet"}
 
-    # 候補 1: $defs の中に SearchHit 相当があれば優先的に返す
-    for d in defs.values():
-        if isinstance(d, dict) and "properties" in d:
-            props = d["properties"]
-            if {"path", "title", "snippet"}.issubset(props.keys()):
+    def _walk(node: Any) -> dict[str, Any] | None:
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict) and target_keys.issubset(props.keys()):
                 return props
+            # anyOf / oneOf / items / $defs / definitions / properties を探索
+            for key in ("anyOf", "oneOf", "allOf"):
+                branches = node.get(key)
+                if isinstance(branches, list):
+                    for branch in branches:
+                        hit = _walk(branch)
+                        if hit is not None:
+                            return hit
+            for key in ("items", "$defs", "definitions", "properties"):
+                sub = node.get(key)
+                if isinstance(sub, dict):
+                    # properties dict の value 群 / defs dict の value 群を探索
+                    if key in {"$defs", "definitions", "properties"}:
+                        for v in sub.values():
+                            hit = _walk(v)
+                            if hit is not None:
+                                return hit
+                    else:
+                        hit = _walk(sub)
+                        if hit is not None:
+                            return hit
+        return None
 
-    # 候補 2: ルート直下に properties があり、SearchHit 相当ならそれを返す
-    if "properties" in schema:
-        props = schema["properties"]
-        if {"path", "title", "snippet"}.issubset(props.keys()):
-            return props
-
-    # 候補 3: ルートの properties に含まれる配列フィールドの items.$ref を辿る
-    root_props = schema.get("properties") or {}
-    for prop in root_props.values():
-        if not isinstance(prop, dict):
-            continue
-        ref = None
-        if isinstance(prop.get("items"), dict):
-            ref = prop["items"].get("$ref")
-        ref = ref or prop.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            name = ref.split("/")[-1]
-            target = defs.get(name)
-            if isinstance(target, dict) and "properties" in target:
-                return target["properties"]
-
-    # fallback: 最初に見つかった properties 持ちの defs
-    for d in defs.values():
-        if isinstance(d, dict) and "properties" in d:
-            return d["properties"]
-
-    # 最終 fallback: ルート properties
-    if "properties" in schema:
+    hit = _walk(schema)
+    if hit is not None:
+        return hit
+    # 最終 fallback: ルート properties があればそれを返す
+    if isinstance(schema.get("properties"), dict):
         return schema["properties"]
     return {}
 
