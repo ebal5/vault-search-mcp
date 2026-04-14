@@ -370,6 +370,12 @@ def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
     }
 
 
+# ``_TOOL_ENTRIES`` は各ツールの (description / input_schema / output_schema) を
+# 束ねる唯一のカノニカルソース。以下 2 経路から参照される:
+#   1. ``build_schema_payload`` → ``schema://tools`` リソース (AI エージェント向け自己記述)
+#   2. ``server._inject_rich_output_schemas`` → MCP ``tools/list`` の ``outputSchema``
+# FastMCP は ``dict[str, Any]`` 戻り型から rich schema を自動生成できないため、
+# 登録後に本エントリの ``output_schema`` を手動で差し込んで両経路の出力を一致させる。
 _TOOL_ENTRIES: dict[str, dict[str, Any]] = {
     name: _build_tool_entry(spec) for name, spec in _TOOL_SPECS.items()
 }
