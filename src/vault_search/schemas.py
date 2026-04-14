@@ -226,10 +226,39 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "metadata_filter": {
                     "type": ["object", "null"],
                     "description": (
-                        "frontmatter AND フィルタ。値は str (暗黙 eq) または "
-                        '{"in": list[str]} / {"ne": str}'
+                        "frontmatter の各キーに対する AND フィルタ条件。"
+                        "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
+                        '{"in": list[str]} / {"ne": str}。'
+                        '例: {"status": "active", "priority": {"in": ["high"]}}'
                     ),
-                    "additionalProperties": True,
+                    "additionalProperties": {
+                        "oneOf": [
+                            {
+                                "type": "string",
+                                "description": (
+                                    "暗黙 eq: 値との完全一致 (配列フィールドは要素含有)"
+                                ),
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "in": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                    },
+                                },
+                                "required": ["in"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {"ne": {"type": "string"}},
+                                "required": ["ne"],
+                                "additionalProperties": False,
+                            },
+                        ],
+                    },
                 },
             },
             "required": ["query"],
