@@ -106,21 +106,39 @@ def _call_vault_search_via_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
 def _search_hit_properties(output_schema: dict[str, Any]) -> dict[str, Any]:
     """vault_search の output_schema から SearchHit 相当の properties を取り出す.
 
-    SearchResponse の JSON Schema は ``$defs`` に SearchHit を抱えるので、
-    path + title + snippet を全て持つ properties dict を探して返す。
+    path + title + snippet を全て持つ properties dict を、$defs / items /
+    anyOf ブランチのいずれに格納されていても再帰探索して返す。
     """
-    defs = output_schema.get("$defs") or output_schema.get("definitions") or {}
-    for d in defs.values():
-        if isinstance(d, dict) and "properties" in d:
-            props = d["properties"]
-            if {"path", "title", "snippet"}.issubset(props.keys()):
-                return props
-    # fallback: ルート直下 (list wrap 等) に SearchHit があった場合
-    if "properties" in output_schema:
-        props = output_schema["properties"]
-        if {"path", "title", "snippet"}.issubset(props.keys()):
+    target_keys = {"path", "title", "snippet"}
+
+    def _walk(node: Any) -> dict[str, Any]:
+        if not isinstance(node, dict):
+            return {}
+        props = node.get("properties")
+        if isinstance(props, dict) and target_keys.issubset(props.keys()):
             return props
-    return {}
+        for key in ("anyOf", "oneOf", "allOf"):
+            branches = node.get(key)
+            if isinstance(branches, list):
+                for branch in branches:
+                    hit = _walk(branch)
+                    if hit:
+                        return hit
+        for key in ("items", "$defs", "definitions", "properties"):
+            sub = node.get(key)
+            if isinstance(sub, dict):
+                if key in {"$defs", "definitions", "properties"}:
+                    for v in sub.values():
+                        hit = _walk(v)
+                        if hit:
+                            return hit
+                else:
+                    hit = _walk(sub)
+                    if hit:
+                        return hit
+        return {}
+
+    return _walk(output_schema)
 
 
 @pytest.fixture(autouse=True)

@@ -41,49 +41,48 @@ SEARCH_HIT_FIELDS = {
 
 
 def _get_properties(schema: dict[str, Any]) -> dict[str, Any]:
-    """JSON Schema の 'properties' を取得。ネストされた $defs / items.$ref も探索。
+    """JSON Schema から SearchHit 相当 (path + title + snippet) の properties を探索.
 
-    Pydantic v2 の model_json_schema は、ルートに properties を持つ場合と
-    `$ref` + `$defs` でネストされたモデルを間接参照する場合がある。
-    SearchHit 相当 (path + title + snippet を併せ持つ) を優先して返す。
+    Pydantic 生成 schema は (a) ルート直下の properties、(b) $defs 参照、
+    (c) 配列項目へのインライン or $ref、(d) anyOf ブランチ内の properties、
+    のいずれにも該当モデルが現れ得る。いずれのパターンでも SearchHit 相当を
+    優先的に返す。
     """
-    defs = schema.get("$defs") or schema.get("definitions") or {}
+    target_keys = {"path", "title", "snippet"}
 
-    # 候補 1: $defs の中に SearchHit 相当があれば優先的に返す
-    for d in defs.values():
-        if isinstance(d, dict) and "properties" in d:
-            props = d["properties"]
-            if {"path", "title", "snippet"}.issubset(props.keys()):
+    def _walk(node: Any) -> dict[str, Any] | None:
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict) and target_keys.issubset(props.keys()):
                 return props
+            # anyOf / oneOf / items / $defs / definitions / properties を探索
+            for key in ("anyOf", "oneOf", "allOf"):
+                branches = node.get(key)
+                if isinstance(branches, list):
+                    for branch in branches:
+                        hit = _walk(branch)
+                        if hit is not None:
+                            return hit
+            for key in ("items", "$defs", "definitions", "properties"):
+                sub = node.get(key)
+                if isinstance(sub, dict):
+                    # properties dict の value 群 / defs dict の value 群を探索
+                    if key in {"$defs", "definitions", "properties"}:
+                        for v in sub.values():
+                            hit = _walk(v)
+                            if hit is not None:
+                                return hit
+                    else:
+                        hit = _walk(sub)
+                        if hit is not None:
+                            return hit
+        return None
 
-    # 候補 2: ルート直下に properties があり、SearchHit 相当ならそれを返す
-    if "properties" in schema:
-        props = schema["properties"]
-        if {"path", "title", "snippet"}.issubset(props.keys()):
-            return props
-
-    # 候補 3: ルートの properties に含まれる配列フィールドの items.$ref を辿る
-    root_props = schema.get("properties") or {}
-    for prop in root_props.values():
-        if not isinstance(prop, dict):
-            continue
-        ref = None
-        if isinstance(prop.get("items"), dict):
-            ref = prop["items"].get("$ref")
-        ref = ref or prop.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            name = ref.split("/")[-1]
-            target = defs.get(name)
-            if isinstance(target, dict) and "properties" in target:
-                return target["properties"]
-
-    # fallback: 最初に見つかった properties 持ちの defs
-    for d in defs.values():
-        if isinstance(d, dict) and "properties" in d:
-            return d["properties"]
-
-    # 最終 fallback: ルート properties
-    if "properties" in schema:
+    hit = _walk(schema)
+    if hit is not None:
+        return hit
+    # 最終 fallback: ルート properties があればそれを返す
+    if isinstance(schema.get("properties"), dict):
         return schema["properties"]
     return {}
 
@@ -282,3 +281,52 @@ def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -
     ops = [set(v.get("properties", {}).keys()) for v in obj_variants]
     assert {"in"} in ops, f"'in' operator variant missing: {ops!r}"
     assert {"ne"} in ops, f"'ne' operator variant missing: {ops!r}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #55 R6.1: vault_get_note output_schema の shape 非対称と
+# vault_search の dead $defs/SearchHit を検出する。
+# ---------------------------------------------------------------------------
+
+
+def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: VaultIndex) -> None:
+    """vault_get_note の output_schema がトップレベルで ``type: object`` を持つこと.
+
+    他 6 ツールは ``{"type": "object", "properties": {...}}`` 形だが、
+    vault_get_note は Round 5 で ``_allow_subset`` 適用によりトップレベルが
+    ``{"anyOf": [...]}`` の包含構造になり、``type`` フィールドを失った。
+    エージェントの schema クローラが ``type == 'object'`` 前提だと silent skip。
+    """
+    from vault_search.schemas import build_schema_payload
+
+    payload = build_schema_payload(vault_index)
+    schema = payload["tools"]["vault_get_note"]["output_schema"]
+
+    assert schema.get("type") == "object", (
+        f"vault_get_note top-level must be object shape; got keys={list(schema.keys())}"
+    )
+    assert "properties" in schema, (
+        f"vault_get_note top-level must expose properties; got keys={list(schema.keys())}"
+    )
+    # path は NoteDetail の必須キー相当で、subset 許容でも properties には残るべき
+    assert "path" in schema["properties"], (
+        f"vault_get_note properties must include 'path'; got {list(schema['properties'].keys())}"
+    )
+
+
+def test_vault_search_output_schema_has_no_dead_defs(vault_index: VaultIndex) -> None:
+    """vault_search の output_schema に参照ゼロの ``$defs`` が残存しないこと.
+
+    Round 5 で ``results.items`` は完全インライン anyOf に差し替わったが、
+    元の ``$defs/SearchHit`` が残ったままで、そちらは subset 未許容の
+    古い required を保持しており schema クローラに古い情報を返す dead schema。
+    """
+    from vault_search.schemas import build_schema_payload
+
+    payload = build_schema_payload(vault_index)
+    schema = payload["tools"]["vault_search"]["output_schema"]
+
+    assert "$defs" not in schema, (
+        f"vault_search output_schema still contains dead $defs: "
+        f"{list(schema.get('$defs', {}).keys())}"
+    )
