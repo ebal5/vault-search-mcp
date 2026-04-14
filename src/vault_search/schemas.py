@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -187,72 +188,95 @@ class VaultStats(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-_TOOL_OUTPUT_MODELS: dict[str, tuple[str, type[BaseModel], bool]] = {
-    "vault_search": ("SearchResponse", SearchResponse, False),
-    "vault_get_note": ("NoteDetail", NoteDetail, False),
-    "vault_recent": ("RecentNote", RecentNote, True),
-    "vault_tags": ("TagCount", TagCount, True),
-    "vault_folders": ("FolderCount", FolderCount, True),
-    "vault_reindex": ("ReindexStats", ReindexStats, False),
-    "vault_stats": ("VaultStats", VaultStats, False),
+@dataclass(frozen=True)
+class _ToolSchemaSpec:
+    """単一 MCP ツールの description / input_schema / output_model を束ねる仕様."""
+
+    description: str
+    input_schema: dict[str, Any]
+    output_model: type[BaseModel]
+    output_is_list: bool = False
+
+
+_TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
+    "vault_search": _ToolSchemaSpec(
+        description="Vault 内のノートを全文検索する。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "検索クエリ"},
+                "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+                "folder": {"type": ["string", "null"]},
+                "limit": {"type": "integer", "default": 20},
+                "offset": {"type": "integer", "default": 0},
+            },
+            "required": ["query"],
+        },
+        output_model=SearchResponse,
+    ),
+    "vault_get_note": _ToolSchemaSpec(
+        description="指定パスのノート全文とメタデータを取得する。",
+        input_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+        output_model=NoteDetail,
+    ),
+    "vault_recent": _ToolSchemaSpec(
+        description="最近更新されたノート一覧を取得する。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 20},
+                "folder": {"type": ["string", "null"]},
+            },
+        },
+        output_model=RecentNote,
+        output_is_list=True,
+    ),
+    "vault_tags": _ToolSchemaSpec(
+        description="全タグとその使用回数を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=TagCount,
+        output_is_list=True,
+    ),
+    "vault_folders": _ToolSchemaSpec(
+        description="フォルダ構造とノート数を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=FolderCount,
+        output_is_list=True,
+    ),
+    "vault_reindex": _ToolSchemaSpec(
+        description="インデックスを再構築する。",
+        input_schema={
+            "type": "object",
+            "properties": {"force": {"type": "boolean", "default": False}},
+        },
+        output_model=ReindexStats,
+    ),
+    "vault_stats": _ToolSchemaSpec(
+        description="インデックスの統計情報を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=VaultStats,
+    ),
 }
 
-_TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
-    "vault_search": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "検索クエリ"},
-            "tags": {"type": ["array", "null"], "items": {"type": "string"}},
-            "folder": {"type": ["string", "null"]},
-            "limit": {"type": "integer", "default": 20},
-            "offset": {"type": "integer", "default": 0},
-        },
-        "required": ["query"],
-    },
-    "vault_get_note": {
-        "type": "object",
-        "properties": {"path": {"type": "string"}},
-        "required": ["path"],
-    },
-    "vault_recent": {
-        "type": "object",
-        "properties": {
-            "limit": {"type": "integer", "default": 20},
-            "folder": {"type": ["string", "null"]},
-        },
-    },
-    "vault_tags": {"type": "object", "properties": {}},
-    "vault_folders": {"type": "object", "properties": {}},
-    "vault_reindex": {
-        "type": "object",
-        "properties": {"force": {"type": "boolean", "default": False}},
-    },
-    "vault_stats": {"type": "object", "properties": {}},
-}
 
-_TOOL_DESCRIPTIONS: dict[str, str] = {
-    "vault_search": "Vault 内のノートを全文検索する。",
-    "vault_get_note": "指定パスのノート全文とメタデータを取得する。",
-    "vault_recent": "最近更新されたノート一覧を取得する。",
-    "vault_tags": "全タグとその使用回数を返す。",
-    "vault_folders": "フォルダ構造とノート数を返す。",
-    "vault_reindex": "インデックスを再構築する。",
-    "vault_stats": "インデックスの統計情報を返す。",
-}
+def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
+    """1 ツール分の {description, input_schema, output_schema} エントリを生成."""
+    schema = spec.output_model.model_json_schema()
+    output_schema = {"type": "array", "items": schema} if spec.output_is_list else schema
+    return {
+        "description": spec.description,
+        "input_schema": spec.input_schema,
+        "output_schema": output_schema,
+    }
 
 
 def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
     """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
-    tools: dict[str, dict[str, Any]] = {}
-    for tool_name, (_label, model_cls, is_list) in _TOOL_OUTPUT_MODELS.items():
-        schema = model_cls.model_json_schema()
-        output_schema = {"type": "array", "items": schema} if is_list else schema
-        tools[tool_name] = {
-            "description": _TOOL_DESCRIPTIONS[tool_name],
-            "input_schema": _TOOL_INPUT_SCHEMAS[tool_name],
-            "output_schema": output_schema,
-        }
     return {
-        "tools": tools,
+        "tools": {name: _build_tool_entry(spec) for name, spec in _TOOL_SPECS.items()},
         "frontmatter_keys": index.list_frontmatter_keys(),
     }
