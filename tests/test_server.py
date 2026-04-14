@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from vault_search import server as server_mod
@@ -188,20 +190,19 @@ from vault_search.schemas import SearchHit  # noqa: E402
 
 
 def test_vault_search_fields_subset(vault_index: VaultIndex) -> None:
-    """fields=["path", "title"] で subset 返却。要素は SearchHit のまま."""
+    """fields=["path", "title"] で subset 返却 (tool 関数直接呼び出し)."""
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian", None, None, 20, 0, ["path", "title"])
-    assert isinstance(res, SearchResponse)
-    assert isinstance(res.results, list)
-    assert len(res.results) > 0
-    for hit in res.results:
-        assert isinstance(hit, SearchHit)
-        # path/title は実データで埋まる
-        assert hit.path != ""
-        assert isinstance(hit.title, str)
-        # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
-        dumped = hit.model_dump(exclude_unset=True)
-        assert set(dumped.keys()) == {"path", "title"}
+    # fields 指定時は plain dict を返す (FastMCP の output_model.model_dump 経路を bypass)
+    assert isinstance(res, dict)
+    assert set(res.keys()) >= {"tier", "total", "results"}
+    assert isinstance(res["results"], list)
+    assert len(res["results"]) > 0
+    for hit in res["results"]:
+        assert isinstance(hit, dict)
+        assert set(hit.keys()) == {"path", "title"}
+        assert hit["path"] != ""
+        assert isinstance(hit["title"], str)
 
 
 def test_vault_search_fields_none_returns_all(vault_index: VaultIndex) -> None:
@@ -248,15 +249,14 @@ def test_vault_search_fields_mixed_valid_invalid_raises(vault_index: VaultIndex)
 
 
 def test_vault_get_note_fields_subset(vault_index: VaultIndex) -> None:
-    """fields=["path", "title"] で subset 返却."""
+    """fields=["path", "title"] で subset 返却 (tool 関数直接呼び出し)."""
     fn = _fn(server_mod.vault_get_note)
     res = fn("Welcome.md", ["path", "title"])
-    assert isinstance(res, NoteDetail)
-    assert res.path == "Welcome.md"
-    assert res.title == "Welcome"
-    # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
-    dumped = res.model_dump(exclude_unset=True)
-    assert set(dumped.keys()) == {"path", "title"}
+    # fields 指定時は plain dict
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"path", "title"}
+    assert res["path"] == "Welcome.md"
+    assert res["title"] == "Welcome"
 
 
 def test_vault_get_note_fields_empty_raises(vault_index: VaultIndex) -> None:
@@ -274,17 +274,15 @@ def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> No
 
 
 def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
-    """fields=["path"] で subset 返却."""
+    """fields=["path"] で subset 返却 (tool 関数直接呼び出し; list[dict] を返す)."""
     fn = _fn(server_mod.vault_recent)
     res = fn(5, None, ["path"])
     assert isinstance(res, list)
     assert len(res) > 0
     for item in res:
-        assert isinstance(item, RecentNote)
-        assert item.path != ""
-        # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
-        dumped = item.model_dump(exclude_unset=True)
-        assert set(dumped.keys()) == {"path"}
+        assert isinstance(item, dict)
+        assert set(item.keys()) == {"path"}
+        assert item["path"] != ""
 
 
 def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
@@ -342,3 +340,85 @@ def test_mcp_tool_vault_search_metadata_filter_invalid_operator(
     fn = _fn(server_mod.vault_search)
     with pytest.raises(ValueError):
         fn("obsidian", None, None, 20, 0, None, {"x": {"regex": "foo"}})
+
+
+# ---------------------------------------------------------------------------
+# fields parameter — FastMCP の convert_result 経路で実際にレスポンス JSON が
+# 指定キーのみに絞られているかを検証する。tool 関数を直接呼んだ結果を
+# model_dump すると exclude_unset が効かない経路で全キーが返るため、
+# これらのテストは bug 修正前は必ず失敗する。
+# ---------------------------------------------------------------------------
+
+
+def _call_tool_structured(tool_name: str, arguments: dict) -> dict:
+    """FastMCP の経路 (convert_result=True) でツールを実行し structured content を返す."""
+    mgr = server_mod.mcp._tool_manager
+    tool = mgr.get_tool(tool_name)
+    assert tool is not None, f"tool not registered: {tool_name}"
+    result = asyncio.run(tool.run(arguments, convert_result=True))
+    # output_schema が定義されていれば (unstructured, structured) のタプル。
+    assert isinstance(result, tuple), f"expected structured output tuple, got {type(result)}"
+    _unstructured, structured = result
+    return structured
+
+
+def test_vault_search_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """MCP 経路で fields 指定外のキーがレスポンスから除外される."""
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "obsidian", "fields": ["path", "title"], "limit": 5},
+    )
+    assert "results" in structured
+    assert len(structured["results"]) > 0
+    for hit in structured["results"]:
+        assert set(hit.keys()) == {"path", "title"}, f"unexpected keys: {hit.keys()}"
+        assert "snippet" not in hit
+        assert "tags" not in hit
+        assert "score" not in hit
+
+
+def test_vault_get_note_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """vault_get_note も同様に指定キーのみ返す."""
+    structured = _call_tool_structured(
+        "vault_get_note",
+        {"path": "Welcome.md", "fields": ["path", "title"]},
+    )
+    assert set(structured.keys()) == {"path", "title"}, f"unexpected keys: {structured.keys()}"
+    assert "content" not in structured
+    assert "frontmatter" not in structured
+
+
+def test_vault_recent_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """vault_recent 各要素も同様."""
+    structured = _call_tool_structured(
+        "vault_recent",
+        {"limit": 5, "fields": ["path"]},
+    )
+    # list 出力は wrap_output されて {"result": [...]} になる可能性あり (FastMCP 仕様)
+    items = structured.get("result", structured) if isinstance(structured, dict) else structured
+    assert isinstance(items, list)
+    assert len(items) > 0
+    for item in items:
+        assert set(item.keys()) == {"path"}, f"unexpected keys: {item.keys()}"
+        assert "title" not in item
+        assert "modified_at" not in item
+
+
+def test_vault_search_fields_none_mcp_returns_all(vault_index: VaultIndex) -> None:
+    """fields=None では MCP 経路で全フィールドが返る (後方互換)."""
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "obsidian", "limit": 5},
+    )
+    assert len(structured["results"]) > 0
+    hit = structured["results"][0]
+    assert set(hit.keys()) >= {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }
