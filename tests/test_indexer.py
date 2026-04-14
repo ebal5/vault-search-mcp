@@ -280,6 +280,59 @@ def test_list_folders(vault_index: VaultIndex) -> None:
     assert "Research" in names
 
 
+def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
+    """vault_folders の結果の root 直下は '' であり '(root)' ではない.
+
+    統一方針: SearchHit / RecentNote / NoteDetail と同じく FolderCount も
+    root 直下は空文字。
+    """
+    rows = vault_index.list_folders()
+    names = {r["folder"] for r in rows}
+    # conftest の Welcome.md / malformed.md が root 直下にあるので "" が存在
+    assert "" in names
+    assert "(root)" not in names
+
+
+def test_folder_prefix_does_not_match_sibling(
+    vault_index: VaultIndex, tmp_vault: Path
+) -> None:
+    """folder='Projects' が 'Projects Hermes' のような兄弟を拾わないこと."""
+    # 既存 fixture を壊さない範囲で兄弟フォルダを追加
+    sibling = tmp_vault / "Projects Hermes" / "note.md"
+    sibling.parent.mkdir(parents=True, exist_ok=True)
+    sibling.write_text(
+        "---\ntitle: hermes\n---\nunique-hermes-marker content obsidian\n",
+        encoding="utf-8",
+    )
+    vault_index.build_index()
+
+    # search: folder='Projects' は 'Projects Hermes' 配下をマッチさせない
+    res = vault_index.search("obsidian", folder="Projects")
+    for r in res["results"]:
+        assert r["folder"] == "Projects" or r["folder"].startswith("Projects/"), (
+            f"sibling folder leaked in search: {r['folder']}"
+        )
+        assert not r["folder"].startswith("Projects Hermes")
+
+    # recent_notes: 同じくシブリング除外
+    notes = vault_index.recent_notes(limit=50, folder="Projects")
+    for n in notes:
+        assert n["folder"] == "Projects" or n["folder"].startswith("Projects/"), (
+            f"sibling folder leaked in recent_notes: {n['folder']}"
+        )
+        assert not n["folder"].startswith("Projects Hermes")
+
+
+def test_folder_filter_matches_folder_itself(
+    vault_index: VaultIndex, tmp_vault: Path
+) -> None:
+    """folder='Projects' は 'Projects' 自体配下のノート (folder == 'Projects') を拾う."""
+    # conftest の Projects/日本語ノート.md は folder=='Projects'
+    res = vault_index.search("日本語", folder="Projects")
+    paths = {r["path"] for r in res["results"]}
+    assert "Projects/日本語ノート.md" in paths
+
+
 def test_stats_shape(vault_index: VaultIndex) -> None:
     s = vault_index.stats()
     assert set(s.keys()) >= {
@@ -348,9 +401,7 @@ def test_metadata_filter_ne_excludes_array_containing_value(
     ``categories != work`` では除外されるべき (配列内に work を含むため)。
     Research/alpha.md は ``categories: [research]`` なので含まれるべき。
     """
-    res = vault_index.search(
-        "", metadata_filter={"categories": {"ne": "work"}}
-    )
+    res = vault_index.search("", metadata_filter={"categories": {"ne": "work"}})
     paths = {r["path"] for r in res["results"]}
     # Welcome.md は categories に 'work' を含むので ne 'work' では除外
     assert "Welcome.md" not in paths, (

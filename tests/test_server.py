@@ -160,6 +160,15 @@ def test_mcp_tool_vault_folders(vault_index: VaultIndex) -> None:
         assert isinstance(item, FolderCount)
 
 
+def test_mcp_tool_vault_folders_root_is_empty_string(vault_index: VaultIndex) -> None:
+    """vault_folders の root 直下は '' に統一され '(root)' sentinel は出ない."""
+    fn = _fn(server_mod.vault_folders)
+    res = fn()
+    folders = {item.folder for item in res}
+    assert "" in folders
+    assert "(root)" not in folders
+
+
 def test_mcp_tool_vault_reindex(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_reindex)
     res = fn(False)
