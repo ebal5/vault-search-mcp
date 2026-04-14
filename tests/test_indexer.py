@@ -293,9 +293,7 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
     assert "(root)" not in names
 
 
-def test_folder_prefix_does_not_match_sibling(
-    vault_index: VaultIndex, tmp_vault: Path
-) -> None:
+def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """folder='Projects' が 'Projects Hermes' のような兄弟を拾わないこと."""
     # 既存 fixture を壊さない範囲で兄弟フォルダを追加
     sibling = tmp_vault / "Projects Hermes" / "note.md"
@@ -323,9 +321,7 @@ def test_folder_prefix_does_not_match_sibling(
         assert not n["folder"].startswith("Projects Hermes")
 
 
-def test_folder_filter_matches_folder_itself(
-    vault_index: VaultIndex, tmp_vault: Path
-) -> None:
+def test_folder_filter_matches_folder_itself(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """folder='Projects' は 'Projects' 自体配下のノート (folder == 'Projects') を拾う."""
     # conftest の Projects/日本語ノート.md は folder=='Projects'
     res = vault_index.search("日本語", folder="Projects")
@@ -352,44 +348,75 @@ def test_stats_shape(vault_index: VaultIndex) -> None:
 
 
 def test_metadata_filter_eq_implicit(vault_index: VaultIndex) -> None:
-    """暗黙 eq: status=active で Welcome.md と Research/alpha.md のみ."""
+    """暗黙 eq: status=active で Welcome.md と Research/alpha.md のみ.
+
+    total を厳密に検証することで、filter が無視されて全件返る regression を検知。
+    """
     res = vault_index.search("obsidian", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
-    assert "Welcome.md" in paths
-    assert "Research/alpha.md" in paths
-    # 日本語ノートは status: draft なのでヒットしない
-    assert "Projects/日本語ノート.md" not in paths
+    # Welcome.md + Research/alpha.md の 2 件
+    assert res["total"] == 2, (
+        f"expected exactly 2 hits for status=active, got total={res['total']} "
+        f"(paths={sorted(paths)})"
+    )
+    assert paths == {"Welcome.md", "Research/alpha.md"}
 
 
 def test_metadata_filter_list_value_eq_contains(vault_index: VaultIndex) -> None:
-    """リスト型 frontmatter の eq は「含む」判定 (tags と同様)."""
+    """リスト型 frontmatter の eq は「含む」判定 (tags と同様).
+
+    Control group: filter なし (baseline) より厳密に件数が減ることを確認。
+    baseline の "obsidian" は Welcome + Research/alpha の 2 件ヒットするが、
+    categories=work のフィルタでは Welcome の 1 件のみに絞られるべき。
+    """
+    baseline = vault_index.search("obsidian")
+    baseline_paths = {r["path"] for r in baseline["results"]}
+    assert baseline["total"] >= 2, (
+        f"baseline must have >=2 hits for control group, "
+        f"got {baseline['total']} (paths={sorted(baseline_paths)})"
+    )
+
     res = vault_index.search("obsidian", metadata_filter={"categories": "work"})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md: categories=[work, urgent] → work 含む
-    assert "Welcome.md" in paths
-    # Research/alpha.md: categories=[research] → work 含まない
-    assert "Research/alpha.md" not in paths
+    # Welcome.md のみ (categories=[work, urgent] → work 含む)
+    assert res["total"] == 1, (
+        f"expected exactly 1 hit for categories=work, got total={res['total']}"
+    )
+    assert paths == {"Welcome.md"}
+    # Control group: filter 適用後は baseline より厳密に少ない
+    assert res["total"] < baseline["total"], (
+        f"metadata_filter must reduce hits vs baseline: "
+        f"baseline={baseline['total']}, filtered={res['total']}"
+    )
 
 
 def test_metadata_filter_in_operator(vault_index: VaultIndex) -> None:
     """in 演算: priority in [high, low] で Welcome.md と Research/alpha.md."""
     res = vault_index.search("obsidian", metadata_filter={"priority": {"in": ["high", "low"]}})
     paths = {r["path"] for r in res["results"]}
-    assert "Welcome.md" in paths
-    assert "Research/alpha.md" in paths
-    # 日本語ノートは priority: medium → 除外
-    assert "Projects/日本語ノート.md" not in paths
+    # Welcome.md (high) + Research/alpha.md (low) の 2 件
+    assert res["total"] == 2, (
+        f"expected exactly 2 hits for priority in [high, low], got total={res['total']}"
+    )
+    assert paths == {"Welcome.md", "Research/alpha.md"}
 
 
 def test_metadata_filter_ne_operator(vault_index: VaultIndex) -> None:
-    """ne 演算: status != draft で draft 以外がヒット."""
+    """ne 演算: status != draft で draft 以外がヒット.
+
+    Control group: filter 無し (空クエリ + dummy filter で全件取得の代替) では
+    "Projects/日本語ノート.md" (status=draft) も含まれるが、ne フィルタで
+    除外されることを総件数で検証。
+    """
     res = vault_index.search("", metadata_filter={"status": {"ne": "draft"}})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md / Research/alpha.md は status=active → ヒット
-    assert "Welcome.md" in paths
-    assert "Research/alpha.md" in paths
-    # 日本語ノートは status: draft → 除外
-    assert "Projects/日本語ノート.md" not in paths
+    # Welcome.md + Research/alpha.md は status=active → ヒット
+    # 日本語ノート (draft) と plain.md / malformed.md (status キー無し) は除外
+    assert res["total"] == 2, (
+        f"expected exactly 2 hits for status ne draft, got total={res['total']} "
+        f"(paths={sorted(paths)})"
+    )
+    assert paths == {"Welcome.md", "Research/alpha.md"}
 
 
 def test_metadata_filter_ne_excludes_array_containing_value(
@@ -403,42 +430,80 @@ def test_metadata_filter_ne_excludes_array_containing_value(
     """
     res = vault_index.search("", metadata_filter={"categories": {"ne": "work"}})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md は categories に 'work' を含むので ne 'work' では除外
-    assert "Welcome.md" not in paths, (
-        "categories [work, urgent] は 'work' を含むので ne 'work' では除外されるべき"
+    # categories キーを持つノートは Welcome / Research/alpha のみ。
+    # Welcome は 'work' を含むので ne 'work' で除外 → Research/alpha 1 件
+    assert res["total"] == 1, (
+        f"expected exactly 1 hit for categories ne work, got total={res['total']} "
+        f"(paths={sorted(paths)})"
     )
-    # Research/alpha.md は categories: [research] → 'work' を含まない → ヒット
-    assert "Research/alpha.md" in paths
+    assert paths == {"Research/alpha.md"}
 
 
 def test_metadata_filter_multiple_keys_and(vault_index: VaultIndex) -> None:
-    """複数キーは AND 結合: status=active AND priority=high → Welcome.md のみ."""
+    """複数キーは AND 結合: status=active AND priority=high → Welcome.md のみ.
+
+    Control group: status=active 単独なら 2 件 (Welcome + Research/alpha)。
+    priority=high を AND で追加することで Welcome の 1 件に絞られる。
+    """
+    single = vault_index.search("", metadata_filter={"status": "active"})
+    assert single["total"] == 2, (
+        f"control: status=active alone expected 2 hits, got {single['total']}"
+    )
+
     res = vault_index.search(
         "",
         metadata_filter={"status": "active", "priority": "high"},
     )
     paths = {r["path"] for r in res["results"]}
+    assert res["total"] == 1, (
+        f"expected exactly 1 hit for status=active AND priority=high, "
+        f"got total={res['total']} (paths={sorted(paths)})"
+    )
     assert paths == {"Welcome.md"}
+    # Control group: AND は単独条件より厳密に件数が減る
+    assert res["total"] < single["total"]
 
 
 def test_metadata_filter_only_empty_query(vault_index: VaultIndex) -> None:
     """空クエリ + metadata_filter のみでも全件にフィルタ適用できる (新仕様)."""
     res = vault_index.search("", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
-    # 全件から status=active を抽出
-    assert "Welcome.md" in paths
-    assert "Research/alpha.md" in paths
-    assert "Projects/日本語ノート.md" not in paths
-    # plain.md は status キーなし → 除外
-    assert "Projects/plain.md" not in paths
+    # 全件から status=active を抽出 → Welcome.md + Research/alpha.md の 2 件
+    assert res["total"] == 2, (
+        f"expected exactly 2 hits for status=active (empty query), "
+        f"got total={res['total']} (paths={sorted(paths)})"
+    )
+    assert paths == {"Welcome.md", "Research/alpha.md"}
 
 
 def test_metadata_filter_missing_key_excludes(vault_index: VaultIndex) -> None:
     """frontmatter にキー自体が無いノートは eq フィルタで除外される."""
     res = vault_index.search("", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
-    # plain.md は frontmatter 無し → status キーも無し → null と "active" は不一致
+    # plain.md は frontmatter 無し → status キーも無し → "active" と不一致
     assert "Projects/plain.md" not in paths
+    # total でも確認: status=active は 2 件のみ (frontmatter 欠損ノートは除外)
+    assert res["total"] == 2
+
+
+def test_metadata_filter_nonexistent_key_returns_empty(
+    vault_index: VaultIndex,
+) -> None:
+    """存在しないキー (どのノートも持っていない) で eq すると total=0.
+
+    Control group: 同じ空クエリで filter なし相当 (status=active) は 2 件
+    返るのに対し、bogus_key での filter では 0 件に絞られることを確認。
+    これにより「実装が filter 値を無視して全件返す」regression を検知する。
+    """
+    # Control: 存在するキーでの filter は >=1 件返る
+    control = vault_index.search("", metadata_filter={"status": "active"})
+    assert control["total"] >= 1
+
+    res = vault_index.search("", metadata_filter={"bogus_key_xyzzy": "x"})
+    assert res["total"] == 0, (
+        f"expected 0 hits for nonexistent frontmatter key, got total={res['total']}"
+    )
+    assert res["results"] == []
 
 
 def test_metadata_filter_invalid_operator_raises(vault_index: VaultIndex) -> None:
