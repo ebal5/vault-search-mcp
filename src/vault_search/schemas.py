@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .validation import validate_identifier
+
 if TYPE_CHECKING:
     from .indexer import VaultIndex
 
@@ -42,9 +44,11 @@ class SearchHit(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(description="Vault ルートからの相対パス (例: 'Notes/foo.md')")
-    title: str = Field(description="ノートタイトル (frontmatter.title または最初の H1)")
-    folder: str = Field(description="所属フォルダ (Vault ルートからの相対、ルート直下は '')")
+    path: str = Field(default="", description="Vault ルートからの相対パス (例: 'Notes/foo.md')")
+    title: str = Field(default="", description="ノートタイトル (frontmatter.title または最初の H1)")
+    folder: str = Field(
+        default="", description="所属フォルダ (Vault ルートからの相対、ルート直下は '')"
+    )
     tags: list[str] = Field(
         default_factory=list,
         description="タグ一覧 (frontmatter.tags + 本文インライン #tag)",
@@ -99,9 +103,9 @@ class NoteDetail(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(description="Vault ルートからの相対パス")
-    title: str = Field(description="ノートタイトル")
-    folder: str = Field(description="所属フォルダ")
+    path: str = Field(default="", description="Vault ルートからの相対パス")
+    title: str = Field(default="", description="ノートタイトル")
+    folder: str = Field(default="", description="所属フォルダ")
     tags: list[str] = Field(default_factory=list, description="タグ一覧")
     aliases: list[str] = Field(
         default_factory=list, description="frontmatter.aliases 由来の別名一覧"
@@ -109,6 +113,7 @@ class NoteDetail(BaseModel):
     created_at: str = Field(default="", description="作成日時 (frontmatter 由来)")
     modified_at: str = Field(default="", description="更新日時 (frontmatter 由来)")
     content: str = Field(
+        default="",
         description="frontmatter を除いた Markdown 本文 (前後空白は trim 済み)",
     )
     frontmatter: dict[str, Any] = Field(
@@ -127,9 +132,9 @@ class RecentNote(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(description="Vault ルートからの相対パス")
-    title: str = Field(description="ノートタイトル")
-    folder: str = Field(description="所属フォルダ")
+    path: str = Field(default="", description="Vault ルートからの相対パス")
+    title: str = Field(default="", description="ノートタイトル")
+    folder: str = Field(default="", description="所属フォルダ")
     tags: list[str] = Field(default_factory=list, description="タグ一覧")
     created_at: str = Field(default="", description="作成日時")
     modified_at: str = Field(default="", description="更新日時")
@@ -272,6 +277,35 @@ def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
         "input_schema": spec.input_schema,
         "output_schema": output_schema,
     }
+
+
+def apply_field_mask(
+    model_cls: type[BaseModel],
+    data: dict[str, Any],
+    fields: list[str] | None,
+) -> dict[str, Any]:
+    """fields 指定に基づいて data を subset する.
+
+    fields=None → data をそのまま返却 (後方互換)
+    fields=[] → ValidationError
+    fields に存在しないフィールド名が含まれる → ValidationError
+    それ以外 → data から fields だけを抜き出した dict を返す
+      (モデル構築は呼び出し側で行い、欠落フィールドはモデルのデフォルト値で埋まる)
+    """
+    from .validation import ValidationError
+
+    if fields is None:
+        return data
+    if not isinstance(fields, list):
+        raise ValidationError(f"fields must be a list, got {type(fields).__name__}")
+    if len(fields) == 0:
+        raise ValidationError("fields must not be empty; pass null to return all fields")
+    allowed = set(model_cls.model_fields.keys())
+    for name in fields:
+        validate_identifier(name, kind="field name", max_len=64)
+        if name not in allowed:
+            raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
+    return {k: v for k, v in data.items() if k in set(fields)}
 
 
 def build_schema_payload(index: VaultIndex) -> dict[str, Any]:

@@ -35,6 +35,7 @@ from .schemas import (
     SearchResponse,
     TagCount,
     VaultStats,
+    apply_field_mask,
     build_schema_payload,
 )
 
@@ -68,6 +69,7 @@ def vault_search(
     folder: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    fields: list[str] | None = None,
 ) -> SearchResponse:
     """Vault 内のノートを全文検索する。
 
@@ -82,6 +84,8 @@ def vault_search(
         folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
+        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
+                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
         SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
@@ -91,16 +95,18 @@ def vault_search(
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],
-        results=[SearchHit(**hit) for hit in raw["results"]],
+        results=[SearchHit(**apply_field_mask(SearchHit, hit, fields)) for hit in raw["results"]],
     )
 
 
 @mcp.tool()
-def vault_get_note(path: str) -> NoteDetail:
+def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail:
     """指定パスのノート全文とメタデータを取得する。
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
+        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
+                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
         NoteDetail: 本文 (frontmatter 除去済み) と全メタデータを含む構造体。
@@ -111,21 +117,30 @@ def vault_get_note(path: str) -> NoteDetail:
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    return NoteDetail(**result)
+    return NoteDetail(**apply_field_mask(NoteDetail, result, fields))
 
 
 @mcp.tool()
-def vault_recent(limit: int = 20, folder: str | None = None) -> list[RecentNote]:
+def vault_recent(
+    limit: int = 20,
+    folder: str | None = None,
+    fields: list[str] | None = None,
+) -> list[RecentNote]:
     """最近更新されたノート一覧を取得する。
 
     Args:
         limit: 最大返却件数（デフォルト 20）
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
+        fields: 返却フィールドを限定 (例: ["path"])。None で全フィールド。
+                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
         file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
     """
-    return [RecentNote(**note) for note in _get_index().recent_notes(limit=limit, folder=folder)]
+    return [
+        RecentNote(**apply_field_mask(RecentNote, note, fields))
+        for note in _get_index().recent_notes(limit=limit, folder=folder)
+    ]
 
 
 @mcp.tool()
