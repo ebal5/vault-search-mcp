@@ -26,6 +26,12 @@ uv run pytest
 uv run ruff check --fix && uv run ruff format
 ```
 
+worktree 内では sandbox が `~/.cache/uv` への書き込みを禁じるため `uv run` が
+`Read-only file system` で失敗する場合がある。その場合は一度
+`uv sync --all-extras` で worktree に `.venv/` を作ってから
+`.venv/bin/pytest` / `.venv/bin/ruff` を直接呼ぶのが安定する (settings.json
+の allow list にも登録済み)。
+
 ## Architecture
 
 ```

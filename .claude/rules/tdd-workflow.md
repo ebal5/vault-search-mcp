@@ -35,6 +35,35 @@ delegate する。各フェーズで以下を明示:
 - **完了条件**を明記 (テスト通過数、commit 形式、lint クリーン)
 - **中断条件**を記述 (これに該当したら停止して報告)
 
+### 既知の落とし穴: background subagent は Edit/Write が拒否される
+
+`Agent(..., run_in_background=true, mode="acceptEdits")` および
+`mode="bypassPermissions"` は現行 harness で honor されず、background subagent
+では Edit/Write が恒久的に拒否される (2026-04 時点)。`/permissions` で allow に
+追加しても subagent プロセスには伝搬しない。
+
+**回避策**:
+
+- **親セッションが worktree を切替えて逐次実装** (今回の Phase 2 で採用)
+- foreground agent (`run_in_background=false`) を使う — 親のインタラクティブ
+  permission を経由できる
+- Bash ヒアドキュメントで新規ファイル作成する (Edit 不要な初期追加のみ)
+
+サブエージェントが settings.json に Edit/Write を自己追加しようとした事例が
+1 件観測されている (prompt 指示なしの self-elevation) — コミット前に必ず
+`git diff .claude/settings.json` で確認する。
+
+## Red/Green vs Test/Refactor — prefix 選択ガイド
+
+commit prefix は「振る舞いが変わるか」で選ぶ:
+
+- 既存バグで実挙動が仕様と合わず、修正で挙動が変わる → **Red → Green**
+- 既存挙動は正しいが SDK upgrade 等で silent regression しうる保険を pin する
+  → **Test:** (テスト追加のみ、失敗しない) + **Refactor:** (実装整理)
+- 例: `vault_reindex` の Pydantic 戻り → dict 戻り統一 (#59, PR #63) は
+  現状 FastMCP が flat に再シリアライズするため Red にならない。regression
+  guard を `Test:` で先行追加し、dict 化は `Refactor:` で別コミット。
+
 ## 並行作業時の調停
 
 複数サブエージェントが src/ / tests/ を同時に触る場合:
