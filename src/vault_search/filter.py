@@ -42,6 +42,9 @@ class MetadataCondition:
         （``A-Za-z0-9_-.`` のみ）。SQL へ直接埋め込んでも安全。
     op:
         比較演算子。``eq`` / ``ne`` / ``in`` のいずれか。
+        配列型 frontmatter に対しては ``eq`` / ``in`` が「含む」判定、
+        ``ne`` が「含まない」判定として働く
+        (詳細は :func:`build_sql_fragment` の Semantics 参照)。
     value:
         比較対象値。``eq`` / ``ne`` は ``str``、``in`` は ``tuple[str, ...]``。
         :func:`vault_search.validation.validate_value` で検証済み。
@@ -174,8 +177,12 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     ---------
     * ``eq``: スカラー等価、または frontmatter 側が配列の場合は要素含有
       (例: ``tags: [a, b]`` に ``tags == a`` がマッチ)。
-    * ``ne``: キーが存在し、かつ値が一致しない場合のみ true。キー欠落は
-      マッチ扱いしない。
+    * ``ne``: キーが存在し、かつ値が「含まれない」場合のみ true。
+      - スカラー値: ``json_extract(...) != value``。
+      - 配列値: 配列内のどの要素も ``value`` に等しくない場合のみマッチ。
+        (例: ``categories: [work, urgent]`` に ``categories != work`` は
+        マッチ**しない**。配列内に ``work`` を含むため。)
+      キー欠落はマッチ扱いしない (``eq`` との対称性のため)。
     * ``in``: スカラーがリスト内のいずれかに一致、または frontmatter 側が
       配列でリスト要素のいずれかを含む場合。
     """
