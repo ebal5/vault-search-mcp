@@ -27,8 +27,14 @@ import re
 __all__ = [
     "ValidationError",
     "validate_identifier",
+    "validate_pagination",
     "validate_value",
 ]
+
+# Hard ceiling on paginated result size. Anchored to the FTS5 cache ceiling
+# (`_MAX_RESULTS` in indexer) so that requested limit never exceeds what the
+# backend actually returns — avoiding silent truncation from the agent's POV.
+_LIMIT_MAX = 500
 
 
 # Allowed character class for identifiers (field names, frontmatter keys).
@@ -107,6 +113,26 @@ def validate_identifier(
             f"{kind} contains disallowed characters (allowed: {_IDENTIFIER_ALLOWED_DESC}): {name!r}"
         )
     return name
+
+
+def validate_pagination(limit: int, offset: int = 0) -> None:
+    """Validate paginated-query bounds, raising on out-of-range values.
+
+    ``limit`` must be a positive integer (zero-result queries waste a round
+    trip and usually indicate a hallucinated bound). ``offset`` must be
+    non-negative. ``limit`` is capped at :data:`_LIMIT_MAX` to keep requests
+    aligned with the internal FTS5 cache ceiling.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValidationError(f"limit must be an integer, got {type(limit).__name__}")
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        raise ValidationError(f"offset must be an integer, got {type(offset).__name__}")
+    if limit < 1:
+        raise ValidationError(f"limit must be >= 1 (got {limit})")
+    if limit > _LIMIT_MAX:
+        raise ValidationError(f"limit must be <= {_LIMIT_MAX} (got {limit})")
+    if offset < 0:
+        raise ValidationError(f"offset must be >= 0 (got {offset})")
 
 
 def validate_value(

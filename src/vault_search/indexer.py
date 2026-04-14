@@ -610,8 +610,13 @@ class VaultIndex:
         finally:
             conn.close()
 
-    def recent_notes(self, limit: int = 20, folder: str | None = None) -> list[dict[str, Any]]:
-        """最近更新されたノート."""
+    def recent_notes(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        folder: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """最近更新されたノート. offset スキップ後 limit 件を返す."""
         conn = self._connect()
         try:
             if folder:
@@ -619,14 +624,14 @@ class VaultIndex:
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
                     f"WHERE {clause} "
-                    "ORDER BY file_mtime DESC LIMIT ?",
-                    (*folder_params, limit),
+                    "ORDER BY file_mtime DESC LIMIT ? OFFSET ?",
+                    (*folder_params, limit, offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
-                    "ORDER BY file_mtime DESC LIMIT ?",
-                    (limit,),
+                    "ORDER BY file_mtime DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
                 ).fetchall()
             return [
                 {

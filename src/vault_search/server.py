@@ -39,6 +39,7 @@ from .schemas import (
     build_schema_payload,
     validate_fields,
 )
+from .validation import validate_pagination
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ def vault_search(
         ツール戻り型を Union にすると FastMCP が structured content を
         ``{"result": ...}`` でラップしてしまうため、dict 統一で回避している。
     """
+    validate_pagination(limit, offset)
     fields_set = validate_fields(SearchHit, fields)
     raw = _get_index().search(
         query,
@@ -157,13 +159,17 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]
 @mcp.tool()
 def vault_recent(
     limit: int = 20,
+    offset: int = 0,
     folder: str | None = None,
     fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """最近更新されたノート一覧を取得する。
 
     Args:
-        limit: 最大返却件数（デフォルト 20）
+        limit: 最大返却件数（デフォルト 20, 1-500）。
+        offset: ページング用の開始位置（デフォルト 0, >=0）。vault_search と同じ
+                意味論で、最近更新順 (file_mtime DESC) の先頭から offset 件を
+                スキップして limit 件返す。
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
         fields: 返却フィールドを限定 (例: ["path"])。None で全フィールド。
                 空リストまたは不正名は ValidationError。context window 節約用。
@@ -175,8 +181,9 @@ def vault_recent(
         を参照。list 戻り型だと FastMCP が ``{"result": [...]}`` にラップ
         してしまうため dict envelope に統一している。
     """
+    validate_pagination(limit, offset)
     fields_set = validate_fields(RecentNote, fields)
-    rows = _get_index().recent_notes(limit=limit, folder=folder)
+    rows = _get_index().recent_notes(limit=limit, offset=offset, folder=folder)
     if fields_set is None:
         notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
     else:

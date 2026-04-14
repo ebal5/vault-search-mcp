@@ -225,6 +225,26 @@ _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+# Shared pagination input schemas. ``minimum`` / ``maximum`` are the single
+# source of truth the agent sees via ``schema://tools``; the runtime guard in
+# ``validation.validate_pagination`` enforces the same bounds server-side.
+_LIMIT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 500,
+    "default": 20,
+    "description": "最大返却件数 (1-500)。上限超過は ValidationError。",
+}
+
+
+_OFFSET_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "integer",
+    "minimum": 0,
+    "default": 0,
+    "description": "ページング用の開始位置 (>=0)。負値は ValidationError。",
+}
+
+
 _FIELDS_INPUT_SCHEMA: dict[str, Any] = {
     "type": ["array", "null"],
     "items": {"type": "string"},
@@ -245,8 +265,8 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "query": {"type": "string", "description": "検索クエリ"},
                 "tags": {"type": ["array", "null"], "items": {"type": "string"}},
                 "folder": _FOLDER_INPUT_SCHEMA,
-                "limit": {"type": "integer", "default": 20},
-                "offset": {"type": "integer", "default": 0},
+                "limit": _LIMIT_INPUT_SCHEMA,
+                "offset": _OFFSET_INPUT_SCHEMA,
                 "fields": _FIELDS_INPUT_SCHEMA,
                 "metadata_filter": {
                     "type": ["object", "null"],
@@ -307,7 +327,8 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
         input_schema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "default": 20},
+                "limit": _LIMIT_INPUT_SCHEMA,
+                "offset": _OFFSET_INPUT_SCHEMA,
                 "folder": _FOLDER_INPUT_SCHEMA,
                 "fields": _FIELDS_INPUT_SCHEMA,
             },

@@ -139,7 +139,7 @@ def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
 
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
-    res = fn(5, None)
+    res = fn(limit=5)
     # envelope dict `{"notes": [...]}` を返す (FastMCP の list wrap 回避のため)
     assert isinstance(res, dict)
     assert set(res.keys()) == {"notes"}
@@ -290,7 +290,7 @@ def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> No
 def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
     """fields=["path"] で subset 返却 (envelope dict `{"notes": [...]}`)."""
     fn = _fn(server_mod.vault_recent)
-    res = fn(5, None, ["path"])
+    res = fn(limit=5, fields=["path"])
     assert isinstance(res, dict)
     assert set(res.keys()) == {"notes"}
     notes = res["notes"]
@@ -306,14 +306,14 @@ def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
     """fields=[] は ValueError."""
     fn = _fn(server_mod.vault_recent)
     with pytest.raises(ValueError):
-        fn(5, None, [])
+        fn(limit=5, fields=[])
 
 
 def test_vault_recent_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
     """fields=["nope"] は ValueError."""
     fn = _fn(server_mod.vault_recent)
     with pytest.raises(ValueError):
-        fn(5, None, ["nope"])
+        fn(limit=5, fields=["nope"])
 
 
 # ---------------------------------------------------------------------------
@@ -447,3 +447,63 @@ def test_vault_search_fields_none_mcp_returns_all(vault_index: VaultIndex) -> No
         "created_at",
         "modified_at",
     }
+
+
+# ---------------------------------------------------------------------------
+# Issue #51 R3.4 + Issue #61 R9.1: limit / offset 境界値 validation と
+# vault_recent の offset ページング対応
+# ---------------------------------------------------------------------------
+
+
+def test_vault_search_rejects_negative_limit(vault_index: VaultIndex) -> None:
+    """limit が負値のとき ValidationError (ValueError 派生) を投げる."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises((ValueError, ValidationError)):
+        fn("obsidian", limit=-1)
+
+
+def test_vault_search_rejects_zero_limit(vault_index: VaultIndex) -> None:
+    """limit=0 は ValidationError。意味のない呼び出しを早期に弾く."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises((ValueError, ValidationError)):
+        fn("obsidian", limit=0)
+
+
+def test_vault_search_rejects_negative_offset(vault_index: VaultIndex) -> None:
+    """offset が負値のとき ValidationError."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises((ValueError, ValidationError)):
+        fn("obsidian", offset=-1)
+
+
+def test_vault_search_rejects_limit_above_max(vault_index: VaultIndex) -> None:
+    """limit > 500 は ValidationError。内部 _MAX_RESULTS 超えは silent truncate を避ける."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises((ValueError, ValidationError)):
+        fn("obsidian", limit=501)
+
+
+def test_vault_recent_accepts_offset_parameter(vault_index: VaultIndex) -> None:
+    """vault_recent に offset 引数があり、指定分スキップする."""
+    fn = _fn(server_mod.vault_recent)
+    full = fn(limit=5)
+    assert len(full["notes"]) >= 2, "テスト前提: 最低 2 件の recent notes が必要"
+    skipped = fn(limit=5, offset=1)
+    assert skipped["notes"] == full["notes"][1:], "offset=1 は先頭 1 件を省いた結果を返すこと"
+
+
+def test_vault_recent_rejects_negative_offset(vault_index: VaultIndex) -> None:
+    """vault_recent も offset 負値を拒否."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_recent)
+    with pytest.raises((ValueError, ValidationError)):
+        fn(limit=5, offset=-1)
