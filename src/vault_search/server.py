@@ -20,9 +20,10 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
 
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
@@ -53,6 +54,26 @@ def _get_index() -> VaultIndex:
     if _index is None:
         raise RuntimeError("VaultIndex not initialized")
     return _index
+
+
+_M = TypeVar("_M", bound=BaseModel)
+
+
+def _build_model(
+    model_cls: type[_M],
+    data: dict[str, Any],
+    fields: list[str] | None,
+) -> _M:
+    """fields=None なら通常コンストラクタで厳密検証。
+
+    fields 指定時は ``model_construct`` でバリデーションをバイパスし、
+    必須フィールドが欠けていても部分モデルを組み立てる。
+    未セットフィールドは JSON シリアライズ時に除外される。
+    """
+    masked = apply_field_mask(model_cls, data, fields)
+    if fields is None:
+        return model_cls(**masked)
+    return model_cls.model_construct(**masked)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +116,7 @@ def vault_search(
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],
-        results=[SearchHit(**apply_field_mask(SearchHit, hit, fields)) for hit in raw["results"]],
+        results=[_build_model(SearchHit, hit, fields) for hit in raw["results"]],
     )
 
 
@@ -117,7 +138,7 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail:
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    return NoteDetail(**apply_field_mask(NoteDetail, result, fields))
+    return _build_model(NoteDetail, result, fields)
 
 
 @mcp.tool()
@@ -138,7 +159,7 @@ def vault_recent(
         file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
     """
     return [
-        RecentNote(**apply_field_mask(RecentNote, note, fields))
+        _build_model(RecentNote, note, fields)
         for note in _get_index().recent_notes(limit=limit, folder=folder)
     ]
 

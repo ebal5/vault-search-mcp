@@ -44,11 +44,9 @@ class SearchHit(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(default="", description="Vault ルートからの相対パス (例: 'Notes/foo.md')")
-    title: str = Field(default="", description="ノートタイトル (frontmatter.title または最初の H1)")
-    folder: str = Field(
-        default="", description="所属フォルダ (Vault ルートからの相対、ルート直下は '')"
-    )
+    path: str = Field(description="Vault ルートからの相対パス (例: 'Notes/foo.md')")
+    title: str = Field(description="ノートタイトル (frontmatter.title または最初の H1)")
+    folder: str = Field(description="所属フォルダ (Vault ルートからの相対、ルート直下は '')")
     tags: list[str] = Field(
         default_factory=list,
         description="タグ一覧 (frontmatter.tags + 本文インライン #tag)",
@@ -103,9 +101,9 @@ class NoteDetail(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(default="", description="Vault ルートからの相対パス")
-    title: str = Field(default="", description="ノートタイトル")
-    folder: str = Field(default="", description="所属フォルダ")
+    path: str = Field(description="Vault ルートからの相対パス")
+    title: str = Field(description="ノートタイトル")
+    folder: str = Field(description="所属フォルダ")
     tags: list[str] = Field(default_factory=list, description="タグ一覧")
     aliases: list[str] = Field(
         default_factory=list, description="frontmatter.aliases 由来の別名一覧"
@@ -113,7 +111,6 @@ class NoteDetail(BaseModel):
     created_at: str = Field(default="", description="作成日時 (frontmatter 由来)")
     modified_at: str = Field(default="", description="更新日時 (frontmatter 由来)")
     content: str = Field(
-        default="",
         description="frontmatter を除いた Markdown 本文 (前後空白は trim 済み)",
     )
     frontmatter: dict[str, Any] = Field(
@@ -132,9 +129,9 @@ class RecentNote(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(default="", description="Vault ルートからの相対パス")
-    title: str = Field(default="", description="ノートタイトル")
-    folder: str = Field(default="", description="所属フォルダ")
+    path: str = Field(description="Vault ルートからの相対パス")
+    title: str = Field(description="ノートタイトル")
+    folder: str = Field(description="所属フォルダ")
     tags: list[str] = Field(default_factory=list, description="タグ一覧")
     created_at: str = Field(default="", description="作成日時")
     modified_at: str = Field(default="", description="更新日時")

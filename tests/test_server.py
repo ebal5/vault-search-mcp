@@ -199,13 +199,9 @@ def test_vault_search_fields_subset(vault_index: VaultIndex) -> None:
         # path/title は実データで埋まる
         assert hit.path != ""
         assert isinstance(hit.title, str)
-        # 指定外フィールドはモデルのデフォルト値
-        assert hit.snippet == ""
-        assert hit.score == 0.0
-        assert hit.tags == []
-        assert hit.created_at == ""
-        assert hit.modified_at == ""
-        assert hit.folder == ""
+        # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
+        dumped = hit.model_dump(exclude_unset=True)
+        assert set(dumped.keys()) == {"path", "title"}
 
 
 def test_vault_search_fields_none_returns_all(vault_index: VaultIndex) -> None:
@@ -258,15 +254,9 @@ def test_vault_get_note_fields_subset(vault_index: VaultIndex) -> None:
     assert isinstance(res, NoteDetail)
     assert res.path == "Welcome.md"
     assert res.title == "Welcome"
-    # 指定外はデフォルト値
-    assert res.content == "" or res.content is not None  # content は必須だがデフォルトに落ちる
-    # デフォルト値で埋まる確認
-    assert res.tags == []
-    assert res.aliases == []
-    assert res.frontmatter == {}
-    assert res.created_at == ""
-    assert res.modified_at == ""
-    assert res.folder == ""
+    # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
+    dumped = res.model_dump(exclude_unset=True)
+    assert set(dumped.keys()) == {"path", "title"}
 
 
 def test_vault_get_note_fields_empty_raises(vault_index: VaultIndex) -> None:
@@ -292,12 +282,9 @@ def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
     for item in res:
         assert isinstance(item, RecentNote)
         assert item.path != ""
-        # 指定外はデフォルト値
-        assert item.title == ""
-        assert item.folder == ""
-        assert item.tags == []
-        assert item.created_at == ""
-        assert item.modified_at == ""
+        # 指定外フィールドはシリアライズ時に除外 (model_construct による unset)
+        dumped = item.model_dump(exclude_unset=True)
+        assert set(dumped.keys()) == {"path"}
 
 
 def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
