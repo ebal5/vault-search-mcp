@@ -177,6 +177,31 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, list[Any]]:
+    """folder プレフィックスフィルタを「folder 自身 OR その配下」に厳密化する.
+
+    `folder == 'Projects'` が `'Projects Hermes'` 等の兄弟を拾わないよう、
+    LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
+
+    Parameters
+    ----------
+    folder:
+        フォルダパス (非空文字列想定; 空文字はフィルタを掛けないので呼び出し側で分岐)。
+    column:
+        SQL 上のカラム名。`n.folder` のようにテーブルエイリアス付きも可。
+
+    Returns
+    -------
+    tuple[str, list[Any]]
+        ``(clause, params)``。clause は前置詞を含まない WHERE 断片
+        ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
+    """
+    folder = folder.replace("\\", "/")
+    escaped = folder.replace("%", "\\%").replace("_", "\\_")
+    clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
+    return clause, [folder, escaped + "/%"]
+
+
 class VaultIndex:
     """SQLite + FTS5 によるインデックスと検索エンジン."""
 
@@ -400,7 +425,9 @@ class VaultIndex:
         tags:
             AND 条件でマッチさせるタグのリスト。
         folder:
-            フォルダパスの前方一致フィルタ。
+            フォルダパスフィルタ。指定フォルダ自身 (``n.folder == folder``) と
+            その配下 (``n.folder LIKE folder + '/%'``) のみを対象とする。
+            同プレフィックス兄弟 (e.g. ``Projects Hermes``) は除外される。
         metadata_filter:
             frontmatter 任意プロパティを対象とする AND フィルタ。
             構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
@@ -509,14 +536,11 @@ class VaultIndex:
                 sql_parts.append("AND (n.title LIKE ? OR n.content LIKE ?)")
                 params.extend([like_param, like_param])
 
-            # メタデータフィルタ
+            # メタデータフィルタ — folder は同プレフィックス兄弟の誤マッチを避ける
             if folder:
-                folder = folder.replace("\\", "/")
-                escaped = folder.replace("%", "\\%").replace("_", "\\_")
-                # 「folder 自身 OR folder/ 以下」に限定 — 同プレフィックスの
-                # 別フォルダ (e.g. 'Projects Hermes') を誤ヒットさせない
-                sql_parts.append("AND (n.folder = ? OR n.folder LIKE ? ESCAPE '\\')")
-                params.extend([folder, escaped + "/%"])
+                clause, folder_params = _folder_filter_clause(folder, column="n.folder")
+                sql_parts.append(f"AND {clause}")
+                params.extend(folder_params)
 
             if tags:
                 for tag in tags:
@@ -589,14 +613,12 @@ class VaultIndex:
         conn = self._connect()
         try:
             if folder:
-                folder = folder.replace("\\", "/")
-                escaped = folder.replace("%", "\\%").replace("_", "\\_")
-                # folder 自身 OR その配下に限定（兄弟フォルダ混入防止）
+                clause, folder_params = _folder_filter_clause(folder, column="folder")
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
-                    "WHERE (folder = ? OR folder LIKE ? ESCAPE '\\') "
+                    f"WHERE {clause} "
                     "ORDER BY file_mtime DESC LIMIT ?",
-                    (folder, escaped + "/%", limit),
+                    (*folder_params, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(

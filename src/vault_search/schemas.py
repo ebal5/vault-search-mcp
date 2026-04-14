@@ -204,6 +204,18 @@ class _ToolSchemaSpec:
     output_is_list: bool = False
 
 
+_FOLDER_INPUT_SCHEMA: dict[str, Any] = {
+    "type": ["string", "null"],
+    "description": (
+        "フォルダパス (Vault ルートからの相対)。指定したフォルダ自身と"
+        "その配下のみを対象とし、同プレフィックス兄弟 ('Projects' 指定で "
+        "'Projects Hermes/...' など) は除外される。"
+        "vault_folders の結果 (FolderCount.folder) をそのまま渡せる。"
+        "root 直下に限定したい場合は現状未サポート (null で全件)。"
+    ),
+}
+
+
 _FIELDS_INPUT_SCHEMA: dict[str, Any] = {
     "type": ["array", "null"],
     "items": {"type": "string"},
@@ -223,7 +235,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {
                 "query": {"type": "string", "description": "検索クエリ"},
                 "tags": {"type": ["array", "null"], "items": {"type": "string"}},
-                "folder": {"type": ["string", "null"]},
+                "folder": _FOLDER_INPUT_SCHEMA,
                 "limit": {"type": "integer", "default": 20},
                 "offset": {"type": "integer", "default": 0},
                 "fields": _FIELDS_INPUT_SCHEMA,
@@ -287,7 +299,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "default": 20},
-                "folder": {"type": ["string", "null"]},
+                "folder": _FOLDER_INPUT_SCHEMA,
                 "fields": _FIELDS_INPUT_SCHEMA,
             },
         },
