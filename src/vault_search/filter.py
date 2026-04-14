@@ -201,9 +201,28 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     if cond.op == "ne":
         assert isinstance(cond.value, str)
         fragment = (
-            "AND json_extract(n.frontmatter, ?) IS NOT NULL AND json_extract(n.frontmatter, ?) != ?"
+            "AND json_extract(n.frontmatter, ?) IS NOT NULL "
+            "AND ("
+            "(json_type(n.frontmatter, ?) != 'array' "
+            " AND json_extract(n.frontmatter, ?) != ?) "
+            "OR ("
+            "  json_type(n.frontmatter, ?) = 'array' "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+            "    WHERE value = ?"
+            "  )"
+            ")"
+            ")"
         )
-        params = [json_path, json_path, cond.value]
+        params = [
+            json_path,  # IS NOT NULL check
+            json_path,  # json_type != 'array'
+            json_path,  # json_extract != value (scalar branch)
+            cond.value,
+            json_path,  # json_type = 'array'
+            json_path,  # json_each arg
+            cond.value,
+        ]
         return fragment, params
 
     # op == "in"
