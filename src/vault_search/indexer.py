@@ -510,7 +510,7 @@ class VaultIndex:
 
             if fts_terms:
                 # FTS5 phrase 内の `"` は `""` にダブルして構文エラーを防ぐ
-                fts_query = " AND ".join(f'"{t.replace(chr(34), chr(34) * 2)}"' for t in fts_terms)
+                fts_query = " AND ".join('"' + t.replace('"', '""') + '"' for t in fts_terms)
                 sql_parts: list[str] = [
                     "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
                     "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
