@@ -96,17 +96,33 @@ AI エージェントが初回起動時に `read_resource` で取得すること
 `frontmatter_keys` は DB から毎回列挙されるため、エージェントが存在しないキー名を想像（ハルシネーション）するのを防止する。
 `metadata_filter` で使えるキーの正解セットとして参照する。
 
-#### output_schema は `schema://tools` が正 — MCP `tools/list.outputSchema` は弱い総称スキーマ
+#### output_schema は `schema://tools` と MCP `tools/list.outputSchema` で同一 (rich schema)
 
 ツール実装の戻り型は `dict[str, Any]` に統一している (FastMCP が Union 戻り型と list 戻り型に
 対して `wrap_output=True` を自動設定し、structured content を `{"result": ...}` にラップして
 しまう問題の回避)。list を返すはずの `vault_recent` / `vault_tags` / `vault_folders` も同じ
 理由で envelope dict (`{"notes": [...]}` / `{"tags": [...]}` / `{"folders": [...]}`) を返す。
-このため MCP プロトコルの `tools/list` が返す `outputSchema` は一般的な
-`object` スキーマに退化する。エージェントが `SearchResponse` / `NoteDetail` / `RecentNote` /
-`TagCount` / `FolderCount` の rich な JSON Schema を参照したい場合は、必ず `schema://tools` の
-`tools.<name>.output_schema` を真実の情報源として使うこと。実レスポンスの structured
-content はその schema が記述する形で返される (`{"result": ...}` でラップされない)。
+
+`dict` 戻り型のままだと FastMCP 自動生成の `outputSchema` は空 schema に退化するため、
+登録後に `_TOOL_ENTRIES[<name>]["output_schema"]` を MCP `Tool.output_schema` へ差し戻し、
+`schema://tools` と MCP `tools/list` の両方で同一の rich schema を公開している
+(`server._inject_rich_output_schemas()`)。
+
+##### `fields` 指定と `anyOf` (subset 許容)
+
+`vault_search` / `vault_get_note` / `vault_recent` は `fields` パラメータで返却キーを
+絞れる。MCP lowlevel server は structured content に対し `outputSchema` で
+`jsonschema.validate` を強制するため、subset dict が `required` 違反で拒否される問題を
+避ける目的で、これら 3 ツールの schema は **完全形と subset 形 (required 抜き) の `anyOf`** で
+表現している:
+
+- `vault_search`: `results.items` を `anyOf:[SearchHit-full, SearchHit-no-required]`
+- `vault_get_note`: トップレベルを `anyOf:[NoteDetail-full, NoteDetail-no-required]`
+- `vault_recent`: envelope `notes[]` の各要素を `anyOf:[RecentNote-full, RecentNote-no-required]`
+
+外側 (`tier` / `total` / `notes` envelope key 等) の `required` と
+`additionalProperties: false` は維持されるため、schema が緩みすぎることはない。
+`fields=None` 時のレスポンスは full 分岐で検証され、`fields=[...]` 時は subset 分岐で通る。
 
 ### Breaking changes (Pydantic 移行)
 

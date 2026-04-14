@@ -343,15 +343,13 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 }
 
 
-_FIELDS_AWARE_TOOLS: frozenset[str] = frozenset(
-    {"vault_search", "vault_get_note", "vault_recent"}
-)
+_FIELDS_AWARE_TOOLS: frozenset[str] = frozenset({"vault_search", "vault_get_note", "vault_recent"})
 
 
-def _strip_required(schema: dict[str, Any]) -> dict[str, Any]:
+def _without_required(schema: dict[str, Any]) -> dict[str, Any]:
     """schema のトップレベル ``required`` を除去した浅いコピーを返す.
 
-    ``additionalProperties``/``properties`` などは維持するため、fields subset
+    ``additionalProperties`` / ``properties`` などは維持するため、fields subset
     (指定キーのみを持つ dict) を許容しつつ余計なキー混入は引き続き弾く。
     """
     clone = dict(schema)
@@ -359,22 +357,17 @@ def _strip_required(schema: dict[str, Any]) -> dict[str, Any]:
     return clone
 
 
-def _subset_of(full_schema: dict[str, Any]) -> dict[str, Any]:
-    """完全形 schema から required を外した subset 形を返す (ヘルパ)."""
-    return _strip_required(full_schema)
-
-
 def _allow_subset(full_schema: dict[str, Any]) -> dict[str, Any]:
     """full / subset のどちらも受け付ける anyOf schema を返す.
 
-    MCP lowlevel server (mcp/server/lowlevel/server.py) は structured content を
-    ``jsonschema.validate(instance, outputSchema)`` で強制検証するため、
-    fields 指定で subset dict を返す fields-aware ツールでは
-    required 違反が起きる。full と (required 抜き) subset の anyOf にすれば
-    両方が通る。fields=None 時のレスポンスは full 分岐で検証されるため
-    required は維持されスキーマは緩みすぎない。
+    MCP lowlevel server (``mcp/server/lowlevel/server.py``) は structured content
+    を ``jsonschema.validate(instance, outputSchema)`` で強制検証するため、
+    ``fields`` 指定で subset dict を返す fields-aware ツールでは
+    ``required`` 違反が起きる。full と (required 抜き) subset の ``anyOf`` に
+    すれば両方が通る。``fields=None`` 時のレスポンスは full 分岐で検証されるため
+    required は維持され schema は緩みすぎない。
     """
-    return {"anyOf": [full_schema, _subset_of(full_schema)]}
+    return {"anyOf": [full_schema, _without_required(full_schema)]}
 
 
 def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:

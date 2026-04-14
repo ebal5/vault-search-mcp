@@ -208,6 +208,7 @@ def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> N
     schema://tools と カノニカルソースが 2 つに分裂していた。本テストは
     両者の properties キー集合が一致することを保証する regression。
     """
+
     def _top_props(schema: dict[str, Any]) -> dict[str, Any]:
         """anyOf でラップされた schema からも full 分岐の properties を取り出す."""
         if "properties" in schema:
