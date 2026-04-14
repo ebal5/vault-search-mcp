@@ -7,9 +7,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .indexer import VaultIndex
 
 # ---------------------------------------------------------------------------
 # Domain errors
@@ -177,3 +180,79 @@ class VaultStats(BaseModel):
     db_size_bytes: int = Field(description="SQLite DB ファイルのサイズ (バイト)")
     db_size_mb: float = Field(description="SQLite DB ファイルのサイズ (MB, 小数2桁)")
     vault_root: str = Field(description="Vault ルートの絶対パス")
+
+
+# ---------------------------------------------------------------------------
+# Schema introspection payload (schema://tools resource)
+# ---------------------------------------------------------------------------
+
+
+_TOOL_OUTPUT_MODELS: dict[str, tuple[str, type[BaseModel], bool]] = {
+    "vault_search": ("SearchHit", SearchHit, False),
+    "vault_get_note": ("NoteDetail", NoteDetail, False),
+    "vault_recent": ("RecentNote", RecentNote, True),
+    "vault_tags": ("TagCount", TagCount, True),
+    "vault_folders": ("FolderCount", FolderCount, True),
+    "vault_reindex": ("ReindexStats", ReindexStats, False),
+    "vault_stats": ("VaultStats", VaultStats, False),
+}
+
+_TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "vault_search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "検索クエリ"},
+            "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+            "folder": {"type": ["string", "null"]},
+            "limit": {"type": "integer", "default": 20},
+            "offset": {"type": "integer", "default": 0},
+        },
+        "required": ["query"],
+    },
+    "vault_get_note": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    },
+    "vault_recent": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "default": 20},
+            "folder": {"type": ["string", "null"]},
+        },
+    },
+    "vault_tags": {"type": "object", "properties": {}},
+    "vault_folders": {"type": "object", "properties": {}},
+    "vault_reindex": {
+        "type": "object",
+        "properties": {"force": {"type": "boolean", "default": False}},
+    },
+    "vault_stats": {"type": "object", "properties": {}},
+}
+
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "vault_search": "Vault 内のノートを全文検索する。",
+    "vault_get_note": "指定パスのノート全文とメタデータを取得する。",
+    "vault_recent": "最近更新されたノート一覧を取得する。",
+    "vault_tags": "全タグとその使用回数を返す。",
+    "vault_folders": "フォルダ構造とノート数を返す。",
+    "vault_reindex": "インデックスを再構築する。",
+    "vault_stats": "インデックスの統計情報を返す。",
+}
+
+
+def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
+    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
+    tools: dict[str, dict[str, Any]] = {}
+    for tool_name, (_label, model_cls, is_list) in _TOOL_OUTPUT_MODELS.items():
+        schema = model_cls.model_json_schema()
+        output_schema = {"type": "array", "items": schema} if is_list else schema
+        tools[tool_name] = {
+            "description": _TOOL_DESCRIPTIONS[tool_name],
+            "input_schema": _TOOL_INPUT_SCHEMAS[tool_name],
+            "output_schema": output_schema,
+        }
+    return {
+        "tools": tools,
+        "frontmatter_keys": index.list_frontmatter_keys(),
+    }

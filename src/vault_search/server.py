@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -34,6 +35,7 @@ from .schemas import (
     SearchResponse,
     TagCount,
     VaultStats,
+    build_schema_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,6 +172,17 @@ def vault_stats() -> VaultStats:
         VaultStats: ノート総数, DB サイズ (bytes / MB), Vault ルート絶対パス。
     """
     return VaultStats(**_get_index().stats())
+
+
+# ---------------------------------------------------------------------------
+# MCP Resources
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource("schema://tools")
+def schema_resource() -> dict[str, Any]:
+    """全ツールの入出力スキーマと frontmatter キー一覧を返す."""
+    return build_schema_payload(_get_index())
 
 
 # ---------------------------------------------------------------------------

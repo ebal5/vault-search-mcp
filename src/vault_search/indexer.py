@@ -585,6 +585,18 @@ class VaultIndex:
         finally:
             conn.close()
 
+    def list_frontmatter_keys(self) -> list[str]:
+        """Vault 内 frontmatter のトップレベルキーをソート済みで返す."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT key FROM notes, json_each(notes.frontmatter) "
+                "WHERE json_valid(notes.frontmatter) ORDER BY key"
+            ).fetchall()
+            return [r["key"] for r in rows]
+        finally:
+            conn.close()
+
     def stats(self) -> dict[str, Any]:
         """インデックスの統計情報."""
         conn = self._connect()
