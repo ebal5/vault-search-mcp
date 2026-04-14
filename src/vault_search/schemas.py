@@ -203,7 +203,11 @@ class _ToolSchemaSpec:
 _FIELDS_INPUT_SCHEMA: dict[str, Any] = {
     "type": ["array", "null"],
     "items": {"type": "string"},
-    "description": "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。",
+    "description": (
+        "返却フィールド指定 (例: ['path', 'title'])。None/未指定で全フィールド返却。"
+        "指定時のレスポンスは output_schema のフルモデルではなく、"
+        "指定キーのみを持つ plain dict (list ツールは要素単位で subset) となる。"
+    ),
 }
 
 
@@ -322,18 +326,6 @@ def validate_fields(
         if name not in allowed:
             raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
     return frozenset(fields)
-
-
-def apply_field_mask(
-    model_cls: type[BaseModel],
-    data: dict[str, Any],
-    fields: list[str] | None,
-) -> dict[str, Any]:
-    """fields 指定に基づいて data を subset する."""
-    fields_set = validate_fields(model_cls, fields)
-    if fields_set is None:
-        return data
-    return {k: v for k, v in data.items() if k in fields_set}
 
 
 def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
