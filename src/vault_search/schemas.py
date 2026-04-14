@@ -211,6 +211,13 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "folder": {"type": ["string", "null"]},
                 "limit": {"type": "integer", "default": 20},
                 "offset": {"type": "integer", "default": 0},
+                "fields": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": (
+                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -220,7 +227,16 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
         description="指定パスのノート全文とメタデータを取得する。",
         input_schema={
             "type": "object",
-            "properties": {"path": {"type": "string"}},
+            "properties": {
+                "path": {"type": "string"},
+                "fields": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": (
+                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
+                    ),
+                },
+            },
             "required": ["path"],
         },
         output_model=NoteDetail,
@@ -232,6 +248,13 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {
                 "limit": {"type": "integer", "default": 20},
                 "folder": {"type": ["string", "null"]},
+                "fields": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": (
+                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
+                    ),
+                },
             },
         },
         output_model=RecentNote,
