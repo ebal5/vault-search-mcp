@@ -219,3 +219,32 @@ def test_schema_resource_registered_in_fastmcp(vault_index: VaultIndex) -> None:
     assert any("schema://tools" in u for u in uris), (
         f"schema://tools resource not registered; got URIs: {uris}"
     )
+
+
+def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -> None:
+    """metadata_filter の additionalProperties が oneOf 構造で演算子 grammar を表現すること.
+
+    演算子 dict の構造 (`{"in": [...]}` / `{"ne": "..."}`) が機械可読な形で
+    JSON Schema に露出していないと、エージェントが MongoDB 風の `$in` や
+    `{"eq": "..."}` をハルシネーションしてしまう。
+    """
+    from vault_search.schemas import build_schema_payload
+
+    payload = build_schema_payload(vault_index)
+    mf_schema = payload["tools"]["vault_search"]["input_schema"]["properties"]["metadata_filter"]
+
+    ap = mf_schema.get("additionalProperties")
+    assert isinstance(ap, dict), "additionalProperties should be a schema object, not bool"
+    assert "oneOf" in ap, f"additionalProperties must expose oneOf variants: {ap!r}"
+    oneof = ap["oneOf"]
+    assert isinstance(oneof, list)
+    assert len(oneof) == 3, f"expected 3 variants (string / in / ne), got {len(oneof)}: {oneof!r}"
+
+    types = {variant.get("type") for variant in oneof}
+    assert "string" in types, f"bare string (implicit eq) variant missing: {oneof!r}"
+
+    obj_variants = [v for v in oneof if v.get("type") == "object"]
+    assert len(obj_variants) == 2, f"expected 2 object variants (in, ne): {obj_variants!r}"
+    ops = [set(v.get("properties", {}).keys()) for v in obj_variants]
+    assert {"in"} in ops, f"'in' operator variant missing: {ops!r}"
+    assert {"ne"} in ops, f"'ne' operator variant missing: {ops!r}"
