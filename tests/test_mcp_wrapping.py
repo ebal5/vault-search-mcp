@@ -127,3 +127,27 @@ def test_schema_resource_output_schema_remains_rich(vault_index: VaultIndex) -> 
     assert {"tier", "total", "results"}.issubset(props.keys()), (
         f"schema resource output_schema lost rich SearchResponse shape: {props.keys()}"
     )
+
+
+def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> None:
+    """MCP tools/list の outputSchema が schema://tools と同じ rich schema であること.
+
+    Round 3 で dict[str, Any] 戻り型に統一した結果、FastMCP 自動生成の outputSchema
+    が ``{"additionalProperties": True, "type": "object"}`` 相当の空 schema になり、
+    schema://tools と カノニカルソースが 2 つに分裂していた。本テストは
+    両者の properties キー集合が一致することを保証する regression。
+    """
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    payload = build_schema_payload(vault_index)
+    for tool in tools:
+        assert tool.outputSchema is not None, f"{tool.name}: outputSchema missing"
+        resource_schema = payload["tools"][tool.name]["output_schema"]
+        props = tool.outputSchema.get("properties", {})
+        assert props, (
+            f"{tool.name}: MCP outputSchema has no properties (empty schema): {tool.outputSchema}"
+        )
+        resource_props = resource_schema.get("properties", {})
+        assert set(props.keys()) == set(resource_props.keys()), (
+            f"{tool.name}: MCP outputSchema keys {set(props.keys())} "
+            f"!= resource schema keys {set(resource_props.keys())}"
+        )
