@@ -142,8 +142,11 @@ def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
     res = fn(5, None)
-    assert isinstance(res, list)
-    for item in res:
+    # envelope dict `{"notes": [...]}` を返す (FastMCP の list wrap 回避のため)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"notes"}
+    assert isinstance(res["notes"], list)
+    for item in res["notes"]:
         assert isinstance(item, dict)
         RecentNote.model_validate(item)
 
@@ -151,26 +154,30 @@ def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_tags(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_tags)
     res = fn()
-    assert isinstance(res, list)
-    for item in res:
-        assert isinstance(item, TagCount)
-        assert isinstance(item.tag, str)
-        assert isinstance(item.count, int)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"tags"}
+    assert isinstance(res["tags"], list)
+    for item in res["tags"]:
+        assert isinstance(item, dict)
+        TagCount.model_validate(item)
 
 
 def test_mcp_tool_vault_folders(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_folders)
     res = fn()
-    assert isinstance(res, list)
-    for item in res:
-        assert isinstance(item, FolderCount)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"folders"}
+    assert isinstance(res["folders"], list)
+    for item in res["folders"]:
+        assert isinstance(item, dict)
+        FolderCount.model_validate(item)
 
 
 def test_mcp_tool_vault_folders_root_is_empty_string(vault_index: VaultIndex) -> None:
     """vault_folders の root 直下は '' に統一され '(root)' sentinel は出ない."""
     fn = _fn(server_mod.vault_folders)
     res = fn()
-    folders = {item.folder for item in res}
+    folders = {item["folder"] for item in res["folders"]}
     assert "" in folders
     assert "(root)" not in folders
 
@@ -286,12 +293,15 @@ def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> No
 
 
 def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
-    """fields=["path"] で subset 返却 (tool 関数直接呼び出し; list[dict] を返す)."""
+    """fields=["path"] で subset 返却 (envelope dict `{"notes": [...]}`)."""
     fn = _fn(server_mod.vault_recent)
     res = fn(5, None, ["path"])
-    assert isinstance(res, list)
-    assert len(res) > 0
-    for item in res:
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"notes"}
+    notes = res["notes"]
+    assert isinstance(notes, list)
+    assert len(notes) > 0
+    for item in notes:
         assert isinstance(item, dict)
         assert set(item.keys()) == {"path"}
         assert item["path"] != ""
@@ -408,11 +418,14 @@ def test_vault_get_note_fields_actually_subsets_response(vault_index: VaultIndex
 
 
 def test_vault_recent_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
-    """vault_recent 各要素も同様."""
-    items = _call_tool_structured(
+    """vault_recent 各要素も同様 (envelope dict 経由)."""
+    structured = _call_tool_structured(
         "vault_recent",
         {"limit": 5, "fields": ["path"]},
     )
+    assert isinstance(structured, dict)
+    assert "notes" in structured
+    items = structured["notes"]
     assert isinstance(items, list)
     assert len(items) > 0
     for item in items:

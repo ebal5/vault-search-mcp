@@ -192,9 +192,7 @@ def vault_tags() -> dict[str, Any]:
         frontmatter.tags と本文インライン #tag の両方が集計対象。
         戻り型統一の理由は ``vault_recent`` 参照。
     """
-    return {
-        "tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]
-    }
+    return {"tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]}
 
 
 @mcp.tool()

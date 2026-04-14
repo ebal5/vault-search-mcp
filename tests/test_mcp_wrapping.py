@@ -78,9 +78,7 @@ def test_vault_recent_structured_content_not_wrapped(vault_index: VaultIndex) ->
     """
     _content, structured = _call_tool("vault_recent", {"limit": 3})
     assert isinstance(structured, dict)
-    assert "result" not in structured, (
-        f"vault_recent wrap drift: keys={list(structured.keys())}"
-    )
+    assert "result" not in structured, f"vault_recent wrap drift: keys={list(structured.keys())}"
     assert "notes" in structured, f"envelope key 'notes' missing: {structured!r}"
     assert isinstance(structured["notes"], list)
 
@@ -89,9 +87,7 @@ def test_vault_tags_structured_content_not_wrapped(vault_index: VaultIndex) -> N
     """vault_tags (envelope dict 戻り) の structured content が wrap されない."""
     _content, structured = _call_tool("vault_tags", {})
     assert isinstance(structured, dict)
-    assert "result" not in structured, (
-        f"vault_tags wrap drift: keys={list(structured.keys())}"
-    )
+    assert "result" not in structured, f"vault_tags wrap drift: keys={list(structured.keys())}"
     assert "tags" in structured, f"envelope key 'tags' missing: {structured!r}"
     assert isinstance(structured["tags"], list)
 
@@ -100,9 +96,7 @@ def test_vault_folders_structured_content_not_wrapped(vault_index: VaultIndex) -
     """vault_folders (envelope dict 戻り) の structured content が wrap されない."""
     _content, structured = _call_tool("vault_folders", {})
     assert isinstance(structured, dict)
-    assert "result" not in structured, (
-        f"vault_folders wrap drift: keys={list(structured.keys())}"
-    )
+    assert "result" not in structured, f"vault_folders wrap drift: keys={list(structured.keys())}"
     assert "folders" in structured, f"envelope key 'folders' missing: {structured!r}"
     assert isinstance(structured["folders"], list)
 
