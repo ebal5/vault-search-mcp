@@ -38,11 +38,15 @@ _LIMIT_MAX = 500
 
 
 # Allowed character class for identifiers (field names, frontmatter keys).
-# Obsidian nested-key convention requires ``.``; ``_`` and ``-`` are common
-# in user-authored frontmatter.
-_IDENTIFIER_PATTERN = r"[A-Za-z0-9_\-.]+"
+# Obsidian nested-key convention requires ``.`` as a segment separator; ``_``
+# and ``-`` are common in user-authored frontmatter. Dots are only permitted
+# between non-empty segments: leading, trailing, and consecutive dots would
+# expand to malformed SQLite JSON paths (e.g. ``$..foo``) and surface as
+# ``sqlite3.OperationalError`` instead of ``ValidationError`` (issue #14).
+_IDENTIFIER_SEGMENT = r"[A-Za-z0-9_\-]+"
+_IDENTIFIER_PATTERN = rf"{_IDENTIFIER_SEGMENT}(?:\.{_IDENTIFIER_SEGMENT})*"
 _IDENTIFIER_RE = re.compile(rf"^{_IDENTIFIER_PATTERN}$")
-_IDENTIFIER_ALLOWED_DESC = "A-Z a-z 0-9 _ - ."
+_IDENTIFIER_ALLOWED_DESC = "A-Z a-z 0-9 _ -, with . as separator between non-empty segments"
 
 # C0 controls (0x00-0x1F) + DEL (0x7F). Tabs/newlines are rejected because
 # they are never meaningful inside a field name or filter value and are a
