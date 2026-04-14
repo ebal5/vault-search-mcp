@@ -725,28 +725,39 @@ class VaultWatcher:
     def start(self) -> bool:
         """監視開始。watchdog が利用可能なら True."""
         try:
-            from watchdog.events import FileSystemEvent, FileSystemEventHandler
+            from watchdog.events import (
+                FileMovedEvent,
+                FileSystemEvent,
+                FileSystemEventHandler,
+            )
             from watchdog.observers import Observer
 
             watcher = self
+
+            def _schedule_if_valid(raw_path: str) -> None:
+                if not raw_path.endswith(".md"):
+                    return
+                try:
+                    rel = str(Path(raw_path).relative_to(watcher._index.vault_root)).replace(
+                        "\\", "/"
+                    )
+                except ValueError:
+                    return
+                if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
+                    return
+                watcher._schedule_update(rel)
 
             class Handler(FileSystemEventHandler):
                 def on_any_event(self, event: FileSystemEvent) -> None:
                     if event.is_directory:
                         return
-                    src = event.src_path
-                    if not src.endswith(".md"):
+                    # FileMovedEvent はリネーム/移動。src_path (旧) と
+                    # dest_path (新) の両方をインデックス更新対象にする (#58)。
+                    if isinstance(event, FileMovedEvent):
+                        _schedule_if_valid(event.src_path)
+                        _schedule_if_valid(event.dest_path)
                         return
-                    # 隠しフォルダ除外
-                    try:
-                        rel = str(Path(src).relative_to(watcher._index.vault_root)).replace(
-                            "\\", "/"
-                        )
-                    except ValueError:
-                        return
-                    if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
-                        return
-                    watcher._schedule_update(rel)
+                    _schedule_if_valid(event.src_path)
 
             self._observer = Observer()
             self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
