@@ -91,6 +91,7 @@ def vault_search(
     limit: int = 20,
     offset: int = 0,
     fields: list[str] | None = None,
+    metadata_filter: dict[str, Any] | None = None,
 ) -> SearchResponse:
     """Vault 内のノートを全文検索する。
 
@@ -107,12 +108,23 @@ def vault_search(
         offset: 開始位置（ページネーション用）。
         fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
                 空リストまたは不正名は ValidationError。context window 節約用。
+        metadata_filter: frontmatter プロパティでの AND フィルタ。
+            例: ``{"status": "active", "priority": {"in": ["high", "low"]}}``。
+            対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
+            リスト型 frontmatter 値は「含む」判定 (tags と同様)。
 
     Returns:
         SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
         results (limit/offset 適用後の SearchHit 一覧)。
     """
-    raw = _get_index().search(query, tags=tags, folder=folder, limit=limit, offset=offset)
+    raw = _get_index().search(
+        query,
+        tags=tags,
+        folder=folder,
+        metadata_filter=metadata_filter,
+        limit=limit,
+        offset=offset,
+    )
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],

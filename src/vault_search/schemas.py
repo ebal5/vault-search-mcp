@@ -218,6 +218,14 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
                     ),
                 },
+                "metadata_filter": {
+                    "type": ["object", "null"],
+                    "description": (
+                        "frontmatter AND フィルタ。値は str (暗黙 eq) または "
+                        '{"in": list[str]} / {"ne": str}'
+                    ),
+                    "additionalProperties": True,
+                },
             },
             "required": ["query"],
         },

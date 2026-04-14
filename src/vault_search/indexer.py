@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .filter import MetadataCondition, parse_metadata_filter
 from .parser import ParsedNote, parse_note
 
 logger = logging.getLogger(__name__)
@@ -384,11 +385,25 @@ class VaultIndex:
         *,
         tags: list[str] | None = None,
         folder: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Tier 0-2 のプログレッシブ検索."""
-        filters = {"tags": tags, "folder": folder} if (tags or folder) else None
+        """Tier 0-2 のプログレッシブ検索.
+
+        ``metadata_filter`` は frontmatter 任意プロパティを対象とする AND フィルタ。
+        構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
+        """
+        # Validate (raises ValidationError on malformed input)
+        conditions = parse_metadata_filter(metadata_filter)
+
+        filters: dict[str, Any] | None = None
+        if tags or folder or metadata_filter:
+            filters = {
+                "tags": tags,
+                "folder": folder,
+                "metadata_filter": metadata_filter,
+            }
 
         # Tier 0-1: キャッシュ
         tier, cached = self._cache.get(query, filters)
@@ -402,7 +417,13 @@ class VaultIndex:
 
         # Tier 2: FTS5 — キャッシュ用に上限付きで取得
         _MAX_RESULTS = 500
-        results = self._fts5_search(query, tags=tags, folder=folder, limit=_MAX_RESULTS)
+        results = self._fts5_search(
+            query,
+            tags=tags,
+            folder=folder,
+            metadata_conditions=conditions,
+            limit=_MAX_RESULTS,
+        )
         self._cache.put(query, filters, results)
 
         sliced = results[offset : offset + limit]
@@ -418,17 +439,21 @@ class VaultIndex:
         *,
         tags: list[str] | None = None,
         folder: str | None = None,
+        metadata_conditions: list[MetadataCondition] | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         """FTS5 trigram 検索 + メタデータフィルタ."""
         conn = self._connect()
         try:
             terms = query.strip().split()
-            if not terms:
-                return []
 
             fts_terms = [t for t in terms if len(t) >= 3]
             short_terms = [t for t in terms if len(t) < 3]
+
+            has_any_filter = bool(short_terms or tags or folder or metadata_conditions)
+            if not terms and not has_any_filter:
+                # 空クエリかつフィルタ無し — 従来通り空結果
+                return []
 
             if fts_terms:
                 fts_query = " AND ".join(f'"{t}"' for t in fts_terms)
@@ -442,7 +467,7 @@ class VaultIndex:
                 ]
                 params: list[Any] = [fts_query]
             else:
-                # 全語が3文字未満 — LIKE フォールバック
+                # 全語が3文字未満 or 空クエリ + フィルタ — LIKE/フィルタ専用パス
                 sql_parts = [
                     "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
                     "       '' AS snippet,",
@@ -469,6 +494,57 @@ class VaultIndex:
                 for tag in tags:
                     sql_parts.append("AND n.tags LIKE ?")
                     params.append(f'%"{tag}"%')
+
+            # frontmatter metadata_filter (Issue #5)
+            if metadata_conditions:
+                for cond in metadata_conditions:
+                    # cond.key は validate_identifier 済み (A-Za-z0-9_-.) なので
+                    # JSON パスに直接埋め込んでも安全。
+                    json_path = f"$.{cond.key}"
+                    if cond.op == "eq":
+                        # スカラー一致 OR JSON 配列要素含有
+                        # json_each はスカラー/NULL に対して malformed JSON を投げるため
+                        # json_type() で配列ガード。
+                        sql_parts.append(
+                            "AND ("
+                            "json_extract(n.frontmatter, ?) = ? "
+                            "OR ("
+                            "  json_type(n.frontmatter, ?) = 'array' "
+                            "  AND EXISTS ("
+                            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+                            "    WHERE value = ?"
+                            "  )"
+                            ")"
+                            ")"
+                        )
+                        params.extend([json_path, cond.value, json_path, json_path, cond.value])
+                    elif cond.op == "ne":
+                        # キーが存在し値が != の場合のみ true
+                        sql_parts.append(
+                            "AND json_extract(n.frontmatter, ?) IS NOT NULL "
+                            "AND json_extract(n.frontmatter, ?) != ?"
+                        )
+                        params.extend([json_path, json_path, cond.value])
+                    elif cond.op == "in":
+                        values = list(cond.value)  # tuple[str, ...]
+                        placeholders = ",".join("?" * len(values))
+                        sql_parts.append(
+                            "AND ("
+                            f"json_extract(n.frontmatter, ?) IN ({placeholders}) "
+                            "OR ("
+                            "  json_type(n.frontmatter, ?) = 'array' "
+                            "  AND EXISTS ("
+                            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+                            f"    WHERE value IN ({placeholders})"
+                            "  )"
+                            ")"
+                            ")"
+                        )
+                        params.append(json_path)
+                        params.extend(values)
+                        params.append(json_path)
+                        params.append(json_path)
+                        params.extend(values)
 
             if fts_terms:
                 sql_parts.append("ORDER BY rank")
