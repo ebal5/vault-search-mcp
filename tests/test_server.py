@@ -112,10 +112,13 @@ def test_vault_stats_happy(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_search(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian")
-    assert isinstance(res, SearchResponse)
-    assert res.tier in (0, 1, 2)
-    assert isinstance(res.total, int)
-    assert isinstance(res.results, list)
+    # tool は常に plain dict を返す (FastMCP の wrap_output 回避のため)
+    assert isinstance(res, dict)
+    assert res["tier"] in (0, 1, 2)
+    assert isinstance(res["total"], int)
+    assert isinstance(res["results"], list)
+    # 参考: SearchResponse として再構築可能な形を維持していること
+    SearchResponse.model_validate(res)
 
 
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
@@ -129,9 +132,11 @@ def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_get_note)
     res = fn("Welcome.md")
-    assert isinstance(res, NoteDetail)
-    assert res.title == "Welcome"
-    assert res.path == "Welcome.md"
+    assert isinstance(res, dict)
+    assert res["title"] == "Welcome"
+    assert res["path"] == "Welcome.md"
+    # NoteDetail として再構築可能
+    NoteDetail.model_validate(res)
 
 
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
@@ -139,7 +144,8 @@ def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     res = fn(5, None)
     assert isinstance(res, list)
     for item in res:
-        assert isinstance(item, RecentNote)
+        assert isinstance(item, dict)
+        RecentNote.model_validate(item)
 
 
 def test_mcp_tool_vault_tags(vault_index: VaultIndex) -> None:
@@ -216,13 +222,12 @@ def test_vault_search_fields_none_returns_all(vault_index: VaultIndex) -> None:
     """fields=None (デフォルト) は全フィールド返却で後方互換."""
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian", None, None, 20, 0, None)
-    assert isinstance(res, SearchResponse)
-    assert len(res.results) > 0
+    assert isinstance(res, dict)
+    assert len(res["results"]) > 0
     # 通常の検索結果には snippet が載るはず (3文字以上クエリ)
-    hit = res.results[0]
-    dumped = hit.model_dump()
+    hit = res["results"][0]
     # 全キーが存在
-    assert set(dumped.keys()) >= {
+    assert set(hit.keys()) >= {
         "path",
         "title",
         "folder",
@@ -315,8 +320,8 @@ def test_mcp_tool_vault_search_metadata_filter_eq(vault_index: VaultIndex) -> No
     """eq 暗黙の metadata_filter で絞り込み."""
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian", None, None, 20, 0, None, {"status": "active"})
-    assert isinstance(res, SearchResponse)
-    paths = {hit.path for hit in res.results}
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
     assert "Welcome.md" in paths
     assert "Projects/日本語ノート.md" not in paths
 
@@ -333,8 +338,8 @@ def test_mcp_tool_vault_search_metadata_filter_in(vault_index: VaultIndex) -> No
         None,
         {"priority": {"in": ["high", "low"]}},
     )
-    assert isinstance(res, SearchResponse)
-    paths = {hit.path for hit in res.results}
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
     assert "Welcome.md" in paths
     assert "Research/alpha.md" in paths
     assert "Projects/日本語ノート.md" not in paths

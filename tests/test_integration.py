@@ -87,17 +87,20 @@ def _call_vault_search_via_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
     """FastMCP の ``call_tool`` 経路で vault_search を呼び structured 結果を返す.
 
     ``call_tool`` は ``(content_blocks, structured)`` の tuple を返す。
-    structured は ``{"result": <返値>}`` の形式になる (FastMCP の仕様)。
+    tool 戻り型を dict に統一したため (FastMCP の wrap_output 回避)、
+    structured はもはや ``{"result": ...}`` で包まれず、トップで
+    tier/total/results を直接持つ。
     """
     content, structured = asyncio.run(server_mod.mcp.call_tool("vault_search", arguments))
     # MCP の Text content も JSON として妥当であることを検証
     assert content, "call_tool returned no content blocks"
     parsed_text = json.loads(content[0].text)
     # structured と text の間で一貫性を確認
-    assert structured["result"] == parsed_text, (
-        "structured output と text content の内容が一致しない"
+    assert structured == parsed_text, "structured output と text content の内容が一致しない"
+    assert "tier" in structured, (
+        f"structured content should not be wrapped, got keys={list(structured.keys())}"
     )
-    return structured["result"]
+    return structured
 
 
 def _search_hit_properties(output_schema: dict[str, Any]) -> dict[str, Any]:
