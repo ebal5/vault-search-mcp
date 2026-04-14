@@ -176,3 +176,139 @@ def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:
     assert res.total_notes > 0
     assert res.db_size_bytes >= 0
     assert res.vault_root  # non-empty path string
+
+
+# ---------------------------------------------------------------------------
+# fields parameter (Issue #9) — AI エージェントが返却フィールドを絞って
+# context window を節約するための引数。Red フェーズ: 実装前の失敗テスト。
+# ---------------------------------------------------------------------------
+
+
+from vault_search.schemas import SearchHit  # noqa: E402
+
+
+def test_vault_search_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path", "title"] で subset 返却。要素は SearchHit のまま."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, ["path", "title"])
+    assert isinstance(res, SearchResponse)
+    assert isinstance(res.results, list)
+    assert len(res.results) > 0
+    for hit in res.results:
+        assert isinstance(hit, SearchHit)
+        # path/title は実データで埋まる
+        assert hit.path != ""
+        assert isinstance(hit.title, str)
+        # 指定外フィールドはモデルのデフォルト値
+        assert hit.snippet == ""
+        assert hit.score == 0.0
+        assert hit.tags == []
+        assert hit.created_at == ""
+        assert hit.modified_at == ""
+        assert hit.folder == ""
+
+
+def test_vault_search_fields_none_returns_all(vault_index: VaultIndex) -> None:
+    """fields=None (デフォルト) は全フィールド返却で後方互換."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, None)
+    assert isinstance(res, SearchResponse)
+    assert len(res.results) > 0
+    # 通常の検索結果には snippet が載るはず (3文字以上クエリ)
+    hit = res.results[0]
+    dumped = hit.model_dump()
+    # 全キーが存在
+    assert set(dumped.keys()) >= {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }
+
+
+def test_vault_search_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, [])
+
+
+def test_vault_search_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["nonexistent"] は ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, ["nonexistent"])
+
+
+def test_vault_search_fields_mixed_valid_invalid_raises(vault_index: VaultIndex) -> None:
+    """有効 + 無効 混在でも厳格に ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, ["path", "bogus"])
+
+
+def test_vault_get_note_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path", "title"] で subset 返却."""
+    fn = _fn(server_mod.vault_get_note)
+    res = fn("Welcome.md", ["path", "title"])
+    assert isinstance(res, NoteDetail)
+    assert res.path == "Welcome.md"
+    assert res.title == "Welcome"
+    # 指定外はデフォルト値
+    assert res.content == "" or res.content is not None  # content は必須だがデフォルトに落ちる
+    # デフォルト値で埋まる確認
+    assert res.tags == []
+    assert res.aliases == []
+    assert res.frontmatter == {}
+    assert res.created_at == ""
+    assert res.modified_at == ""
+    assert res.folder == ""
+
+
+def test_vault_get_note_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_get_note)
+    with pytest.raises(ValueError):
+        fn("Welcome.md", [])
+
+
+def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["bogus"] は ValueError."""
+    fn = _fn(server_mod.vault_get_note)
+    with pytest.raises(ValueError):
+        fn("Welcome.md", ["bogus"])
+
+
+def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path"] で subset 返却."""
+    fn = _fn(server_mod.vault_recent)
+    res = fn(5, None, ["path"])
+    assert isinstance(res, list)
+    assert len(res) > 0
+    for item in res:
+        assert isinstance(item, RecentNote)
+        assert item.path != ""
+        # 指定外はデフォルト値
+        assert item.title == ""
+        assert item.folder == ""
+        assert item.tags == []
+        assert item.created_at == ""
+        assert item.modified_at == ""
+
+
+def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_recent)
+    with pytest.raises(ValueError):
+        fn(5, None, [])
+
+
+def test_vault_recent_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["nope"] は ValueError."""
+    fn = _fn(server_mod.vault_recent)
+    with pytest.raises(ValueError):
+        fn(5, None, ["nope"])
