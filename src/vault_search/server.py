@@ -36,8 +36,8 @@ from .schemas import (
     SearchResponse,
     TagCount,
     VaultStats,
-    apply_field_mask,
     build_schema_payload,
+    validate_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,20 +59,20 @@ def _get_index() -> VaultIndex:
 _M = TypeVar("_M", bound=BaseModel)
 
 
-def _build_model(
+def _build_row(
     model_cls: type[_M],
     data: dict[str, Any],
-    fields: list[str] | None,
+    fields_set: frozenset[str] | None,
 ) -> _M:
-    """fields=None なら通常コンストラクタで厳密検証。
+    """fields_set=None なら通常コンストラクタで厳密検証。
 
-    fields 指定時は ``model_construct`` でバリデーションをバイパスし、
+    fields_set 指定時は ``model_construct`` でバリデーションをバイパスし、
     必須フィールドが欠けていても部分モデルを組み立てる。
     未セットフィールドは JSON シリアライズ時に除外される。
     """
-    masked = apply_field_mask(model_cls, data, fields)
-    if fields is None:
-        return model_cls(**masked)
+    if fields_set is None:
+        return model_cls(**data)
+    masked = {k: v for k, v in data.items() if k in fields_set}
     return model_cls.model_construct(**masked)
 
 
@@ -117,6 +117,7 @@ def vault_search(
         SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
         results (limit/offset 適用後の SearchHit 一覧)。
     """
+    fields_set = validate_fields(SearchHit, fields)
     raw = _get_index().search(
         query,
         tags=tags,
@@ -128,7 +129,7 @@ def vault_search(
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],
-        results=[_build_model(SearchHit, hit, fields) for hit in raw["results"]],
+        results=[_build_row(SearchHit, hit, fields_set) for hit in raw["results"]],
     )
 
 
@@ -147,10 +148,11 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> NoteDetail:
     Raises:
         NoteNotFoundError: 指定された path がインデックスに存在しない場合。
     """
+    fields_set = validate_fields(NoteDetail, fields)
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    return _build_model(NoteDetail, result, fields)
+    return _build_row(NoteDetail, result, fields_set)
 
 
 @mcp.tool()
@@ -170,8 +172,9 @@ def vault_recent(
     Returns:
         file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
     """
+    fields_set = validate_fields(RecentNote, fields)
     return [
-        _build_model(RecentNote, note, fields)
+        _build_row(RecentNote, note, fields_set)
         for note in _get_index().recent_notes(limit=limit, folder=folder)
     ]
 

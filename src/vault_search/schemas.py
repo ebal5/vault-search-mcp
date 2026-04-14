@@ -200,6 +200,13 @@ class _ToolSchemaSpec:
     output_is_list: bool = False
 
 
+_FIELDS_INPUT_SCHEMA: dict[str, Any] = {
+    "type": ["array", "null"],
+    "items": {"type": "string"},
+    "description": "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。",
+}
+
+
 _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
     "vault_search": _ToolSchemaSpec(
         description="Vault 内のノートを全文検索する。",
@@ -211,13 +218,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "folder": {"type": ["string", "null"]},
                 "limit": {"type": "integer", "default": 20},
                 "offset": {"type": "integer", "default": 0},
-                "fields": {
-                    "type": ["array", "null"],
-                    "items": {"type": "string"},
-                    "description": (
-                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
-                    ),
-                },
+                "fields": _FIELDS_INPUT_SCHEMA,
                 "metadata_filter": {
                     "type": ["object", "null"],
                     "description": (
@@ -237,13 +238,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "fields": {
-                    "type": ["array", "null"],
-                    "items": {"type": "string"},
-                    "description": (
-                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
-                    ),
-                },
+                "fields": _FIELDS_INPUT_SCHEMA,
             },
             "required": ["path"],
         },
@@ -256,13 +251,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {
                 "limit": {"type": "integer", "default": 20},
                 "folder": {"type": ["string", "null"]},
-                "fields": {
-                    "type": ["array", "null"],
-                    "items": {"type": "string"},
-                    "description": (
-                        "返却フィールド指定 (例: ['path', 'title'])。None で全フィールド。"
-                    ),
-                },
+                "fields": _FIELDS_INPUT_SCHEMA,
             },
         },
         output_model=RecentNote,
@@ -297,7 +286,6 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 
 
 def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
-    """1 ツール分の {description, input_schema, output_schema} エントリを生成."""
     schema = spec.output_model.model_json_schema()
     output_schema = {"type": "array", "items": schema} if spec.output_is_list else schema
     return {
@@ -307,36 +295,50 @@ def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
     }
 
 
+_TOOL_ENTRIES: dict[str, dict[str, Any]] = {
+    name: _build_tool_entry(spec) for name, spec in _TOOL_SPECS.items()
+}
+
+
+def validate_fields(
+    model_cls: type[BaseModel],
+    fields: list[str] | None,
+) -> frozenset[str] | None:
+    """fields 指定を検証し、有効なフィールド名集合を返す.
+
+    fields=None → None (全フィールド返却)
+    fields=[] → ValidationError
+    fields に不正名/未知名 → ValidationError
+    """
+    if fields is None:
+        return None
+    if not isinstance(fields, list):
+        raise ValidationError(f"fields must be a list, got {type(fields).__name__}")
+    if len(fields) == 0:
+        raise ValidationError("fields must not be empty; pass null to return all fields")
+    allowed = frozenset(model_cls.model_fields.keys())
+    for name in fields:
+        validate_identifier(name, kind="field name", max_len=64)
+        if name not in allowed:
+            raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
+    return frozenset(fields)
+
+
 def apply_field_mask(
     model_cls: type[BaseModel],
     data: dict[str, Any],
     fields: list[str] | None,
 ) -> dict[str, Any]:
-    """fields 指定に基づいて data を subset する.
-
-    fields=None → data をそのまま返却 (後方互換)
-    fields=[] → ValidationError
-    fields に存在しないフィールド名が含まれる → ValidationError
-    それ以外 → data から fields だけを抜き出した dict を返す
-      (モデル構築は呼び出し側で行い、欠落フィールドはモデルのデフォルト値で埋まる)
-    """
-    if fields is None:
+    """fields 指定に基づいて data を subset する."""
+    fields_set = validate_fields(model_cls, fields)
+    if fields_set is None:
         return data
-    if not isinstance(fields, list):
-        raise ValidationError(f"fields must be a list, got {type(fields).__name__}")
-    if len(fields) == 0:
-        raise ValidationError("fields must not be empty; pass null to return all fields")
-    allowed = set(model_cls.model_fields.keys())
-    for name in fields:
-        validate_identifier(name, kind="field name", max_len=64)
-        if name not in allowed:
-            raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
-    return {k: v for k, v in data.items() if k in set(fields)}
+    return {k: v for k, v in data.items() if k in fields_set}
 
 
 def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
     """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
     return {
-        "tools": {name: _build_tool_entry(spec) for name, spec in _TOOL_SPECS.items()},
+        "tools": _TOOL_ENTRIES,
         "frontmatter_keys": index.list_frontmatter_keys(),
     }

@@ -521,10 +521,6 @@ class VaultIndex:
                     sql_parts.append("AND n.tags LIKE ?")
                     params.append(f'%"{tag}"%')
 
-            # frontmatter metadata_filter (Issue #5)
-            # 各条件を filter.build_sql_fragment で WHERE 断片に変換する。
-            # SQL 組み立てと条件表現の結合度を下げるため、indexer 側は
-            # 断片とパラメータを連結するだけに留める。
             if metadata_conditions:
                 for cond in metadata_conditions:
                     fragment, fragment_params = build_sql_fragment(cond)
