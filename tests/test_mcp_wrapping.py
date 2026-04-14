@@ -71,17 +71,40 @@ def test_vault_get_note_structured_content_not_wrapped(vault_index: VaultIndex) 
 
 
 def test_vault_recent_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
-    """vault_recent (list 戻り) の structured content も wrap されない."""
+    """vault_recent (envelope dict 戻り) の structured content が wrap されない.
+
+    旧仕様では ``list[dict]`` を返していたため FastMCP が ``{"result": [...]}``
+    にラップしていた。現仕様は ``{"notes": [...]}`` envelope を直接返す。
+    """
     _content, structured = _call_tool("vault_recent", {"limit": 3})
-    # list 戻りの場合 FastMCP は {"result": [...]} に包むが、list 自体は
-    # ラップされても内側が flat でなければならない。本テストは「外側キーが
-    # result だけで中身が list」となる現仕様を許容する (list は Union でなく
-    # 元から list 戻りなので問題ない)。
-    if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
-        inner = structured["result"]
-        assert isinstance(inner, list)
-    else:
-        assert isinstance(structured, list)
+    assert isinstance(structured, dict)
+    assert "result" not in structured, (
+        f"vault_recent wrap drift: keys={list(structured.keys())}"
+    )
+    assert "notes" in structured, f"envelope key 'notes' missing: {structured!r}"
+    assert isinstance(structured["notes"], list)
+
+
+def test_vault_tags_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
+    """vault_tags (envelope dict 戻り) の structured content が wrap されない."""
+    _content, structured = _call_tool("vault_tags", {})
+    assert isinstance(structured, dict)
+    assert "result" not in structured, (
+        f"vault_tags wrap drift: keys={list(structured.keys())}"
+    )
+    assert "tags" in structured, f"envelope key 'tags' missing: {structured!r}"
+    assert isinstance(structured["tags"], list)
+
+
+def test_vault_folders_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
+    """vault_folders (envelope dict 戻り) の structured content が wrap されない."""
+    _content, structured = _call_tool("vault_folders", {})
+    assert isinstance(structured, dict)
+    assert "result" not in structured, (
+        f"vault_folders wrap drift: keys={list(structured.keys())}"
+    )
+    assert "folders" in structured, f"envelope key 'folders' missing: {structured!r}"
+    assert isinstance(structured["folders"], list)
 
 
 def test_vault_search_outputschema_top_level_is_flat(vault_index: VaultIndex) -> None:

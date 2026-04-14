@@ -221,6 +221,40 @@ def test_schema_resource_registered_in_fastmcp(vault_index: VaultIndex) -> None:
     )
 
 
+def test_list_returning_tools_have_envelope_output_schema(vault_index: VaultIndex) -> None:
+    """vault_tags / vault_folders / vault_recent の output_schema が envelope object.
+
+    旧仕様では ``{"type": "array", "items": {...}}`` のフラット形を公開していたが、
+    FastMCP が list 戻りを ``{"result": [...]}`` でラップするため実レスポンスと
+    乖離していた。現仕様は ``dict`` envelope に統一:
+    - vault_tags    -> {"tags":    [TagCount,    ...]}
+    - vault_folders -> {"folders": [FolderCount, ...]}
+    - vault_recent  -> {"notes":   [RecentNote,  ...]}
+    """
+    from vault_search.schemas import build_schema_payload
+
+    payload = build_schema_payload(vault_index)
+    for tool_name, env_key in [
+        ("vault_tags", "tags"),
+        ("vault_folders", "folders"),
+        ("vault_recent", "notes"),
+    ]:
+        oschema = payload["tools"][tool_name]["output_schema"]
+        assert oschema.get("type") == "object", (
+            f"{tool_name} output_schema must be envelope object, got: {oschema!r}"
+        )
+        props = oschema.get("properties", {})
+        assert env_key in props, f"{tool_name} envelope missing '{env_key}': {props!r}"
+        assert props[env_key].get("type") == "array", (
+            f"{tool_name}.{env_key} must be array, got: {props[env_key]!r}"
+        )
+        # array の items は該当モデルの JSON schema (properties を直接 or $defs 経由で持つ)
+        items = props[env_key].get("items")
+        assert isinstance(items, dict) and items, (
+            f"{tool_name}.{env_key}.items schema missing: {props[env_key]!r}"
+        )
+
+
 def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -> None:
     """metadata_filter の additionalProperties が oneOf 構造で演算子 grammar を表現すること.
 
