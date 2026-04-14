@@ -329,6 +329,27 @@ def test_folder_filter_matches_folder_itself(vault_index: VaultIndex, tmp_vault:
     assert "Projects/日本語ノート.md" in paths
 
 
+def test_folder_filter_trailing_slash_normalized(
+    vault_index: VaultIndex, tmp_vault: Path
+) -> None:
+    """末尾スラッシュ付き folder ('Projects/') も 'Projects' と同等に扱う.
+
+    Issue #34: `folder='Projects/'` で silent 0 件になる regression の防止。
+    """
+    # search: 'Projects/' と 'Projects' は同じ結果を返す
+    res_bare = vault_index.search("日本語", folder="Projects")
+    res_slash = vault_index.search("日本語", folder="Projects/")
+    paths_bare = {r["path"] for r in res_bare["results"]}
+    paths_slash = {r["path"] for r in res_slash["results"]}
+    assert paths_slash == paths_bare
+    assert "Projects/日本語ノート.md" in paths_slash
+
+    # recent_notes も同様
+    notes_bare = vault_index.recent_notes(limit=50, folder="Projects")
+    notes_slash = vault_index.recent_notes(limit=50, folder="Projects/")
+    assert {n["path"] for n in notes_slash} == {n["path"] for n in notes_bare}
+
+
 def test_stats_shape(vault_index: VaultIndex) -> None:
     s = vault_index.stats()
     assert set(s.keys()) >= {
