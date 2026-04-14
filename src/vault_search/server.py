@@ -158,7 +158,7 @@ def vault_recent(
     limit: int = 20,
     folder: str | None = None,
     fields: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """最近更新されたノート一覧を取得する。
 
     Args:
@@ -168,37 +168,50 @@ def vault_recent(
                 空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
-        file_mtime 降順の list[dict]。構造の詳細 (RecentNote の rich JSON
-        Schema) は ``schema://tools`` リソースの
-        ``tools.vault_recent.output_schema`` を参照。
+        常に plain dict を envelope 形式で返す (``{"notes": [dict, ...]}``)。
+        file_mtime 降順。構造の詳細 (RecentNote の rich JSON Schema) は
+        ``schema://tools`` リソースの ``tools.vault_recent.output_schema``
+        を参照。list 戻り型だと FastMCP が ``{"result": [...]}`` にラップ
+        してしまうため dict envelope に統一している。
     """
     fields_set = validate_fields(RecentNote, fields)
     rows = _get_index().recent_notes(limit=limit, folder=folder)
     if fields_set is None:
-        return [RecentNote(**note).model_dump(mode="json") for note in rows]
-    return [_subset_row(note, fields_set) for note in rows]
+        notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
+    else:
+        notes = [_subset_row(note, fields_set) for note in rows]
+    return {"notes": notes}
 
 
 @mcp.tool()
-def vault_tags() -> list[TagCount]:
+def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
     Returns:
-        TagCount のリスト。frontmatter.tags と本文インライン #tag の両方が集計対象。
+        envelope dict (``{"tags": [{"tag": ..., "count": ...}, ...]}``)。
+        frontmatter.tags と本文インライン #tag の両方が集計対象。
+        戻り型統一の理由は ``vault_recent`` 参照。
     """
-    return [TagCount(**row) for row in _get_index().list_tags()]
+    return {
+        "tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]
+    }
 
 
 @mcp.tool()
-def vault_folders() -> list[FolderCount]:
+def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
 
     Returns:
-        フォルダパス昇順の FolderCount リスト。ルート直下のノートは folder='' に
-        集約され、SearchHit/RecentNote と同じ表現。この値はそのまま
+        envelope dict (``{"folders": [{"folder": ..., "count": ...}, ...]}``)。
+        フォルダパス昇順。ルート直下のノートは folder='' に集約され、
+        SearchHit/RecentNote と同じ表現。この値はそのまま
         vault_search/vault_recent の folder 引数に渡せる。
     """
-    return [FolderCount(**row) for row in _get_index().list_folders()]
+    return {
+        "folders": [
+            FolderCount(**row).model_dump(mode="json") for row in _get_index().list_folders()
+        ]
+    }
 
 
 @mcp.tool()

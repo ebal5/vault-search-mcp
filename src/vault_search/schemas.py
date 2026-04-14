@@ -196,12 +196,21 @@ class VaultStats(BaseModel):
 
 @dataclass(frozen=True)
 class _ToolSchemaSpec:
-    """単一 MCP ツールの description / input_schema / output_model を束ねる仕様."""
+    """単一 MCP ツールの description / input_schema / output_model を束ねる仕様.
+
+    envelope_key を指定した場合、output_schema は
+    ``{"type": "object", "properties": {<envelope_key>: {"type": "array",
+    "items": output_model.model_json_schema()}}, "required": [<envelope_key>]}``
+    という envelope 形になる。これは実 MCP レスポンス
+    (``{envelope_key: [...]}``) と合わせるためで、FastMCP が list 戻り型を
+    ``{"result": [...]}`` にラップする挙動を回避する server 側の戻り型変更と
+    セットで運用する。
+    """
 
     description: str
     input_schema: dict[str, Any]
     output_model: type[BaseModel]
-    output_is_list: bool = False
+    envelope_key: str | None = None
 
 
 _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
@@ -304,19 +313,19 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             },
         },
         output_model=RecentNote,
-        output_is_list=True,
+        envelope_key="notes",
     ),
     "vault_tags": _ToolSchemaSpec(
         description="全タグとその使用回数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=TagCount,
-        output_is_list=True,
+        envelope_key="tags",
     ),
     "vault_folders": _ToolSchemaSpec(
         description="フォルダ構造とノート数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=FolderCount,
-        output_is_list=True,
+        envelope_key="folders",
     ),
     "vault_reindex": _ToolSchemaSpec(
         description="インデックスを再構築する。",
@@ -335,8 +344,25 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 
 
 def _build_tool_entry(spec: _ToolSchemaSpec) -> dict[str, Any]:
-    schema = spec.output_model.model_json_schema()
-    output_schema = {"type": "array", "items": schema} if spec.output_is_list else schema
+    item_schema = spec.output_model.model_json_schema()
+    if spec.envelope_key is not None:
+        output_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                spec.envelope_key: {
+                    "type": "array",
+                    "items": item_schema,
+                    "description": (
+                        f"{spec.output_model.__name__} の配列 "
+                        "(list 戻り型の FastMCP wrap を回避する envelope)"
+                    ),
+                },
+            },
+            "required": [spec.envelope_key],
+            "additionalProperties": False,
+        }
+    else:
+        output_schema = item_schema
     return {
         "description": spec.description,
         "input_schema": spec.input_schema,
