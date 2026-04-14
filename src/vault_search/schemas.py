@@ -274,7 +274,12 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "frontmatter の各キーに対する AND フィルタ条件。"
                         "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
                         '{"in": list[str]} / {"ne": str}。'
-                        '例: {"status": "active", "priority": {"in": ["high"]}}'
+                        '例: {"status": "active", "priority": {"in": ["high"]}}。'
+                        "比較は常に文字列として行う。frontmatter が数値 "
+                        '(例: priority: 5) の場合は "5" と書けばマッチする '
+                        "(内部で TEXT にキャストされる)。bool (true/false) は "
+                        '"1"/"0" にキャストされるため、YAML で quote して '
+                        '"true"/"false" 文字列として保存するのが確実。'
                     ),
                     "additionalProperties": {
                         "oneOf": [

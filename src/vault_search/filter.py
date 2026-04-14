@@ -173,6 +173,14 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     SQL インジェクションは発生しない。比較対象値は常にプレースホルダ
     (``?``) で渡すため、ユーザ値が SQL 断片に混ざることはない。
 
+    Type coercion
+    -------------
+    比較は ``CAST(... AS TEXT)`` を通して常に文字列として行う。これにより
+    frontmatter に YAML int (``priority: 5``) が入っていても ``"5"`` で
+    マッチする (Issue #15 / #49 対応)。bool は SQLite JSON1 が 1/0 を返す
+    ため CAST 後は ``"1"``/``"0"`` となる — ``"true"``/``"false"`` で
+    マッチさせたい場合は YAML 側で quote して文字列として保存する必要がある。
+
     Semantics
     ---------
     * ``eq``: スカラー等価、または frontmatter 側が配列の場合は要素含有
