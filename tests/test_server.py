@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import pytest
 
 from vault_search import server as server_mod
@@ -109,10 +112,13 @@ def test_vault_stats_happy(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_search(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian")
-    assert isinstance(res, SearchResponse)
-    assert res.tier in (0, 1, 2)
-    assert isinstance(res.total, int)
-    assert isinstance(res.results, list)
+    # tool は常に plain dict を返す (FastMCP の wrap_output 回避のため)
+    assert isinstance(res, dict)
+    assert res["tier"] in (0, 1, 2)
+    assert isinstance(res["total"], int)
+    assert isinstance(res["results"], list)
+    # 参考: SearchResponse として再構築可能な形を維持していること
+    SearchResponse.model_validate(res)
 
 
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
@@ -126,35 +132,54 @@ def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
 def test_mcp_tool_vault_get_note_found(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_get_note)
     res = fn("Welcome.md")
-    assert isinstance(res, NoteDetail)
-    assert res.title == "Welcome"
-    assert res.path == "Welcome.md"
+    assert isinstance(res, dict)
+    assert res["title"] == "Welcome"
+    assert res["path"] == "Welcome.md"
+    # NoteDetail として再構築可能
+    NoteDetail.model_validate(res)
 
 
 def test_mcp_tool_vault_recent(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
     res = fn(5, None)
-    assert isinstance(res, list)
-    for item in res:
-        assert isinstance(item, RecentNote)
+    # envelope dict `{"notes": [...]}` を返す (FastMCP の list wrap 回避のため)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"notes"}
+    assert isinstance(res["notes"], list)
+    for item in res["notes"]:
+        assert isinstance(item, dict)
+        RecentNote.model_validate(item)
 
 
 def test_mcp_tool_vault_tags(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_tags)
     res = fn()
-    assert isinstance(res, list)
-    for item in res:
-        assert isinstance(item, TagCount)
-        assert isinstance(item.tag, str)
-        assert isinstance(item.count, int)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"tags"}
+    assert isinstance(res["tags"], list)
+    for item in res["tags"]:
+        assert isinstance(item, dict)
+        TagCount.model_validate(item)
 
 
 def test_mcp_tool_vault_folders(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_folders)
     res = fn()
-    assert isinstance(res, list)
-    for item in res:
-        assert isinstance(item, FolderCount)
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"folders"}
+    assert isinstance(res["folders"], list)
+    for item in res["folders"]:
+        assert isinstance(item, dict)
+        FolderCount.model_validate(item)
+
+
+def test_mcp_tool_vault_folders_root_is_empty_string(vault_index: VaultIndex) -> None:
+    """vault_folders の root 直下は '' に統一され '(root)' sentinel は出ない."""
+    fn = _fn(server_mod.vault_folders)
+    res = fn()
+    folders = {item["folder"] for item in res["folders"]}
+    assert "" in folders
+    assert "(root)" not in folders
 
 
 def test_mcp_tool_vault_reindex(vault_index: VaultIndex) -> None:
@@ -176,3 +201,254 @@ def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:
     assert res.total_notes > 0
     assert res.db_size_bytes >= 0
     assert res.vault_root  # non-empty path string
+
+
+# ---------------------------------------------------------------------------
+# fields parameter (Issue #9) — AI エージェントが返却フィールドを絞って
+# context window を節約するための引数。Red フェーズ: 実装前の失敗テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_vault_search_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path", "title"] で subset 返却 (tool 関数直接呼び出し)."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, ["path", "title"])
+    # fields 指定時は plain dict を返す (FastMCP の output_model.model_dump 経路を bypass)
+    assert isinstance(res, dict)
+    assert set(res.keys()) >= {"tier", "total", "results"}
+    assert isinstance(res["results"], list)
+    assert len(res["results"]) > 0
+    for hit in res["results"]:
+        assert isinstance(hit, dict)
+        assert set(hit.keys()) == {"path", "title"}
+        assert hit["path"] != ""
+        assert isinstance(hit["title"], str)
+
+
+def test_vault_search_fields_none_returns_all(vault_index: VaultIndex) -> None:
+    """fields=None (デフォルト) は全フィールド返却で後方互換."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, None)
+    assert isinstance(res, dict)
+    assert len(res["results"]) > 0
+    # 通常の検索結果には snippet が載るはず (3文字以上クエリ)
+    hit = res["results"][0]
+    # 全キーが存在
+    assert set(hit.keys()) >= {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }
+
+
+def test_vault_search_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, [])
+
+
+def test_vault_search_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["nonexistent"] は ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, ["nonexistent"])
+
+
+def test_vault_search_fields_mixed_valid_invalid_raises(vault_index: VaultIndex) -> None:
+    """有効 + 無効 混在でも厳格に ValueError."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, ["path", "bogus"])
+
+
+def test_vault_get_note_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path", "title"] で subset 返却 (tool 関数直接呼び出し)."""
+    fn = _fn(server_mod.vault_get_note)
+    res = fn("Welcome.md", ["path", "title"])
+    # fields 指定時は plain dict
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"path", "title"}
+    assert res["path"] == "Welcome.md"
+    assert res["title"] == "Welcome"
+
+
+def test_vault_get_note_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_get_note)
+    with pytest.raises(ValueError):
+        fn("Welcome.md", [])
+
+
+def test_vault_get_note_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["bogus"] は ValueError."""
+    fn = _fn(server_mod.vault_get_note)
+    with pytest.raises(ValueError):
+        fn("Welcome.md", ["bogus"])
+
+
+def test_vault_recent_fields_subset(vault_index: VaultIndex) -> None:
+    """fields=["path"] で subset 返却 (envelope dict `{"notes": [...]}`)."""
+    fn = _fn(server_mod.vault_recent)
+    res = fn(5, None, ["path"])
+    assert isinstance(res, dict)
+    assert set(res.keys()) == {"notes"}
+    notes = res["notes"]
+    assert isinstance(notes, list)
+    assert len(notes) > 0
+    for item in notes:
+        assert isinstance(item, dict)
+        assert set(item.keys()) == {"path"}
+        assert item["path"] != ""
+
+
+def test_vault_recent_fields_empty_raises(vault_index: VaultIndex) -> None:
+    """fields=[] は ValueError."""
+    fn = _fn(server_mod.vault_recent)
+    with pytest.raises(ValueError):
+        fn(5, None, [])
+
+
+def test_vault_recent_fields_nonexistent_raises(vault_index: VaultIndex) -> None:
+    """fields=["nope"] は ValueError."""
+    fn = _fn(server_mod.vault_recent)
+    with pytest.raises(ValueError):
+        fn(5, None, ["nope"])
+
+
+# ---------------------------------------------------------------------------
+# metadata_filter (Issue #5) — MCP tool 経由の振る舞いを検証する Red テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_vault_search_metadata_filter_eq(vault_index: VaultIndex) -> None:
+    """eq 暗黙の metadata_filter で絞り込み."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, None, {"status": "active"})
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
+    assert "Welcome.md" in paths
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_mcp_tool_vault_search_metadata_filter_in(vault_index: VaultIndex) -> None:
+    """in 演算子の metadata_filter で絞り込み."""
+    fn = _fn(server_mod.vault_search)
+    res = fn(
+        "obsidian",
+        None,
+        None,
+        20,
+        0,
+        None,
+        {"priority": {"in": ["high", "low"]}},
+    )
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_mcp_tool_vault_search_metadata_filter_invalid_operator(
+    vault_index: VaultIndex,
+) -> None:
+    """未サポート演算子は ValueError (FastMCP エラーレスポンス)."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, None, {"x": {"regex": "foo"}})
+
+
+# ---------------------------------------------------------------------------
+# fields parameter — FastMCP の convert_result 経路で実際にレスポンス JSON が
+# 指定キーのみに絞られているかを検証する。tool 関数を直接呼んだ結果を
+# model_dump すると exclude_unset が効かない経路で全キーが返るため、
+# これらのテストは bug 修正前は必ず失敗する。
+# ---------------------------------------------------------------------------
+
+
+def _call_tool_structured(tool_name: str, arguments: dict) -> Any:
+    """FastMCP の経路 (convert_result=True) でツールを実行し structured content を返す.
+
+    union 戻り型のツールは FastMCP が自動で ``{"result": ...}`` にラップするため、
+    ``result`` キーがあれば内側を返す (MCP プロトコル上も clients は通常
+    unstructured TextContent を読むので実害はないが、テスト側で unwrap する)。
+    """
+    mgr = server_mod.mcp._tool_manager
+    tool = mgr.get_tool(tool_name)
+    assert tool is not None, f"tool not registered: {tool_name}"
+    result = asyncio.run(tool.run(arguments, convert_result=True))
+    # output_schema が定義されていれば (unstructured, structured) のタプル。
+    assert isinstance(result, tuple), f"expected structured output tuple, got {type(result)}"
+    _unstructured, structured = result
+    if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+        return structured["result"]
+    return structured
+
+
+def test_vault_search_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """MCP 経路で fields 指定外のキーがレスポンスから除外される."""
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "obsidian", "fields": ["path", "title"], "limit": 5},
+    )
+    assert "results" in structured
+    assert len(structured["results"]) > 0
+    for hit in structured["results"]:
+        assert set(hit.keys()) == {"path", "title"}, f"unexpected keys: {hit.keys()}"
+        assert "snippet" not in hit
+        assert "tags" not in hit
+        assert "score" not in hit
+
+
+def test_vault_get_note_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """vault_get_note も同様に指定キーのみ返す."""
+    structured = _call_tool_structured(
+        "vault_get_note",
+        {"path": "Welcome.md", "fields": ["path", "title"]},
+    )
+    assert set(structured.keys()) == {"path", "title"}, f"unexpected keys: {structured.keys()}"
+    assert "content" not in structured
+    assert "frontmatter" not in structured
+
+
+def test_vault_recent_fields_actually_subsets_response(vault_index: VaultIndex) -> None:
+    """vault_recent 各要素も同様 (envelope dict 経由)."""
+    structured = _call_tool_structured(
+        "vault_recent",
+        {"limit": 5, "fields": ["path"]},
+    )
+    assert isinstance(structured, dict)
+    assert "notes" in structured
+    items = structured["notes"]
+    assert isinstance(items, list)
+    assert len(items) > 0
+    for item in items:
+        assert set(item.keys()) == {"path"}, f"unexpected keys: {item.keys()}"
+        assert "title" not in item
+        assert "modified_at" not in item
+
+
+def test_vault_search_fields_none_mcp_returns_all(vault_index: VaultIndex) -> None:
+    """fields=None では MCP 経路で全フィールドが返る (後方互換)."""
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "obsidian", "limit": 5},
+    )
+    assert len(structured["results"]) > 0
+    hit = structured["results"][0]
+    assert set(hit.keys()) >= {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }

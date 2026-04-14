@@ -28,3 +28,15 @@ Thumbs.db
 # Environment / Secrets
 .env
 .env.*
+
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+
+# Session handover (temporary, created by /handover skill)
+HANDOVER.md
+
+# Issue body drafts (temporary, used when batch-creating GitHub issues)
+.tmp-issues/

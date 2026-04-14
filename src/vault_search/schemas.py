@@ -7,9 +7,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from .validation import ValidationError, validate_identifier
+
+if TYPE_CHECKING:
+    from .indexer import VaultIndex
 
 # ---------------------------------------------------------------------------
 # Domain errors
@@ -146,7 +152,11 @@ class FolderCount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     folder: str = Field(
-        description="フォルダパス (Vault ルートからの相対)。ルート直下は '(root)'",
+        description=(
+            "フォルダパス (Vault ルートからの相対)。ルート直下は '' "
+            "(SearchHit/RecentNote/NoteDetail.folder と同じ表現)。"
+            "この値はそのまま vault_search(folder=...) / vault_recent(folder=...) に渡せる"
+        ),
     )
     count: int = Field(description="このフォルダ直下のノート数")
 
@@ -177,3 +187,275 @@ class VaultStats(BaseModel):
     db_size_bytes: int = Field(description="SQLite DB ファイルのサイズ (バイト)")
     db_size_mb: float = Field(description="SQLite DB ファイルのサイズ (MB, 小数2桁)")
     vault_root: str = Field(description="Vault ルートの絶対パス")
+
+
+# ---------------------------------------------------------------------------
+# Schema introspection payload (schema://tools resource)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ToolSchemaSpec:
+    """単一 MCP ツールの description / input_schema / output_model を束ねる仕様.
+
+    envelope_key を指定した場合、output_schema は
+    ``{"type": "object", "properties": {<envelope_key>: {"type": "array",
+    "items": output_model.model_json_schema()}}, "required": [<envelope_key>]}``
+    という envelope 形になる。これは実 MCP レスポンス
+    (``{envelope_key: [...]}``) と合わせるためで、FastMCP が list 戻り型を
+    ``{"result": [...]}`` にラップする挙動を回避する server 側の戻り型変更と
+    セットで運用する。
+    """
+
+    description: str
+    input_schema: dict[str, Any]
+    output_model: type[BaseModel]
+    envelope_key: str | None = None
+
+
+_FOLDER_INPUT_SCHEMA: dict[str, Any] = {
+    "type": ["string", "null"],
+    "description": (
+        "フォルダパス (Vault ルートからの相対)。指定したフォルダ自身と"
+        "その配下のみを対象とし、同プレフィックス兄弟 ('Projects' 指定で "
+        "'Projects Hermes/...' など) は除外される。"
+        "vault_folders の結果 (FolderCount.folder) をそのまま渡せる。"
+        "root 直下に限定したい場合は現状未サポート (null で全件)。"
+    ),
+}
+
+
+_FIELDS_INPUT_SCHEMA: dict[str, Any] = {
+    "type": ["array", "null"],
+    "items": {"type": "string"},
+    "description": (
+        "返却フィールド指定 (例: ['path', 'title'])。None/未指定で全フィールド返却。"
+        "指定時のレスポンスは output_schema のフルモデルではなく、"
+        "指定キーのみを持つ plain dict (list ツールは要素単位で subset) となる。"
+    ),
+}
+
+
+_TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
+    "vault_search": _ToolSchemaSpec(
+        description="Vault 内のノートを全文検索する。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "検索クエリ"},
+                "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+                "folder": _FOLDER_INPUT_SCHEMA,
+                "limit": {"type": "integer", "default": 20},
+                "offset": {"type": "integer", "default": 0},
+                "fields": _FIELDS_INPUT_SCHEMA,
+                "metadata_filter": {
+                    "type": ["object", "null"],
+                    "description": (
+                        "frontmatter の各キーに対する AND フィルタ条件。"
+                        "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
+                        '{"in": list[str]} / {"ne": str}。'
+                        '例: {"status": "active", "priority": {"in": ["high"]}}'
+                    ),
+                    "additionalProperties": {
+                        "oneOf": [
+                            {
+                                "type": "string",
+                                "description": (
+                                    "暗黙 eq: 値との完全一致 (配列フィールドは要素含有)"
+                                ),
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "in": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                    },
+                                },
+                                "required": ["in"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {"ne": {"type": "string"}},
+                                "required": ["ne"],
+                                "additionalProperties": False,
+                            },
+                        ],
+                    },
+                },
+            },
+            "required": ["query"],
+        },
+        output_model=SearchResponse,
+    ),
+    "vault_get_note": _ToolSchemaSpec(
+        description="指定パスのノート全文とメタデータを取得する。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "fields": _FIELDS_INPUT_SCHEMA,
+            },
+            "required": ["path"],
+        },
+        output_model=NoteDetail,
+    ),
+    "vault_recent": _ToolSchemaSpec(
+        description="最近更新されたノート一覧を取得する。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 20},
+                "folder": _FOLDER_INPUT_SCHEMA,
+                "fields": _FIELDS_INPUT_SCHEMA,
+            },
+        },
+        output_model=RecentNote,
+        envelope_key="notes",
+    ),
+    "vault_tags": _ToolSchemaSpec(
+        description="全タグとその使用回数を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=TagCount,
+        envelope_key="tags",
+    ),
+    "vault_folders": _ToolSchemaSpec(
+        description="フォルダ構造とノート数を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=FolderCount,
+        envelope_key="folders",
+    ),
+    "vault_reindex": _ToolSchemaSpec(
+        description="インデックスを再構築する。",
+        input_schema={
+            "type": "object",
+            "properties": {"force": {"type": "boolean", "default": False}},
+        },
+        output_model=ReindexStats,
+    ),
+    "vault_stats": _ToolSchemaSpec(
+        description="インデックスの統計情報を返す。",
+        input_schema={"type": "object", "properties": {}},
+        output_model=VaultStats,
+    ),
+}
+
+
+_FIELDS_AWARE_TOOLS: frozenset[str] = frozenset({"vault_search", "vault_get_note", "vault_recent"})
+
+
+def _without_required(schema: dict[str, Any]) -> dict[str, Any]:
+    """schema のトップレベル ``required`` を除去した浅いコピーを返す.
+
+    ``additionalProperties`` / ``properties`` などは維持するため、fields subset
+    (指定キーのみを持つ dict) を許容しつつ余計なキー混入は引き続き弾く。
+    """
+    clone = dict(schema)
+    clone.pop("required", None)
+    return clone
+
+
+def _allow_subset(full_schema: dict[str, Any]) -> dict[str, Any]:
+    """full / subset のどちらも受け付ける anyOf schema を返す.
+
+    MCP lowlevel server (``mcp/server/lowlevel/server.py``) は structured content
+    を ``jsonschema.validate(instance, outputSchema)`` で強制検証するため、
+    ``fields`` 指定で subset dict を返す fields-aware ツールでは
+    ``required`` 違反が起きる。full と (required 抜き) subset の ``anyOf`` に
+    すれば両方が通る。``fields=None`` 時のレスポンスは full 分岐で検証されるため
+    required は維持され schema は緩みすぎない。
+    """
+    return {"anyOf": [full_schema, _without_required(full_schema)]}
+
+
+def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
+    item_schema = spec.output_model.model_json_schema()
+    supports_fields = tool_name in _FIELDS_AWARE_TOOLS
+    if spec.envelope_key is not None:
+        # envelope dict: {<envelope_key>: [item, item, ...]}
+        # envelope 自身の required は維持し、items の required だけを緩める。
+        items_schema = _allow_subset(item_schema) if supports_fields else item_schema
+        output_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                spec.envelope_key: {
+                    "type": "array",
+                    "items": items_schema,
+                    "description": (
+                        f"{spec.output_model.__name__} の配列 "
+                        "(list 戻り型の FastMCP wrap を回避する envelope)"
+                    ),
+                },
+            },
+            "required": [spec.envelope_key],
+            "additionalProperties": False,
+        }
+    elif supports_fields and tool_name == "vault_search":
+        # SearchResponse: {tier, total, results: [SearchHit, ...]}
+        # 外枠 (tier/total/results) の required は維持、
+        # results.items (SearchHit) のみ subset 許容。
+        # Pydantic 生成スキーマは results.items を {"$ref": "#/$defs/SearchHit"}
+        # と参照するため、$defs から SearchHit 本体を取り出して anyOf を組む。
+        output_schema = dict(item_schema)
+        hit_schema = output_schema["$defs"]["SearchHit"]
+        results_prop = dict(output_schema["properties"]["results"])
+        results_prop["items"] = _allow_subset(hit_schema)
+        output_schema["properties"] = {
+            **output_schema["properties"],
+            "results": results_prop,
+        }
+    elif supports_fields:
+        # vault_get_note: NoteDetail 全体が subset 可能
+        output_schema = _allow_subset(item_schema)
+    else:
+        output_schema = item_schema
+    return {
+        "description": spec.description,
+        "input_schema": spec.input_schema,
+        "output_schema": output_schema,
+    }
+
+
+# ``_TOOL_ENTRIES`` は各ツールの (description / input_schema / output_schema) を
+# 束ねる唯一のカノニカルソース。以下 2 経路から参照される:
+#   1. ``build_schema_payload`` → ``schema://tools`` リソース (AI エージェント向け自己記述)
+#   2. ``server._inject_rich_output_schemas`` → MCP ``tools/list`` の ``outputSchema``
+# FastMCP は ``dict[str, Any]`` 戻り型から rich schema を自動生成できないため、
+# 登録後に本エントリの ``output_schema`` を手動で差し込んで両経路の出力を一致させる。
+_TOOL_ENTRIES: dict[str, dict[str, Any]] = {
+    name: _build_tool_entry(spec, name) for name, spec in _TOOL_SPECS.items()
+}
+
+
+def validate_fields(
+    model_cls: type[BaseModel],
+    fields: list[str] | None,
+) -> frozenset[str] | None:
+    """fields 指定を検証し、有効なフィールド名集合を返す.
+
+    fields=None → None (全フィールド返却)
+    fields=[] → ValidationError
+    fields に不正名/未知名 → ValidationError
+    """
+    if fields is None:
+        return None
+    if not isinstance(fields, list):
+        raise ValidationError(f"fields must be a list, got {type(fields).__name__}")
+    if len(fields) == 0:
+        raise ValidationError("fields must not be empty; pass null to return all fields")
+    allowed = frozenset(model_cls.model_fields.keys())
+    for name in fields:
+        validate_identifier(name, kind="field name", max_len=64)
+        if name not in allowed:
+            raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
+    return frozenset(fields)
+
+
+def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
+    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
+    return {
+        "tools": _TOOL_ENTRIES,
+        "frontmatter_keys": index.list_frontmatter_keys(),
+    }

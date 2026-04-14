@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
 from .parser import ParsedNote, parse_note
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,31 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 """
+
+
+def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, list[Any]]:
+    """folder プレフィックスフィルタを「folder 自身 OR その配下」に厳密化する.
+
+    `folder == 'Projects'` が `'Projects Hermes'` 等の兄弟を拾わないよう、
+    LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
+
+    Parameters
+    ----------
+    folder:
+        フォルダパス (非空文字列想定; 空文字はフィルタを掛けないので呼び出し側で分岐)。
+    column:
+        SQL 上のカラム名。`n.folder` のようにテーブルエイリアス付きも可。
+
+    Returns
+    -------
+    tuple[str, list[Any]]
+        ``(clause, params)``。clause は前置詞を含まない WHERE 断片
+        ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
+    """
+    folder = folder.replace("\\", "/")
+    escaped = folder.replace("%", "\\%").replace("_", "\\_")
+    clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
+    return clause, [folder, escaped + "/%"]
 
 
 class VaultIndex:
@@ -384,11 +410,47 @@ class VaultIndex:
         *,
         tags: list[str] | None = None,
         folder: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Tier 0-2 のプログレッシブ検索."""
-        filters = {"tags": tags, "folder": folder} if (tags or folder) else None
+        """Tier 0-2 のプログレッシブ検索.
+
+        Parameters
+        ----------
+        query:
+            FTS5 trigram 検索に渡すスペース区切りクエリ。空文字も可
+            (その場合は ``tags`` / ``folder`` / ``metadata_filter`` の
+            いずれかが必要)。
+        tags:
+            AND 条件でマッチさせるタグのリスト。
+        folder:
+            フォルダパスフィルタ。指定フォルダ自身 (``n.folder == folder``) と
+            その配下 (``n.folder LIKE folder + '/%'``) のみを対象とする。
+            同プレフィックス兄弟 (e.g. ``Projects Hermes``) は除外される。
+        metadata_filter:
+            frontmatter 任意プロパティを対象とする AND フィルタ。
+            構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
+            不正構造は :class:`ValidationError` を送出する。
+        limit, offset:
+            ページング用。
+
+        Notes
+        -----
+        ``query`` が空でも ``tags`` / ``folder`` / ``metadata_filter`` の
+        いずれかが指定されていれば、DB 全体を対象に構造化フィルタだけで
+        絞り込む。全引数が空の場合は空結果を返す。
+        """
+        # Validate (raises ValidationError on malformed input)
+        conditions = parse_metadata_filter(metadata_filter)
+
+        filters: dict[str, Any] | None = None
+        if tags or folder or metadata_filter:
+            filters = {
+                "tags": tags,
+                "folder": folder,
+                "metadata_filter": metadata_filter,
+            }
 
         # Tier 0-1: キャッシュ
         tier, cached = self._cache.get(query, filters)
@@ -402,7 +464,13 @@ class VaultIndex:
 
         # Tier 2: FTS5 — キャッシュ用に上限付きで取得
         _MAX_RESULTS = 500
-        results = self._fts5_search(query, tags=tags, folder=folder, limit=_MAX_RESULTS)
+        results = self._fts5_search(
+            query,
+            tags=tags,
+            folder=folder,
+            metadata_conditions=conditions,
+            limit=_MAX_RESULTS,
+        )
         self._cache.put(query, filters, results)
 
         sliced = results[offset : offset + limit]
@@ -418,17 +486,27 @@ class VaultIndex:
         *,
         tags: list[str] | None = None,
         folder: str | None = None,
+        metadata_conditions: list[MetadataCondition] | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """FTS5 trigram 検索 + メタデータフィルタ."""
+        """FTS5 trigram 検索 + 構造化メタデータフィルタ.
+
+        ``metadata_conditions`` は :func:`build_sql_fragment` 経由で
+        SQL WHERE 断片に展開される。クエリが空でも ``tags`` / ``folder`` /
+        ``metadata_conditions`` のいずれかがあれば、FTS5 を経由せず
+        フィルタ専用パスで DB 全体を走査する。
+        """
         conn = self._connect()
         try:
             terms = query.strip().split()
-            if not terms:
-                return []
 
             fts_terms = [t for t in terms if len(t) >= 3]
             short_terms = [t for t in terms if len(t) < 3]
+
+            has_any_filter = bool(short_terms or tags or folder or metadata_conditions)
+            if not terms and not has_any_filter:
+                # 空クエリかつフィルタ無し — 従来通り空結果
+                return []
 
             if fts_terms:
                 fts_query = " AND ".join(f'"{t}"' for t in fts_terms)
@@ -442,7 +520,7 @@ class VaultIndex:
                 ]
                 params: list[Any] = [fts_query]
             else:
-                # 全語が3文字未満 — LIKE フォールバック
+                # 全語が3文字未満 or 空クエリ + フィルタ — LIKE/フィルタ専用パス
                 sql_parts = [
                     "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
                     "       '' AS snippet,",
@@ -458,17 +536,22 @@ class VaultIndex:
                 sql_parts.append("AND (n.title LIKE ? OR n.content LIKE ?)")
                 params.extend([like_param, like_param])
 
-            # メタデータフィルタ
+            # メタデータフィルタ — folder は同プレフィックス兄弟の誤マッチを避ける
             if folder:
-                folder = folder.replace("\\", "/")
-                escaped = folder.replace("%", "\\%").replace("_", "\\_")
-                sql_parts.append("AND n.folder LIKE ? ESCAPE '\\'")
-                params.append(escaped + "%")
+                clause, folder_params = _folder_filter_clause(folder, column="n.folder")
+                sql_parts.append(f"AND {clause}")
+                params.extend(folder_params)
 
             if tags:
                 for tag in tags:
                     sql_parts.append("AND n.tags LIKE ?")
                     params.append(f'%"{tag}"%')
+
+            if metadata_conditions:
+                for cond in metadata_conditions:
+                    fragment, fragment_params = build_sql_fragment(cond)
+                    sql_parts.append(fragment)
+                    params.extend(fragment_params)
 
             if fts_terms:
                 sql_parts.append("ORDER BY rank")
@@ -530,12 +613,12 @@ class VaultIndex:
         conn = self._connect()
         try:
             if folder:
-                folder = folder.replace("\\", "/")
-                escaped = folder.replace("%", "\\%").replace("_", "\\_")
+                clause, folder_params = _folder_filter_clause(folder, column="folder")
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
-                    "WHERE folder LIKE ? ESCAPE '\\' ORDER BY file_mtime DESC LIMIT ?",
-                    (escaped + "%", limit),
+                    f"WHERE {clause} "
+                    "ORDER BY file_mtime DESC LIMIT ?",
+                    (*folder_params, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -581,7 +664,19 @@ class VaultIndex:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
-            return [{"folder": r["folder"] or "(root)", "count": r["count"]} for r in rows]
+            return [{"folder": r["folder"], "count": r["count"]} for r in rows]
+        finally:
+            conn.close()
+
+    def list_frontmatter_keys(self) -> list[str]:
+        """Vault 内 frontmatter のトップレベルキーをソート済みで返す."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT key FROM notes, json_each(notes.frontmatter) "
+                "WHERE json_valid(notes.frontmatter) ORDER BY key"
+            ).fetchall()
+            return [r["key"] for r in rows]
         finally:
             conn.close()
 

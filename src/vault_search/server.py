@@ -20,11 +20,13 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
+    _TOOL_ENTRIES,
     FolderCount,
     NoteDetail,
     NoteNotFoundError,
@@ -34,6 +36,8 @@ from .schemas import (
     SearchResponse,
     TagCount,
     VaultStats,
+    build_schema_payload,
+    validate_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +56,11 @@ def _get_index() -> VaultIndex:
     return _index
 
 
+def _subset_row(data: dict[str, Any], fields_set: frozenset[str]) -> dict[str, Any]:
+    """data から fields_set に含まれるキーのみを残した dict を返す."""
+    return {k: v for k, v in data.items() if k in fields_set}
+
+
 # ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
@@ -66,7 +75,9 @@ def vault_search(
     folder: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> SearchResponse:
+    fields: list[str] | None = None,
+    metadata_filter: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Vault 内のノートを全文検索する。
 
     3段階プログレッシブ検索:
@@ -80,70 +91,126 @@ def vault_search(
         folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
+        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド返却。
+                空リストまたは不正名は ValidationError。context window 節約用。
+                指定時は results の各要素も指定キーのみを持つ dict になる。
+        metadata_filter: frontmatter プロパティでの AND フィルタ。
+            例: ``{"status": "active", "priority": {"in": ["high", "low"]}}``。
+            対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
+            リスト型 frontmatter 値は「含む」判定 (tags と同様)。
 
     Returns:
-        SearchResponse: tier (どのキャッシュ段でヒットしたか), total (フィルタ後の総件数),
-        results (limit/offset 適用後の SearchHit 一覧)。
+        常に plain dict を返す ({"tier", "total", "results": [dict]})。
+        構造の詳細 (SearchResponse の rich JSON Schema) は ``schema://tools``
+        リソースの ``tools.vault_search.output_schema`` を参照。
+        ツール戻り型を Union にすると FastMCP が structured content を
+        ``{"result": ...}`` でラップしてしまうため、dict 統一で回避している。
     """
-    raw = _get_index().search(query, tags=tags, folder=folder, limit=limit, offset=offset)
-    return SearchResponse(
-        tier=raw["tier"],
-        total=raw["total"],
-        results=[SearchHit(**hit) for hit in raw["results"]],
+    fields_set = validate_fields(SearchHit, fields)
+    raw = _get_index().search(
+        query,
+        tags=tags,
+        folder=folder,
+        metadata_filter=metadata_filter,
+        limit=limit,
+        offset=offset,
     )
+    if fields_set is None:
+        return SearchResponse(
+            tier=raw["tier"],
+            total=raw["total"],
+            results=[SearchHit(**hit) for hit in raw["results"]],
+        ).model_dump(mode="json")
+    return {
+        "tier": raw["tier"],
+        "total": raw["total"],
+        "results": [_subset_row(hit, fields_set) for hit in raw["results"]],
+    }
 
 
 @mcp.tool()
-def vault_get_note(path: str) -> NoteDetail:
+def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
+        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
+                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
-        NoteDetail: 本文 (frontmatter 除去済み) と全メタデータを含む構造体。
+        常に plain dict を返す。構造の詳細 (NoteDetail の rich JSON Schema) は
+        ``schema://tools`` リソースの ``tools.vault_get_note.output_schema``
+        を参照。戻り型統一の理由は ``vault_search`` 参照。
 
     Raises:
         NoteNotFoundError: 指定された path がインデックスに存在しない場合。
     """
+    fields_set = validate_fields(NoteDetail, fields)
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    return NoteDetail(**result)
+    if fields_set is None:
+        return NoteDetail(**result).model_dump(mode="json")
+    return _subset_row(result, fields_set)
 
 
 @mcp.tool()
-def vault_recent(limit: int = 20, folder: str | None = None) -> list[RecentNote]:
+def vault_recent(
+    limit: int = 20,
+    folder: str | None = None,
+    fields: list[str] | None = None,
+) -> dict[str, Any]:
     """最近更新されたノート一覧を取得する。
 
     Args:
         limit: 最大返却件数（デフォルト 20）
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
+        fields: 返却フィールドを限定 (例: ["path"])。None で全フィールド。
+                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
-        file_mtime 降順の RecentNote リスト。本文・スニペットは含まれない。
+        常に plain dict を envelope 形式で返す (``{"notes": [dict, ...]}``)。
+        file_mtime 降順。構造の詳細 (RecentNote の rich JSON Schema) は
+        ``schema://tools`` リソースの ``tools.vault_recent.output_schema``
+        を参照。list 戻り型だと FastMCP が ``{"result": [...]}`` にラップ
+        してしまうため dict envelope に統一している。
     """
-    return [RecentNote(**note) for note in _get_index().recent_notes(limit=limit, folder=folder)]
+    fields_set = validate_fields(RecentNote, fields)
+    rows = _get_index().recent_notes(limit=limit, folder=folder)
+    if fields_set is None:
+        notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
+    else:
+        notes = [_subset_row(note, fields_set) for note in rows]
+    return {"notes": notes}
 
 
 @mcp.tool()
-def vault_tags() -> list[TagCount]:
+def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
     Returns:
-        TagCount のリスト。frontmatter.tags と本文インライン #tag の両方が集計対象。
+        envelope dict (``{"tags": [{"tag": ..., "count": ...}, ...]}``)。
+        frontmatter.tags と本文インライン #tag の両方が集計対象。
+        戻り型統一の理由は ``vault_recent`` 参照。
     """
-    return [TagCount(**row) for row in _get_index().list_tags()]
+    return {"tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]}
 
 
 @mcp.tool()
-def vault_folders() -> list[FolderCount]:
+def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
 
     Returns:
-        フォルダパス昇順の FolderCount リスト。ルート直下のノートは folder='(root)' に集約。
+        envelope dict (``{"folders": [{"folder": ..., "count": ...}, ...]}``)。
+        フォルダパス昇順。ルート直下のノートは folder='' に集約され、
+        SearchHit/RecentNote と同じ表現。この値はそのまま
+        vault_search/vault_recent の folder 引数に渡せる。
     """
-    return [FolderCount(**row) for row in _get_index().list_folders()]
+    return {
+        "folders": [
+            FolderCount(**row).model_dump(mode="json") for row in _get_index().list_folders()
+        ]
+    }
 
 
 @mcp.tool()
@@ -170,6 +237,67 @@ def vault_stats() -> VaultStats:
         VaultStats: ノート総数, DB サイズ (bytes / MB), Vault ルート絶対パス。
     """
     return VaultStats(**_get_index().stats())
+
+
+# ---------------------------------------------------------------------------
+# MCP outputSchema injection
+# ---------------------------------------------------------------------------
+#
+# 背景:
+#   各ツールは戻り型を ``dict[str, Any]`` に統一している (Round 3)。これは
+#   ``SearchResponse | dict[str, Any]`` の Union が FastMCP の wrap_output=True を
+#   誘発し structured content が ``{"result": ...}`` にラップされる問題 (Round 2-3)
+#   と、fields 指定時に rich model で再バリデートされて subset dict が拒否される
+#   問題を同時に回避するため。
+#
+# 副作用:
+#   ``dict[str, Any]`` 戻り型から FastMCP が自動生成する outputSchema は
+#   ``{"type": "object", "additionalProperties": true}`` 相当の空 schema になり、
+#   schema://tools リソースが公開する rich schema と drift する (カノニカルソース 2 つ問題)。
+#
+# 対応:
+#   登録済み Tool の ``fn_metadata.output_schema`` を _TOOL_ENTRIES の rich schema に
+#   差し替え、MCP tools/list の outputSchema を schema://tools と同じカノニカル形に
+#   揃える。``fn_metadata.output_model`` はダミーのゆるい RootModel のまま保持して
+#   実行時 validation を緩く保つ (fields subset dict を壊さない)。
+#   ``Tool.output_schema`` は cached_property のため、instance dict に直接書き込んで
+#   プロパティ評価をバイパスする。
+#
+# TODO(FastMCP):
+#   FastMCP が @tool(output_schema=...) のような公式 API を提供したら移行する。
+#   参考: mcp/server/fastmcp/server.py の tool() シグネチャ (2026-04 現在 output_schema なし)。
+
+
+def _inject_rich_output_schemas() -> None:
+    """登録済み MCP ツールの outputSchema を schema://tools と同じ rich schema に差し替える."""
+    tool_manager = mcp._tool_manager  # noqa: SLF001 — FastMCP 公式 API 不在のため内部参照
+    for tool_name, entry in _TOOL_ENTRIES.items():
+        tool = tool_manager._tools.get(tool_name)  # noqa: SLF001
+        if tool is None:  # pragma: no cover — 実装ミス以外では起きない
+            raise RuntimeError(f"Tool not registered: {tool_name}")
+        rich_schema = entry["output_schema"]
+        tool.fn_metadata.output_schema = rich_schema
+        # cached_property をバイパスして MCP list_tools 経路に rich schema を公開
+        tool.__dict__["output_schema"] = rich_schema
+
+
+_inject_rich_output_schemas()
+
+
+# ---------------------------------------------------------------------------
+# MCP Resources
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource("schema://tools")
+def schema_resource() -> dict[str, Any]:
+    """全ツールの入出力スキーマと frontmatter キー一覧を返す.
+
+    schema://tools の output_schema と MCP tools/list の outputSchema は
+    _TOOL_ENTRIES を共通のカノニカルソースとして同一内容になる
+    (_inject_rich_output_schemas 参照)。
+    """
+    return build_schema_payload(_get_index())
 
 
 # ---------------------------------------------------------------------------
