@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from vault_search.indexer import TieredCache, VaultIndex
+from vault_search.validation import ValidationError
 
 # ---------------------------------------------------------------------------
 # TieredCache
@@ -286,3 +289,99 @@ def test_stats_shape(vault_index: VaultIndex) -> None:
         "vault_root",
     }
     assert s["total_notes"] > 0
+
+
+# ---------------------------------------------------------------------------
+# VaultIndex — metadata_filter (Issue #5)
+# Red フェーズ: VaultIndex.search に metadata_filter 引数を追加する仕様。
+# frontmatter 任意プロパティの AND フィルタ。eq (暗黙) / ne / in をサポート。
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_filter_eq_implicit(vault_index: VaultIndex) -> None:
+    """暗黙 eq: status=active で Welcome.md と Research/alpha.md のみ."""
+    res = vault_index.search("obsidian", metadata_filter={"status": "active"})
+    paths = {r["path"] for r in res["results"]}
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    # 日本語ノートは status: draft なのでヒットしない
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_metadata_filter_list_value_eq_contains(vault_index: VaultIndex) -> None:
+    """リスト型 frontmatter の eq は「含む」判定 (tags と同様)."""
+    res = vault_index.search("obsidian", metadata_filter={"categories": "work"})
+    paths = {r["path"] for r in res["results"]}
+    # Welcome.md: categories=[work, urgent] → work 含む
+    assert "Welcome.md" in paths
+    # Research/alpha.md: categories=[research] → work 含まない
+    assert "Research/alpha.md" not in paths
+
+
+def test_metadata_filter_in_operator(vault_index: VaultIndex) -> None:
+    """in 演算: priority in [high, low] で Welcome.md と Research/alpha.md."""
+    res = vault_index.search("obsidian", metadata_filter={"priority": {"in": ["high", "low"]}})
+    paths = {r["path"] for r in res["results"]}
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    # 日本語ノートは priority: medium → 除外
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_metadata_filter_ne_operator(vault_index: VaultIndex) -> None:
+    """ne 演算: status != draft で draft 以外がヒット."""
+    res = vault_index.search("", metadata_filter={"status": {"ne": "draft"}})
+    paths = {r["path"] for r in res["results"]}
+    # Welcome.md / Research/alpha.md は status=active → ヒット
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    # 日本語ノートは status: draft → 除外
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_metadata_filter_multiple_keys_and(vault_index: VaultIndex) -> None:
+    """複数キーは AND 結合: status=active AND priority=high → Welcome.md のみ."""
+    res = vault_index.search(
+        "",
+        metadata_filter={"status": "active", "priority": "high"},
+    )
+    paths = {r["path"] for r in res["results"]}
+    assert paths == {"Welcome.md"}
+
+
+def test_metadata_filter_only_empty_query(vault_index: VaultIndex) -> None:
+    """空クエリ + metadata_filter のみでも全件にフィルタ適用できる (新仕様)."""
+    res = vault_index.search("", metadata_filter={"status": "active"})
+    paths = {r["path"] for r in res["results"]}
+    # 全件から status=active を抽出
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    assert "Projects/日本語ノート.md" not in paths
+    # plain.md は status キーなし → 除外
+    assert "Projects/plain.md" not in paths
+
+
+def test_metadata_filter_missing_key_excludes(vault_index: VaultIndex) -> None:
+    """frontmatter にキー自体が無いノートは eq フィルタで除外される."""
+    res = vault_index.search("", metadata_filter={"status": "active"})
+    paths = {r["path"] for r in res["results"]}
+    # plain.md は frontmatter 無し → status キーも無し → null と "active" は不一致
+    assert "Projects/plain.md" not in paths
+
+
+def test_metadata_filter_invalid_operator_raises(vault_index: VaultIndex) -> None:
+    """未サポート演算子 (regex) は ValidationError / ValueError."""
+    with pytest.raises((ValueError, ValidationError)):
+        vault_index.search("obsidian", metadata_filter={"x": {"regex": "foo"}})
+
+
+def test_metadata_filter_invalid_key_raises(vault_index: VaultIndex) -> None:
+    """識別子ルール違反のキー名は ValidationError / ValueError."""
+    with pytest.raises((ValueError, ValidationError)):
+        vault_index.search("obsidian", metadata_filter={"../etc": "x"})
+
+
+def test_metadata_filter_invalid_value_raises(vault_index: VaultIndex) -> None:
+    """制御文字を含む値は ValidationError / ValueError."""
+    with pytest.raises((ValueError, ValidationError)):
+        vault_index.search("obsidian", metadata_filter={"status": "a\x00b"})

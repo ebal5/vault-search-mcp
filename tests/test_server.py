@@ -299,3 +299,46 @@ def test_vault_recent_fields_nonexistent_raises(vault_index: VaultIndex) -> None
     fn = _fn(server_mod.vault_recent)
     with pytest.raises(ValueError):
         fn(5, None, ["nope"])
+
+
+# ---------------------------------------------------------------------------
+# metadata_filter (Issue #5) — MCP tool 経由の振る舞いを検証する Red テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_vault_search_metadata_filter_eq(vault_index: VaultIndex) -> None:
+    """eq 暗黙の metadata_filter で絞り込み."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, None, {"status": "active"})
+    assert isinstance(res, SearchResponse)
+    paths = {hit.path for hit in res.results}
+    assert "Welcome.md" in paths
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_mcp_tool_vault_search_metadata_filter_in(vault_index: VaultIndex) -> None:
+    """in 演算子の metadata_filter で絞り込み."""
+    fn = _fn(server_mod.vault_search)
+    res = fn(
+        "obsidian",
+        None,
+        None,
+        20,
+        0,
+        None,
+        {"priority": {"in": ["high", "low"]}},
+    )
+    assert isinstance(res, SearchResponse)
+    paths = {hit.path for hit in res.results}
+    assert "Welcome.md" in paths
+    assert "Research/alpha.md" in paths
+    assert "Projects/日本語ノート.md" not in paths
+
+
+def test_mcp_tool_vault_search_metadata_filter_invalid_operator(
+    vault_index: VaultIndex,
+) -> None:
+    """未サポート演算子は ValueError (FastMCP エラーレスポンス)."""
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValueError):
+        fn("obsidian", None, None, 20, 0, None, {"x": {"regex": "foo"}})
