@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .validation import validate_identifier
+from .validation import ValidationError, validate_identifier
 
 if TYPE_CHECKING:
     from .indexer import VaultIndex
@@ -289,8 +289,6 @@ def apply_field_mask(
     それ以外 → data から fields だけを抜き出した dict を返す
       (モデル構築は呼び出し側で行い、欠落フィールドはモデルのデフォルト値で埋まる)
     """
-    from .validation import ValidationError
-
     if fields is None:
         return data
     if not isinstance(fields, list):
