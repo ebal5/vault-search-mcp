@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import jsonschema
 import pytest
 
 from vault_search import server as server_mod
@@ -127,6 +128,76 @@ def test_schema_resource_output_schema_remains_rich(vault_index: VaultIndex) -> 
     assert {"tier", "total", "results"}.issubset(props.keys()), (
         f"schema resource output_schema lost rich SearchResponse shape: {props.keys()}"
     )
+
+
+def _get_tool_output_schema(tool_name: str) -> dict[str, Any]:
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    tool = next(t for t in tools if t.name == tool_name)
+    assert tool.outputSchema is not None
+    return tool.outputSchema
+
+
+def test_mcp_vault_search_fields_subset_passes_lowlevel_validation(
+    vault_index: VaultIndex,
+) -> None:
+    """fields 指定 subset が MCP outputSchema で jsonschema.validate パスすること.
+
+    MCP lowlevel server (mcp/server/lowlevel/server.py) は structured content に
+    対し outputSchema で jsonschema.validate を強制する。rich schema が
+    required=[path, title, folder, ...] を持っていると fields=["path","title"]
+    の subset が required 違反で拒否される regression を検出する。
+    """
+    _content, structured = _call_tool(
+        "vault_search",
+        {"query": "obsidian", "fields": ["path", "title"]},
+    )
+    schema = _get_tool_output_schema("vault_search")
+    jsonschema.validate(structured, schema)
+
+
+def test_mcp_vault_search_full_response_validates(vault_index: VaultIndex) -> None:
+    """fields=None でも schema が緩みすぎないこと (required 維持)."""
+    _content, structured = _call_tool("vault_search", {"query": "obsidian"})
+    schema = _get_tool_output_schema("vault_search")
+    jsonschema.validate(structured, schema)
+    # results/tier/total は常に required であること
+    assert set(schema.get("required", [])) >= {"tier", "total", "results"}
+
+
+def test_mcp_vault_get_note_fields_subset_passes_lowlevel_validation(
+    vault_index: VaultIndex,
+) -> None:
+    """vault_get_note の fields subset が jsonschema.validate パス."""
+    _content, structured = _call_tool(
+        "vault_get_note",
+        {"path": "Welcome.md", "fields": ["path", "title"]},
+    )
+    schema = _get_tool_output_schema("vault_get_note")
+    jsonschema.validate(structured, schema)
+
+
+def test_mcp_vault_get_note_full_response_validates(vault_index: VaultIndex) -> None:
+    _content, structured = _call_tool("vault_get_note", {"path": "Welcome.md"})
+    schema = _get_tool_output_schema("vault_get_note")
+    jsonschema.validate(structured, schema)
+
+
+def test_mcp_vault_recent_fields_subset_passes_lowlevel_validation(
+    vault_index: VaultIndex,
+) -> None:
+    """vault_recent envelope の items が fields subset でも jsonschema.validate パス."""
+    _content, structured = _call_tool(
+        "vault_recent",
+        {"limit": 3, "fields": ["path", "title"]},
+    )
+    schema = _get_tool_output_schema("vault_recent")
+    jsonschema.validate(structured, schema)
+
+
+def test_mcp_vault_recent_full_response_validates(vault_index: VaultIndex) -> None:
+    _content, structured = _call_tool("vault_recent", {"limit": 3})
+    schema = _get_tool_output_schema("vault_recent")
+    jsonschema.validate(structured, schema)
 
 
 def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> None:
