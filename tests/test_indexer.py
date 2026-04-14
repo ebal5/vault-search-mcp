@@ -339,6 +339,27 @@ def test_metadata_filter_ne_operator(vault_index: VaultIndex) -> None:
     assert "Projects/日本語ノート.md" not in paths
 
 
+def test_metadata_filter_ne_excludes_array_containing_value(
+    vault_index: VaultIndex,
+) -> None:
+    """配列型 frontmatter に対する ne は「含まない」判定であること.
+
+    Welcome.md は ``categories: [work, urgent]`` を持つので
+    ``categories != work`` では除外されるべき (配列内に work を含むため)。
+    Research/alpha.md は ``categories: [research]`` なので含まれるべき。
+    """
+    res = vault_index.search(
+        "", metadata_filter={"categories": {"ne": "work"}}
+    )
+    paths = {r["path"] for r in res["results"]}
+    # Welcome.md は categories に 'work' を含むので ne 'work' では除外
+    assert "Welcome.md" not in paths, (
+        "categories [work, urgent] は 'work' を含むので ne 'work' では除外されるべき"
+    )
+    # Research/alpha.md は categories: [research] → 'work' を含まない → ヒット
+    assert "Research/alpha.md" in paths
+
+
 def test_metadata_filter_multiple_keys_and(vault_index: VaultIndex) -> None:
     """複数キーは AND 結合: status=active AND priority=high → Welcome.md のみ."""
     res = vault_index.search(
