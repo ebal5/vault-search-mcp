@@ -165,6 +165,53 @@ def test_all_tools_closed_world() -> None:
     assert violations == [], f"tools violating closed-world invariant: {violations}"
 
 
+# Issue #85: ToolAnnotations.title 設定を検証する regression テスト。
+# 各ツールに human-readable な title が付与されていることを確認する。
+_EXPECTED_TITLES: dict[str, str] = {
+    "vault_search": "Vault 検索",
+    "vault_get_note": "ノート取得",
+    "vault_recent": "最近更新ノート",
+    "vault_tags": "タグ一覧",
+    "vault_folders": "フォルダ一覧",
+    "vault_reindex": "インデックス再構築",
+    "vault_stats": "インデックス統計",
+}
+
+
+@pytest.mark.parametrize(("tool_name", "expected_title"), list(_EXPECTED_TITLES.items()))
+def test_tool_annotations_title(tool_name: str, expected_title: str) -> None:
+    """各 tool の MCP annotations.title が human-readable な日本語ラベルを持つ (Issue #85)."""
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    tool = next((t for t in tools if t.name == tool_name), None)
+    assert tool is not None, f"tool not registered: {tool_name}"
+
+    annotations = tool.annotations
+    assert annotations is not None, f"{tool_name} has no annotations"
+    assert annotations.title == expected_title, (
+        f"{tool_name}.title: expected {expected_title!r}, got {annotations.title!r}"
+    )
+
+
+def test_all_tools_have_title() -> None:
+    """MCP list_tools で返る全 tool の annotations.title が設定済みである (Issue #85)."""
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    missing = [t.name for t in tools if t.annotations is None or t.annotations.title is None]
+    assert missing == [], f"tools without annotations.title: {missing}"
+
+
+def test_schema_tools_resource_exposes_title(vault_index: VaultIndex) -> None:
+    """``schema://tools`` リソースの annotations dict にも title が含まれる (Issue #85)."""
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    tools_entries = payload["tools"]
+    for tool_name, expected_title in _EXPECTED_TITLES.items():
+        entry = tools_entries[tool_name]
+        annotations = entry.get("annotations", {})
+        assert annotations.get("title") == expected_title, (
+            f"{tool_name}: schema://tools annotations.title expected {expected_title!r}, "
+            f"got {annotations.get('title')!r}"
+        )
+
+
 def test_schema_tools_resource_exposes_annotations(vault_index: VaultIndex) -> None:
     """``schema://tools`` リソースも各 tool の annotations を公開する.
 

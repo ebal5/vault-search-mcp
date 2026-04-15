@@ -123,8 +123,12 @@ _OFFSET_INPUT_SCHEMA: dict[str, Any] = {
 #     touch しないため該当しない。auto-approve UX で誤警告が出ないよう False。
 #     ``idempotentHint=True`` は同一入力で同一状態に収束することを示す。
 #   - ``openWorldHint=False`` は全ツールでローカル vault のみを扱うため統一。
-_READ_ONLY_ANNOTATIONS = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(title=title, readOnlyHint=True, openWorldHint=False)
+
+
 _REINDEX_ANNOTATIONS = ToolAnnotations(
+    title="インデックス再構築",
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=True,
@@ -200,7 +204,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "required": ["query"],
         },
         output_model=SearchResponse,
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("Vault 検索"),
     ),
     "vault_get_note": _ToolSchemaSpec(
         description="指定パスのノート全文とメタデータを取得する。",
@@ -212,7 +216,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "required": ["path"],
         },
         output_model=NoteDetail,
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("ノート取得"),
     ),
     "vault_recent": _ToolSchemaSpec(
         description="最近更新されたノート一覧を取得する。",
@@ -226,21 +230,21 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
         },
         output_model=RecentNote,
         envelope_key="notes",
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("最近更新ノート"),
     ),
     "vault_tags": _ToolSchemaSpec(
         description="全タグとその使用回数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=TagCount,
         envelope_key="tags",
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("タグ一覧"),
     ),
     "vault_folders": _ToolSchemaSpec(
         description="フォルダ構造とノート数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=FolderCount,
         envelope_key="folders",
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("フォルダ一覧"),
     ),
     "vault_reindex": _ToolSchemaSpec(
         description="インデックスを再構築する。",
@@ -255,7 +259,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
         description="インデックスの統計情報を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=VaultStats,
-        annotations=_READ_ONLY_ANNOTATIONS,
+        annotations=_read_only("インデックス統計"),
     ),
 }
 
