@@ -15,6 +15,7 @@ description: |
   - 単純な bugfix 後の軽い確認 → 通常の /simplify で十分
   - 実装前の設計議論 → /grill-me が適切
 allowed-tools: Agent, Bash(gh issue:*), Bash(gh label list:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(git log:*), Bash(git diff:*), Bash(git status:*), Bash(git branch:*), TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Write, Edit, Glob, Grep
+model: sonnet
 ---
 
 # Review Loop
