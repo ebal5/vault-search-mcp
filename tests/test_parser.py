@@ -171,3 +171,75 @@ def test_frontmatter_and_inline_tags_merged_dedup(tmp_path: Path) -> None:
 def test_nonexistent_file_returns_none(tmp_path: Path) -> None:
     note = parse_note(tmp_path / "missing.md", tmp_path)
     assert note is None
+
+
+# ---------------------------------------------------------------------------
+# Scalar normalization (Issue #15 / #49)
+#
+# metadata_filter は常に str 値で比較するため、frontmatter の非 str 型を
+# parse 時に文字列へ正規化する。これにより query-time の CAST が不要となり、
+# bool "1"/"0" の UX ワートも解消される。
+# ---------------------------------------------------------------------------
+
+
+def test_frontmatter_int_normalized_to_string(tmp_path: Path) -> None:
+    """YAML int (``priority: 5``) は frontmatter に ``"5"`` で格納される."""
+    f = _write(tmp_path, "n.md", "---\npriority: 5\n---\nbody\n")
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["priority"] == "5"
+
+
+def test_frontmatter_bool_normalized_to_lowercase_string(tmp_path: Path) -> None:
+    """YAML bool (``archived: true`` / ``active: false``) は ``"true"``/``"false"``."""
+    f = _write(
+        tmp_path,
+        "n.md",
+        "---\narchived: true\nactive: false\n---\nbody\n",
+    )
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["archived"] == "true"
+    assert note.frontmatter["active"] == "false"
+
+
+def test_frontmatter_float_normalized_to_string(tmp_path: Path) -> None:
+    """YAML float (``score: 4.5``) は ``"4.5"`` で格納される."""
+    f = _write(tmp_path, "n.md", "---\nscore: 4.5\n---\nbody\n")
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["score"] == "4.5"
+
+
+def test_frontmatter_list_elements_normalized(tmp_path: Path) -> None:
+    """list 内の int/bool も文字列化される."""
+    f = _write(
+        tmp_path,
+        "n.md",
+        "---\nlevels:\n  - 1\n  - 2\n  - 3\nflags:\n  - true\n  - false\n---\nbody\n",
+    )
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["levels"] == ["1", "2", "3"]
+    assert note.frontmatter["flags"] == ["true", "false"]
+
+
+def test_frontmatter_date_normalized_to_iso_string(tmp_path: Path) -> None:
+    """YAML date (``date: 2024-01-15``) は ISO 8601 文字列で格納される."""
+    f = _write(tmp_path, "n.md", "---\ndate: 2024-01-15\n---\nbody\n")
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["date"] == "2024-01-15"
+
+
+def test_frontmatter_string_value_unchanged(tmp_path: Path) -> None:
+    """str 値は副作用なしでそのまま格納される (回帰ガード)."""
+    f = _write(
+        tmp_path,
+        "n.md",
+        '---\ntitle: "Hello"\ntag_alias: foo\n---\nbody\n',
+    )
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["title"] == "Hello"
+    assert note.frontmatter["tag_alias"] == "foo"
