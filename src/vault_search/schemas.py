@@ -275,11 +275,10 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
                         '{"in": list[str]} / {"ne": str}。'
                         '例: {"status": "active", "priority": {"in": ["high"]}}。'
-                        "比較は常に文字列として行う。frontmatter が数値 "
-                        '(例: priority: 5) の場合は "5" と書けばマッチする '
-                        "(内部で TEXT にキャストされる)。bool (true/false) は "
-                        '"1"/"0" にキャストされるため、YAML で quote して '
-                        '"true"/"false" 文字列として保存するのが確実。'
+                        "比較値は常に文字列。frontmatter 中の数値 (5) / bool (true) / "
+                        "日付 (2024-01-15) は index 時に "
+                        '"5" / "true" / "2024-01-15" へ正規化されるため、'
+                        "YAML での quote は不要で、そのままの表記を文字列で渡せる。"
                     ),
                     "additionalProperties": {
                         "oneOf": [

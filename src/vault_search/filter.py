@@ -173,13 +173,12 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     SQL インジェクションは発生しない。比較対象値は常にプレースホルダ
     (``?``) で渡すため、ユーザ値が SQL 断片に混ざることはない。
 
-    Type coercion
-    -------------
-    比較は ``CAST(... AS TEXT)`` を通して常に文字列として行う。これにより
-    frontmatter に YAML int (``priority: 5``) が入っていても ``"5"`` で
-    マッチする (Issue #15 / #49 対応)。bool は SQLite JSON1 が 1/0 を返す
-    ため CAST 後は ``"1"``/``"0"`` となる — ``"true"``/``"false"`` で
-    マッチさせたい場合は YAML 側で quote して文字列として保存する必要がある。
+    Type invariant
+    --------------
+    frontmatter 内のスカラー値は :func:`vault_search.parser._normalize_fm`
+    により index 時に文字列化されている (Issue #15 / #49)。そのため本関数の
+    SQL は単純な str→str 等価比較のみで済む。DB を直接書き換える等で非文字列値が
+    混入した場合はマッチしない — 正規化のトラスト境界は parser にある。
 
     Semantics
     ---------
@@ -200,12 +199,12 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
         assert isinstance(cond.value, str)
         fragment = (
             "AND ("
-            "CAST(json_extract(n.frontmatter, ?) AS TEXT) = ? "
+            "json_extract(n.frontmatter, ?) = ? "
             "OR ("
             "  json_type(n.frontmatter, ?) = 'array' "
             "  AND EXISTS ("
             "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
-            "    WHERE CAST(value AS TEXT) = ?"
+            "    WHERE value = ?"
             "  )"
             ")"
             ")"
@@ -219,12 +218,12 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
             "AND json_extract(n.frontmatter, ?) IS NOT NULL "
             "AND ("
             "(json_type(n.frontmatter, ?) != 'array' "
-            " AND CAST(json_extract(n.frontmatter, ?) AS TEXT) != ?) "
+            " AND json_extract(n.frontmatter, ?) != ?) "
             "OR ("
             "  json_type(n.frontmatter, ?) = 'array' "
             "  AND NOT EXISTS ("
             "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
-            "    WHERE CAST(value AS TEXT) = ?"
+            "    WHERE value = ?"
             "  )"
             ")"
             ")"
@@ -246,12 +245,12 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     placeholders = ",".join("?" * len(values))
     fragment = (
         "AND ("
-        f"CAST(json_extract(n.frontmatter, ?) AS TEXT) IN ({placeholders}) "
+        f"json_extract(n.frontmatter, ?) IN ({placeholders}) "
         "OR ("
         "  json_type(n.frontmatter, ?) = 'array' "
         "  AND EXISTS ("
         "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
-        f"    WHERE CAST(value AS TEXT) IN ({placeholders})"
+        f"    WHERE value IN ({placeholders})"
         "  )"
         ")"
         ")"
