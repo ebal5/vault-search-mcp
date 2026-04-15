@@ -633,6 +633,48 @@ def test_metadata_filter_ne_bool_frontmatter(tmp_path: Path) -> None:
     assert paths == {"b.md"}, f"bool ne 'true' mismatch: got {paths}"
 
 
+def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
+    """全スカラー型 (int/bool/float/date) の正規化 → filter 経路を 1 テストで検証.
+
+    個別型テスト (``matches_int_frontmatter`` / ``matches_bool_frontmatter``) は
+    単一型のみをカバーしているため、float / date の正規化が部分的に壊れた場合に
+    silent regression となりうる (Round 3 Reviewer C finding 1)。本テストは
+    parse → index → filter の full pipeline を全スカラー型で一括検証する。
+    """
+    idx = _build_vault(
+        tmp_path,
+        {
+            "target.md": (
+                "---\n"
+                "priority: 5\n"
+                "archived: true\n"
+                "score: 3.7\n"
+                "due: 2024-01-15\n"
+                "---\nbody\n"
+            ),
+            "other.md": (
+                "---\n"
+                "priority: 3\n"
+                "archived: false\n"
+                "score: 1.2\n"
+                "due: 2024-06-01\n"
+                "---\nbody\n"
+            ),
+        },
+    )
+    for key, val in [
+        ("priority", "5"),
+        ("archived", "true"),
+        ("score", "3.7"),
+        ("due", "2024-01-15"),
+    ]:
+        res = idx.search("", metadata_filter={key: val})
+        paths = {r["path"] for r in res["results"]}
+        assert paths == {"target.md"}, (
+            f"{key}={val!r} did not match exactly target.md: got {paths}"
+        )
+
+
 def test_search_query_with_double_quote_does_not_raise(vault_index: VaultIndex) -> None:
     """query 内に `"` を含んでも sqlite3.OperationalError を漏らさない.
 

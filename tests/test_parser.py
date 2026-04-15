@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from vault_search.parser import parse_note
+from vault_search.parser import ParsedNote, _normalize_fm, parse_note
 
 
 def _write(root: Path, rel: str, body: str) -> Path:
@@ -284,3 +284,72 @@ def test_frontmatter_string_value_unchanged(tmp_path: Path) -> None:
     assert note is not None
     assert note.frontmatter["title"] == "Hello"
     assert note.frontmatter["tag_alias"] == "foo"
+
+
+# ---------------------------------------------------------------------------
+# Trust boundary & idempotency (Round 3 Reviewer C findings 2, 3)
+#
+# `ParsedNote.__post_init__` は parse_note を経由しない直接構築にも正規化を
+# 強制する (Issue #15 / #49 の trust boundary)。これらのテストは
+# ``_normalize_fm`` が str 素通し (冪等) であり、後続の型チェック / SQL 比較が
+# 二重適用で壊れないことを pin する。
+# ---------------------------------------------------------------------------
+
+
+def test_direct_parsed_note_construction_normalizes_frontmatter() -> None:
+    """``ParsedNote(..., frontmatter={...})`` 直接構築でも正規化が適用される.
+
+    ``__post_init__`` が trust boundary を強制するガード。リファクタで
+    post_init が消えても unit test で即座に検知する。
+    """
+    note = ParsedNote(
+        path="x.md",
+        title="x",
+        folder="",
+        content="",
+        frontmatter={"priority": 5, "archived": True, "score": 4.5},
+    )
+    assert note.frontmatter["priority"] == "5"
+    assert note.frontmatter["archived"] == "true"
+    assert note.frontmatter["score"] == "4.5"
+
+
+def test_normalize_fm_idempotent() -> None:
+    """``_normalize_fm(_normalize_fm(x)) == _normalize_fm(x)`` (冪等性).
+
+    ``_normalize_scalar`` は str を素通しするため、__post_init__ が
+    正規化済み入力に二重適用されても壊れない。この性質が trust boundary の
+    基盤なので、代表的なペイロードで固定化する。
+    """
+    payloads: list[object] = [
+        {"x": True, "y": False},
+        {"n": 5, "f": 4.5},
+        {"nested": {"deep": {"flag": True, "count": 7}}},
+        {"levels": [1, 2, 3], "flags": [True, False]},
+        {"mixed": [{"sub": True}, {"n": 5}]},
+        {"null_val": None, "str_val": "hello"},
+    ]
+    for p in payloads:
+        once = _normalize_fm(p)
+        twice = _normalize_fm(once)
+        assert once == twice, f"idempotency broken for {p!r}: {once} != {twice}"
+
+
+def test_frontmatter_dict_in_list_in_dict_normalized(tmp_path: Path) -> None:
+    """dict → list → dict の深いネストも再帰正規化される.
+
+    既存の ``test_frontmatter_nested_dict_normalized_recursively`` は
+    dict-in-dict のみをカバー。list 内の dict 要素正規化は list 分岐の
+    別コードパスのため個別にガードする (Round 3 Reviewer C finding 4)。
+    """
+    f = _write(
+        tmp_path,
+        "n.md",
+        "---\nmeta:\n  - sub: true\n    count: 5\n  - sub: false\n    count: 3\n---\nbody\n",
+    )
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["meta"] == [
+        {"sub": "true", "count": "5"},
+        {"sub": "false", "count": "3"},
+    ]

@@ -35,6 +35,10 @@ def conn() -> sqlite3.Connection:
         ("no-key.md", {"other": "x"}),
         ("arr.md", {"levels": ["1", "2", "3"]}),
         ("arr-single.md", {"levels": ["1"]}),
+        # Normalized bool array: YAML ``flags: [true, false]`` → ``["true", "false"]``.
+        # ne / in の配列要素経路で bool 正規化後の str マッチが動くことを pin する。
+        ("bool-arr.md", {"flags": ["true", "false"]}),
+        ("bool-arr-true.md", {"flags": ["true"]}),
     ]
     for path, fm in rows:
         c.execute("INSERT INTO notes VALUES (?, ?)", (path, json.dumps(fm)))
@@ -120,6 +124,28 @@ def test_in_single_element(conn: sqlite3.Connection) -> None:
 def test_in_array_any_element_match(conn: sqlite3.Connection) -> None:
     hits = _select(conn, MetadataCondition("levels", "in", ("2", "99")))
     assert hits == {"arr.md"}
+
+
+# ---------------------------------------------------------------------------
+# Normalized bool array element matching (Round 3 Reviewer C finding 5)
+#
+# YAML ``flags: [true, false]`` は parser で ``["true", "false"]`` へ
+# 正規化される。ne / in 演算子の array-element path で bool 正規化文字列が
+# 期待通り扱われることを固定化する。
+# ---------------------------------------------------------------------------
+
+
+def test_ne_bool_array_excludes_element_containing(conn: sqlite3.Connection) -> None:
+    """配列内に "true" を含むノートは ne "true" でマッチしない."""
+    hits = _select(conn, MetadataCondition("flags", "ne", "true"))
+    # bool-arr.md, bool-arr-true.md はどちらも "true" を含む → 除外
+    assert hits == set()
+
+
+def test_in_bool_array_element_match(conn: sqlite3.Connection) -> None:
+    """in 演算子が bool 正規化後の "false" を含む配列をヒットさせる."""
+    hits = _select(conn, MetadataCondition("flags", "in", ("false",)))
+    assert hits == {"bool-arr.md"}
 
 
 # ---------------------------------------------------------------------------
