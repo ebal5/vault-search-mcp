@@ -127,6 +127,22 @@ def test_in_array_any_element_match(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_eq_ne_exclude_null_value(conn: sqlite3.Connection) -> None:
+    """YAML null で格納された値は eq / ne どちらにも含まれない (3 値論理).
+
+    ``archived: null`` のノートを追加し、どちらの演算でもマッチしないことを
+    ``IS NOT NULL`` ガードの回帰ガードとして固定化する。
+    """
+    conn.execute(
+        "INSERT INTO notes VALUES (?, ?)",
+        ("null-val.md", json.dumps({"archived": None})),
+    )
+    eq_hits = _select(conn, MetadataCondition("archived", "eq", "true"))
+    ne_hits = _select(conn, MetadataCondition("archived", "ne", "true"))
+    assert "null-val.md" not in eq_hits
+    assert "null-val.md" not in ne_hits
+
+
 def test_eq_ne_partition_on_present_key(conn: sqlite3.Connection) -> None:
     """キーが存在するノートに対し eq_hits と ne_hits は disjoint かつ和集合で
     キー保持ノート全体をカバーする。"""

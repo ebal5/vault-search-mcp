@@ -232,6 +232,47 @@ def test_frontmatter_date_normalized_to_iso_string(tmp_path: Path) -> None:
     assert note.frontmatter["date"] == "2024-01-15"
 
 
+def test_frontmatter_datetime_normalized_uses_isoformat_T_separator(
+    tmp_path: Path,
+) -> None:
+    """YAML datetime (``due: 2024-01-15 14:30:00``) は ``T`` 区切りの ISO 8601.
+
+    ``str(dt)`` は空白区切り ``"2024-01-15 14:30:00"`` を返すが、本関数は
+    ``isoformat()`` を使うため ``"2024-01-15T14:30:00"`` になる。agent が
+    date-only ``"2024-01-15"`` で filter すると silent miss するため、
+    この実装契約を明示的に pin する (Reviewer C-R2 指摘)。
+    """
+    f = _write(tmp_path, "n.md", "---\ndue: 2024-01-15 14:30:00\n---\nbody\n")
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["due"] == "2024-01-15T14:30:00"
+
+
+def test_frontmatter_nested_dict_normalized_recursively(tmp_path: Path) -> None:
+    """nested dict 内のスカラーも再帰的に正規化される (``_normalize_fm`` の dict 分岐)."""
+    f = _write(
+        tmp_path,
+        "n.md",
+        "---\nmeta:\n  sub: true\n  count: 5\n---\nbody\n",
+    )
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["meta"] == {"sub": "true", "count": "5"}
+
+
+def test_frontmatter_null_value_preserved_as_none(tmp_path: Path) -> None:
+    """YAML null (``x: ~`` / ``x: null``) は None のまま格納.
+
+    3 値論理のため ``{"x": "null"}`` のような文字列照合ではマッチしない
+    (filter.py の IS NOT NULL ガードが drop)。不変条件の回帰ガード。
+    """
+    f = _write(tmp_path, "n.md", "---\narchived: null\nskip: ~\n---\nbody\n")
+    note = parse_note(f, tmp_path)
+    assert note is not None
+    assert note.frontmatter["archived"] is None
+    assert note.frontmatter["skip"] is None
+
+
 def test_frontmatter_string_value_unchanged(tmp_path: Path) -> None:
     """str 値は副作用なしでそのまま格納される (回帰ガード)."""
     f = _write(
