@@ -99,8 +99,10 @@ def validate_identifier(
     ------
     ValidationError
         If ``name`` is empty, exceeds ``max_len``, contains control
-        characters (including NUL), attempts path traversal, or contains
-        any character outside ``A-Z a-z 0-9 _ - .``.
+        characters (including NUL), attempts path traversal, has an
+        empty dot-separated segment (leading/trailing/consecutive ``.``),
+        or contains any character outside ``A-Z a-z 0-9 _ -`` within a
+        segment.
     """
     if not isinstance(name, str):
         raise ValidationError(f"{kind} must be a string, got {type(name).__name__}")

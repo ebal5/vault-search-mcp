@@ -39,7 +39,8 @@ class MetadataCondition:
     key:
         frontmatter のトップレベルまたはドット区切りキー。
         :func:`vault_search.validation.validate_identifier` で検証済み
-        （``A-Za-z0-9_-.`` のみ）。SQL へ直接埋め込んでも安全。
+        (各セグメントは ``A-Za-z0-9_-`` のみ、空セグメント不可)。
+        SQL へ直接埋め込んでも安全。
     op:
         比較演算子。``eq`` / ``ne`` / ``in`` のいずれか。
         配列型 frontmatter に対しては ``eq`` / ``in`` が「含む」判定、
@@ -169,9 +170,10 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     参照するテーブル別名は ``n`` (``notes`` テーブル) を仮定する。
 
     ``cond.key`` は :func:`validate_identifier` 済みの安全な識別子
-    (``A-Za-z0-9_-.``) なので、JSON パス ``$.<key>`` に直接埋め込んでも
-    SQL インジェクションは発生しない。比較対象値は常にプレースホルダ
-    (``?``) で渡すため、ユーザ値が SQL 断片に混ざることはない。
+    (各セグメント ``A-Za-z0-9_-``、空セグメント不可) なので、JSON パス
+    ``$.<key>`` に直接埋め込んでも SQL インジェクションも malformed JSON
+    path も発生しない。比較対象値は常にプレースホルダ (``?``) で渡すため、
+    ユーザ値が SQL 断片に混ざることはない。
 
     Semantics
     ---------
