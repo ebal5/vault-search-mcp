@@ -40,51 +40,14 @@ SEARCH_HIT_FIELDS = {
 }
 
 
-def _get_properties(schema: dict[str, Any]) -> dict[str, Any]:
-    """JSON Schema から SearchHit 相当 (path + title + snippet) の properties を探索.
+def _search_hit_properties(vault_search_output_schema: dict[str, Any]) -> dict[str, Any]:
+    """vault_search の output_schema から SearchHit の properties を取り出す.
 
-    Pydantic 生成 schema は (a) ルート直下の properties、(b) $defs 参照、
-    (c) 配列項目へのインライン or $ref、(d) anyOf ブランチ内の properties、
-    のいずれにも該当モデルが現れ得る。いずれのパターンでも SearchHit 相当を
-    優先的に返す。
+    SearchResponse は ``results: list[SearchHit]`` を持つため Pydantic は
+    ``$defs.SearchHit`` に SearchHit を切り出す。PR #92 で fields 削除後は
+    anyOf ブランチ等が発生しないため直接パスで取り出せる。
     """
-    target_keys = {"path", "title", "snippet"}
-
-    def _walk(node: Any) -> dict[str, Any] | None:
-        if isinstance(node, dict):
-            props = node.get("properties")
-            if isinstance(props, dict) and target_keys.issubset(props.keys()):
-                return props
-            # anyOf / oneOf / items / $defs / definitions / properties を探索
-            for key in ("anyOf", "oneOf", "allOf"):
-                branches = node.get(key)
-                if isinstance(branches, list):
-                    for branch in branches:
-                        hit = _walk(branch)
-                        if hit is not None:
-                            return hit
-            for key in ("items", "$defs", "definitions", "properties"):
-                sub = node.get(key)
-                if isinstance(sub, dict):
-                    # properties dict の value 群 / defs dict の value 群を探索
-                    if key in {"$defs", "definitions", "properties"}:
-                        for v in sub.values():
-                            hit = _walk(v)
-                            if hit is not None:
-                                return hit
-                    else:
-                        hit = _walk(sub)
-                        if hit is not None:
-                            return hit
-        return None
-
-    hit = _walk(schema)
-    if hit is not None:
-        return hit
-    # 最終 fallback: ルート properties があればそれを返す
-    if isinstance(schema.get("properties"), dict):
-        return schema["properties"]
-    return {}
+    return vault_search_output_schema["$defs"]["SearchHit"]["properties"]
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +102,7 @@ def test_vault_search_output_schema_describes_search_hit_fields(
 
     payload = build_schema_payload(vault_index)
     out_schema = payload["tools"]["vault_search"]["output_schema"]
-    props = _get_properties(out_schema)
+    props = _search_hit_properties(out_schema)
     assert props, f"No properties found in output_schema: {out_schema}"
 
     for field in SEARCH_HIT_FIELDS:
