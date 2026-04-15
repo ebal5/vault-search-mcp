@@ -256,9 +256,17 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 
 
 def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
+    """ツールエントリ (description / input_schema / output_schema) を構築する.
+
+    envelope を持つツール (vault_tags / vault_folders / vault_recent) の output_schema は
+    ``additionalProperties`` を制限しない。将来 pagination meta (``next_offset``,
+    ``has_more``, ``total``) を envelope に追加しても破壊的変更にならないよう、
+    クライアントは未知キーを無視する実装を想定している。
+    """
     item_schema = spec.output_model.model_json_schema()
     if spec.envelope_key is not None:
         # envelope dict: {<envelope_key>: [item, item, ...]}
+        # additionalProperties を false にしない — 将来の pagination 拡張を許容する
         output_schema: dict[str, Any] = {
             "type": "object",
             "properties": {
@@ -272,7 +280,6 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
                 },
             },
             "required": [spec.envelope_key],
-            "additionalProperties": False,
         }
     else:
         output_schema = item_schema
