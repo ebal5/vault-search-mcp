@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass, field
@@ -85,6 +86,39 @@ class ParsedNote:
         return json.dumps(self.frontmatter, ensure_ascii=False, default=str)
 
 
+def _normalize_scalar(v: Any) -> Any:
+    """frontmatter スカラー値を metadata_filter 比較向けに文字列化.
+
+    metadata_filter は常に str 値で比較するため、YAML が返すネイティブ型
+    (int / float / bool / date) を parse 時に文字列へ正規化する。これにより
+    query-time の CAST が不要になり、bool が ``"1"``/``"0"`` 化する UX ワートも
+    消える (Issue #15 / #49)。
+
+    - bool → ``"true"``/``"false"`` (YAML 表記と一致)
+    - int / float → ``str(v)`` (e.g. ``5`` → ``"5"``, ``4.5`` → ``"4.5"``)
+    - date / datetime → ISO 8601 文字列 (``2024-01-15``)
+    - None / str / その他 → そのまま
+
+    ``isinstance(True, int)`` は Python では True なので bool 判定を先に行う。
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return v.isoformat()
+    return v
+
+
+def _normalize_fm(obj: Any) -> Any:
+    """frontmatter dict を再帰的にスカラー正規化."""
+    if isinstance(obj, dict):
+        return {k: _normalize_fm(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_fm(v) for v in obj]
+    return _normalize_scalar(obj)
+
+
 def _normalize_tags(raw: Any) -> list[str]:
     """frontmatter の tags を正規化してリストで返す."""
     if isinstance(raw, list):
@@ -129,6 +163,9 @@ def parse_note(file_path: Path, vault_root: Path) -> ParsedNote | None:
     m = _FM_RE.match(text)
     if m:
         fm = _parse_yaml(m.group(1))
+        # metadata_filter 比較は常に str のため、スカラー値を parse 時に正規化
+        # (Issue #15 / #49)。これ以降 fm は str / list[str] / dict / None のみ。
+        fm = _normalize_fm(fm)
         content = text[m.end() :]
 
     # タグ: frontmatter + インライン
