@@ -38,7 +38,6 @@ from .schemas import (
     TagCount,
     VaultStats,
     build_schema_payload,
-    validate_fields,
 )
 from .validation import validate_pagination
 
@@ -56,11 +55,6 @@ def _get_index() -> VaultIndex:
     if _index is None:
         raise RuntimeError("VaultIndex not initialized")
     return _index
-
-
-def _subset_row(data: dict[str, Any], fields_set: frozenset[str]) -> dict[str, Any]:
-    """data から fields_set に含まれるキーのみを残した dict を返す."""
-    return {k: v for k, v in data.items() if k in fields_set}
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +76,6 @@ def vault_search(
     folder: str | None = None,
     limit: int = 20,
     offset: int = 0,
-    fields: list[str] | None = None,
     metadata_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Vault 内のノートを全文検索する。
@@ -98,9 +91,6 @@ def vault_search(
         folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
-        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド返却。
-                空リストまたは不正名は ValidationError。context window 節約用。
-                指定時は results の各要素も指定キーのみを持つ dict になる。
         metadata_filter: frontmatter プロパティでの AND フィルタ。
             例: ``{"status": "active", "priority": {"in": ["high", "low"]}}``。
             対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
@@ -114,7 +104,6 @@ def vault_search(
         ``{"result": ...}`` でラップしてしまうため、dict 統一で回避している。
     """
     validate_pagination(limit, offset)
-    fields_set = validate_fields(SearchHit, fields)
     raw = _get_index().search(
         query,
         tags=tags,
@@ -123,27 +112,19 @@ def vault_search(
         limit=limit,
         offset=offset,
     )
-    if fields_set is None:
-        return SearchResponse(
-            tier=raw["tier"],
-            total=raw["total"],
-            results=[SearchHit(**hit) for hit in raw["results"]],
-        ).model_dump(mode="json")
-    return {
-        "tier": raw["tier"],
-        "total": raw["total"],
-        "results": [_subset_row(hit, fields_set) for hit in raw["results"]],
-    }
+    return SearchResponse(
+        tier=raw["tier"],
+        total=raw["total"],
+        results=[SearchHit(**hit) for hit in raw["results"]],
+    ).model_dump(mode="json")
 
 
 @mcp.tool(annotations=_TOOL_SPECS["vault_get_note"].annotations)
-def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]:
+def vault_get_note(path: str) -> dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
-        fields: 返却フィールドを限定 (例: ["path", "title"])。None で全フィールド。
-                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
         常に plain dict を返す。構造の詳細 (NoteDetail の rich JSON Schema) は
@@ -153,13 +134,10 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]
     Raises:
         NoteNotFoundError: 指定された path がインデックスに存在しない場合。
     """
-    fields_set = validate_fields(NoteDetail, fields)
     result = _get_index().get_note(path)
     if result is None:
         raise NoteNotFoundError(path)
-    if fields_set is None:
-        return NoteDetail(**result).model_dump(mode="json")
-    return _subset_row(result, fields_set)
+    return NoteDetail(**result).model_dump(mode="json")
 
 
 @mcp.tool(annotations=_TOOL_SPECS["vault_recent"].annotations)
@@ -167,7 +145,6 @@ def vault_recent(
     limit: int = 20,
     offset: int = 0,
     folder: str | None = None,
-    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """最近更新されたノート一覧を取得する。
 
@@ -177,8 +154,6 @@ def vault_recent(
                 意味論で、最近更新順 (file_mtime DESC) の先頭から offset 件を
                 スキップして limit 件返す。
         folder: フォルダプレフィックスで絞り込み（例: "Research"）
-        fields: 返却フィールドを限定 (例: ["path"])。None で全フィールド。
-                空リストまたは不正名は ValidationError。context window 節約用。
 
     Returns:
         常に plain dict を envelope 形式で返す (``{"notes": [dict, ...]}``)。
@@ -188,12 +163,8 @@ def vault_recent(
         してしまうため dict envelope に統一している。
     """
     validate_pagination(limit, offset)
-    fields_set = validate_fields(RecentNote, fields)
     rows = _get_index().recent_notes(limit=limit, offset=offset, folder=folder)
-    if fields_set is None:
-        notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
-    else:
-        notes = [_subset_row(note, fields_set) for note in rows]
+    notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
     return {"notes": notes}
 
 
@@ -258,11 +229,9 @@ def vault_stats() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 #
 # 背景:
-#   各ツールは戻り型を ``dict[str, Any]`` に統一している (Round 3)。これは
+#   各ツールは戻り型を ``dict[str, Any]`` に統一している。これは
 #   ``SearchResponse | dict[str, Any]`` の Union が FastMCP の wrap_output=True を
-#   誘発し structured content が ``{"result": ...}`` にラップされる問題 (Round 2-3)
-#   と、fields 指定時に rich model で再バリデートされて subset dict が拒否される
-#   問題を同時に回避するため。
+#   誘発し structured content が ``{"result": ...}`` にラップされる問題を回避するため。
 #
 # 副作用:
 #   ``dict[str, Any]`` 戻り型から FastMCP が自動生成する outputSchema は
@@ -272,10 +241,8 @@ def vault_stats() -> dict[str, Any]:
 # 対応:
 #   登録済み Tool の ``fn_metadata.output_schema`` を _TOOL_ENTRIES の rich schema に
 #   差し替え、MCP tools/list の outputSchema を schema://tools と同じカノニカル形に
-#   揃える。``fn_metadata.output_model`` はダミーのゆるい RootModel のまま保持して
-#   実行時 validation を緩く保つ (fields subset dict を壊さない)。
-#   ``Tool.output_schema`` は cached_property のため、instance dict に直接書き込んで
-#   プロパティ評価をバイパスする。
+#   揃える。``Tool.output_schema`` は cached_property のため、instance dict に
+#   直接書き込んでプロパティ評価をバイパスする。
 #
 # TODO(FastMCP):
 #   FastMCP が @tool(output_schema=...) のような公式 API を提供したら移行する。

@@ -1,6 +1,6 @@
 """統合シナリオテスト: schema://tools ドリブンのエージェント動作を再現する.
 
-個別ユニット (schema resource / metadata_filter / fields / validation) は
+個別ユニット (schema resource / metadata_filter / validation) は
 各モジュールのテストで既にカバー済み。本ファイルは「AI エージェントが
 schema resource を取得してから vault_search を呼ぶまで」の一連の流れを
 スキーマ構造レベルで辿り、各機能の接合部が壊れていないことを確認する。
@@ -148,7 +148,7 @@ def _inject_index(vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 # ---------------------------------------------------------------------------
-# Scenario A: schema -> vault_search (metadata_filter + fields)
+# Scenario A: schema -> vault_search (metadata_filter)
 # ---------------------------------------------------------------------------
 
 
@@ -158,10 +158,8 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
     1. ``mcp.read_resource('schema://tools')`` で schema を取得
     2. ``frontmatter_keys`` から実在するキーを **動的抽出** (固定値に依存しない)
     3. schema の ``frontmatter_value_samples`` から、そのキーの **実在する値** を抽出
-    4. ``output_schema`` から SearchHit の **実在するフィールド** を抽出
-    5. 抽出した値で ``mcp.call_tool('vault_search', ...)`` を呼ぶ
-    6. structured 出力と text content の両方が整合し、fields 指定どおりに
-       絞られていることを確認
+    4. 抽出した値で ``mcp.call_tool('vault_search', ...)`` を呼ぶ
+    5. structured 出力が期待通りヒットすることを確認
     """
     # Step 1: schema resource を FastMCP 経路で取得
     payload = _read_schema_via_mcp()
@@ -172,13 +170,9 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
     assert isinstance(frontmatter_keys, list) and frontmatter_keys, (
         f"frontmatter_keys must be a non-empty list, got {frontmatter_keys!r}"
     )
-    # "status" が schema にあればそれを使う (サンプルの expectation と一致させる)。
-    # 無ければ最初のキーで代替。これで schema と実データが drift すれば必ず失敗する
     filter_key = "status" if "status" in frontmatter_keys else frontmatter_keys[0]
 
     # Step 3: クエリにヒットするノートに絞って、filter_key の実在値を動的取得
-    # (「query でヒットするノートが実際に持っている値」を採ることで、
-    #  filter 適用後も最低 1 件残ることを保証する)
     query = "obsidian"
     prelim = _call_vault_search_via_mcp({"query": query, "limit": 100})
     assert prelim["total"] >= 1, f"baseline query '{query}' must hit at least one note in fixture"
@@ -189,69 +183,48 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
         f"among notes hitting query '{query}' (paths={sorted(hit_paths)})"
     )
 
-    # Step 4: vault_search の output_schema から SearchHit のフィールドを取得
-    vault_search_entry = payload["tools"]["vault_search"]
-    assert "output_schema" in vault_search_entry
-    hit_props = _search_hit_properties(vault_search_entry["output_schema"])
-    assert hit_props, "SearchHit properties must be discoverable from output_schema"
-
-    # path と title は SearchHit の最低限のフィールドとして schema に必ず存在
-    assert "path" in hit_props and "title" in hit_props, (
-        f"SearchHit schema must contain 'path' and 'title': {sorted(hit_props)}"
-    )
-    # スキーマに含まれるフィールドから 2 つを動的選択 (固定リスト依存を避ける)
-    selected_fields = [f for f in ("path", "title") if f in hit_props]
-    assert len(selected_fields) == 2
-
-    # Step 5: MCP protocol 経由で vault_search を呼び出す
+    # Step 4: MCP protocol 経由で vault_search を呼び出す
     result = _call_vault_search_via_mcp(
         {
             "query": query,
-            "fields": selected_fields,
             "metadata_filter": {filter_key: filter_value},
         }
     )
 
-    # Step 6: structured 出力の検証
+    # Step 5: structured 出力の検証
     assert isinstance(result, dict)
     assert result["tier"] in (0, 1, 2)
     assert isinstance(result["total"], int)
-    # schema から取った実在の値でフィルタした結果、最低 1 件はヒットする
     assert result["total"] >= 1, (
         f"expected >=1 hit for {filter_key}={filter_value!r}, got total={result['total']}"
     )
     assert len(result["results"]) >= 1
 
+    # SearchHit の全 8 フィールドが schema にも実レスポンスにも揃っていること
+    # (schema と実データの drift を検知する — `_search_hit_properties` が
+    # 部分一致で早期 return して 3 フィールドだけで pass しないよう強制)
+    expected_hit_fields = {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }
+    vault_search_entry = payload["tools"]["vault_search"]
+    hit_props = _search_hit_properties(vault_search_entry["output_schema"])
+    assert expected_hit_fields.issubset(hit_props.keys()), (
+        f"SearchHit schema missing fields: {expected_hit_fields - hit_props.keys()}"
+    )
     for hit in result["results"]:
         assert isinstance(hit, dict)
-        # fields で指定した 2 つのフィールドのみを持つ dict
-        assert set(hit.keys()) == set(selected_fields), (
-            f"expected only {selected_fields} in hit, got {sorted(hit.keys())}"
+        assert expected_hit_fields.issubset(hit.keys()), (
+            f"missing keys: {expected_hit_fields - hit.keys()}"
         )
         assert isinstance(hit["path"], str) and hit["path"].endswith(".md")
         assert isinstance(hit["title"], str)
-
-
-def test_mcp_call_tool_returns_full_schema_without_fields(
-    vault_index: VaultIndex,
-) -> None:
-    """fields を指定しない MCP 呼び出しは SearchHit 全フィールドを返す.
-
-    ``fields`` の「指定時のみ subset」挙動が、未指定ケースで regression
-    していないことを MCP 経路で確認する。
-    """
-    payload = _read_schema_via_mcp()
-    hit_props = _search_hit_properties(payload["tools"]["vault_search"]["output_schema"])
-    assert hit_props
-
-    result = _call_vault_search_via_mcp({"query": "obsidian"})
-    assert result["total"] >= 1
-    for hit in result["results"]:
-        # schema が公開する SearchHit プロパティを全て含むこと
-        # (FastMCP が default 値で補完する可能性も考慮して subset 比較)
-        assert set(hit_props).issubset(hit.keys()), (
-            f"missing keys: {set(hit_props) - set(hit.keys())}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -259,34 +232,8 @@ def test_mcp_call_tool_returns_full_schema_without_fields(
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_field_and_metadata_filter_both_rejected(vault_index: VaultIndex) -> None:
-    """fields の不正名 + metadata_filter の不正キーを同時に渡すと ValidationError.
-
-    どちらが先にチェックされるかは実装依存でよいが、エラーは必ず出る。
-    実装の順序変更に耐える構造テスト。
-    """
-    search_fn = _fn(server_mod.vault_search)
-    with pytest.raises(ValidationError):
-        search_fn(
-            "obsidian",
-            None,
-            None,
-            20,
-            0,
-            ["no_such_field"],  # 不正な field 名
-            {"bad key!": "x"},  # 不正な frontmatter キー (スペース/`!` は識別子外)
-        )
-
-
-def test_invalid_field_alone_rejected(vault_index: VaultIndex) -> None:
-    """fields のみ不正な場合でも ValidationError."""
-    search_fn = _fn(server_mod.vault_search)
-    with pytest.raises(ValidationError):
-        search_fn("obsidian", None, None, 20, 0, ["no_such_field"], None)
-
-
 def test_invalid_metadata_filter_alone_rejected(vault_index: VaultIndex) -> None:
-    """metadata_filter のみ不正な場合でも ValidationError."""
+    """metadata_filter の不正キーは ValidationError."""
     search_fn = _fn(server_mod.vault_search)
     with pytest.raises(ValidationError):
-        search_fn("obsidian", None, None, 20, 0, None, {"bad key!": "x"})
+        search_fn("obsidian", None, None, 20, 0, {"bad key!": "x"})
