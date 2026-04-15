@@ -35,6 +35,24 @@ delegate する。各フェーズで以下を明示:
 - **完了条件**を明記 (テスト通過数、commit 形式、lint クリーン)
 - **中断条件**を記述 (これに該当したら停止して報告)
 
+### モデル指定指針
+
+コスト最適化のため、フェーズ / 用途ごとに `Agent({model: ...})` で明示指定する
+(Agent tool の `model` param は agent definition frontmatter を override する)。
+
+| 用途 | モデル | 根拠 |
+|---|---|---|
+| Red delegate (失敗テスト追加) | Sonnet | テスト骨格組立に十分 |
+| Green delegate (最小実装) | Sonnet | 単機能実装に十分 |
+| Refactor **計画作成** | Sonnet | 機械的な整理案の列挙 |
+| Refactor **計画評価** (実施前) | **Opus** | 盲点・副作用・設計影響の抽象思考が効く |
+| Refactor delegate (実施) | Sonnet | プラン追従の実装は Sonnet 十分 |
+| 一時スクリプト security pre-review | Haiku | `execute-script-safely` 規定通り |
+
+Refactor は「計画 (Sonnet) → 評価 (Opus) → 実施 (Sonnet)」の 3 段を推奨。
+評価ステップを Opus に分離することで、計画段階で Opus を長時間走らせる無駄を
+避けつつ、危険な refactor を実施前に止められる。
+
 ### 既知の落とし穴: background subagent は Edit/Write が拒否される
 
 `Agent(..., run_in_background=true, mode="acceptEdits")` および

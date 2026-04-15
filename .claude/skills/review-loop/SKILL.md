@@ -45,12 +45,17 @@ allowed-tools: Agent, Bash(gh issue:*), Bash(gh label list:*), Bash(gh pr list:*
 
 **4 視点を並列起動** (独立した Agent として、**既存コードを追認させない**):
 
-| 視点 | 焦点 |
-|---|---|
-| **A: Correctness** | バグ、エッジケース、未検証の仮定、race、leak |
-| **B: Agent DX** | MCP/CLI エージェントが初見で誤用する箇所、schema の機械可読性 |
-| **C: Test Quality** | t-wada スタイル、vacuous pass、brittle、実装ミラー、実質網羅性 |
-| **D: Architecture** | god class、責務漏れ、結合度、拡張性、層越え |
+| 視点 | 焦点 | モデル |
+|---|---|---|
+| **A: Correctness** | バグ、エッジケース、未検証の仮定、race、leak | Sonnet |
+| **B: Agent DX** | MCP/CLI エージェントが初見で誤用する箇所、schema の機械可読性 | Sonnet |
+| **C: Test Quality** | t-wada スタイル、vacuous pass、brittle、実装ミラー、実質網羅性 | Sonnet |
+| **D: Architecture** | god class、責務漏れ、結合度、拡張性、層越え | **Opus** |
+
+モデル指定は `Agent({subagent_type: "general-purpose", model: "sonnet" | "opus", ...})`
+で明示する。Architecture 視点 (D) だけ Opus を残す根拠は、層越えや結合度の
+判断が 1 段抽象的で、Sonnet では見落としやすいため。コスト削減効果は 4 視点
+ラウンドで Opus 4→1 (75% 削減)。
 
 各 Reviewer へのプロンプトに**必ず含める**:
 
@@ -73,6 +78,10 @@ Reviewer 報告を集約し、スコアで振り分け:
 ### Phase 3: 対応実行
 
 - **FIX**: サブエージェントに delegate、TDD 必須 (Red → Green → Refactor 各 commit)
+  - Red / Green / Refactor の **実施** は Sonnet delegate
+  - **Refactor プランの評価**(実施前の設計レビュー) は Opus で別 Agent に回す
+    — 計画の盲点・副作用検知で Opus の抽象思考が効く。プラン自体の作成は
+    Sonnet で十分
 - **Issue 起票**: `gh issue create --label enhancement --body-file <body>` で一括
   - Issue body は「背景 / 再現 / 推奨修正 / スコア / 関連 Issue」構成
   - 事前に `.tmp-issues/*.md` に本文生成しておくと retry 容易
