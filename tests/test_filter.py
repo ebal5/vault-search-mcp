@@ -19,7 +19,8 @@ import sqlite3
 
 import pytest
 
-from vault_search.filter import MetadataCondition, build_sql_fragment
+from vault_search.filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
+from vault_search.validation import ValidationError
 
 
 @pytest.fixture
@@ -186,3 +187,46 @@ def test_eq_ne_partition_on_present_key(conn: sqlite3.Connection) -> None:
             f"eq ∪ ne != keyed_paths for value={value!r}: "
             f"eq={eq_hits} ne={ne_hits} keyed={keyed_paths}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Error message guidance (Round 3 Reviewer B finding)
+#
+# frontmatter スカラーは index 時に str 正規化されるため、agent が
+# ``{"priority": 5}`` のように非 str 値を渡すと ValidationError になる。
+# メッセージには単に「string が必要」と出すだけでなく、「stringify せよ」という
+# 修正方針を含める (agent が "got int" だけだと auto-coerce を期待して
+# retry するため)。
+# ---------------------------------------------------------------------------
+
+
+def test_implicit_eq_non_string_error_hints_stringification() -> None:
+    """暗黙 eq に int を渡したエラーが stringify の指示を含む."""
+    with pytest.raises(ValidationError) as exc:
+        parse_metadata_filter({"priority": 5})
+    msg = str(exc.value)
+    assert "priority" in msg
+    assert "int" in msg
+    # 正規化の事実と修正方針を明示
+    assert "normalized to strings" in msg
+    assert '"5"' in msg  # 具体例
+
+
+def test_in_operator_non_string_item_error_hints_stringification() -> None:
+    """in のリスト要素に bool を渡したエラーも stringify を指示する."""
+    with pytest.raises(ValidationError) as exc:
+        parse_metadata_filter({"archived": {"in": [True]}})
+    msg = str(exc.value)
+    assert "bool" in msg
+    assert "normalized to strings" in msg
+    assert '"true"' in msg
+
+
+def test_ne_operator_non_string_value_error_hints_stringification() -> None:
+    """ne に float を渡したエラーも stringify を指示する."""
+    with pytest.raises(ValidationError) as exc:
+        parse_metadata_filter({"score": {"ne": 4.5}})
+    msg = str(exc.value)
+    assert "float" in msg
+    assert "normalized to strings" in msg
+    assert '"4.5"' in msg
