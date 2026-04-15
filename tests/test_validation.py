@@ -164,6 +164,39 @@ def test_validate_identifier_accepts_dotted_paths(name: str) -> None:
     assert validate_identifier(name) == name
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "..",
+        ".",
+        ".a",
+        "a.",
+        "a..b",
+    ],
+)
+def test_validate_identifier_malformed_dot_message_names_the_cause(name: str) -> None:
+    """Empty-segment errors must name the structural cause, not the chars.
+
+    The previous message said ``"contains disallowed characters"`` for
+    inputs like ``a..b`` even though every individual character is in
+    the allowed set. That misleads agents into stripping characters
+    instead of fixing the dot structure. The message must instead
+    reference "empty"/"segment" so the agent can self-correct.
+    """
+    with pytest.raises(ValidationError) as exc:
+        validate_identifier(name)
+    msg = str(exc.value)
+    # The new message must name the empty-segment cause...
+    assert "empty" in msg and "segment" in msg, (
+        f"message should reference empty/segment: {msg!r}"
+    )
+    # ...and must NOT mislead with the char-level "disallowed characters"
+    # phrasing, which tricks agents into character-stripping retries.
+    assert "disallowed characters" not in msg, (
+        f"message should not blame chars for a structural error: {msg!r}"
+    )
+
+
 def test_validate_identifier_rejects_non_ascii_japanese() -> None:
     with pytest.raises(ValidationError):
         validate_identifier("重要")
