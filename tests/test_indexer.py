@@ -26,14 +26,14 @@ class TestTieredCache:
         assert got == result
 
     def test_tier1_fuzzy_hit(self) -> None:
-        """Jaccard >= 0.8 で類似クエリがヒットする."""
+        """threshold を明確に上回る Jaccard (9/10=0.9) でヒットする."""
         cache = TieredCache(fuzzy_threshold=0.8)
-        # tokens: {"alpha", "beta", "gamma", "delta"}
         result = [{"path": "a.md"}]
-        cache.put("alpha beta gamma delta", None, result)
-        # tokens: {"alpha", "beta", "gamma", "delta", "epsilon"}
-        # intersection=4, union=5 → 0.8 (境界)
-        tier, got = cache.get("alpha beta gamma delta epsilon", None)
+        # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
+        cache.put("a b c d e f g h i", None, result)
+        # tokens: {"a","b","c","d","e","f","g","h","i","j"} — 10 tokens
+        # intersection=9, union=10 → Jaccard=9/10=0.9 > 0.8
+        tier, got = cache.get("a b c d e f g h i j", None)
         assert tier == 1
         assert got == result
 
@@ -224,10 +224,10 @@ def test_search_tier0_cache_hit(vault_index: VaultIndex) -> None:
 
 
 def test_search_tier1_fuzzy(vault_index: VaultIndex) -> None:
-    """類似クエリは Tier 1 fuzzy hit."""
-    vault_index.search("alpha beta gamma delta")
-    res = vault_index.search("alpha beta gamma delta epsilon")
-    # Jaccard = 4/5 = 0.8 → ヒット
+    """threshold を上回る Jaccard (5/6≈0.833) で Tier 1 fuzzy hit."""
+    vault_index.search("alpha beta gamma delta epsilon")
+    res = vault_index.search("alpha beta gamma delta epsilon zeta")
+    # intersection=5, union=6 → Jaccard=5/6≈0.833 > 0.8 → ヒット
     assert res["tier"] == 1
 
 

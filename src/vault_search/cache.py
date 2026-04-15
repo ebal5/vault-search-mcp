@@ -56,7 +56,11 @@ class TieredCache:
     def get(
         self, query: str, filters: dict[str, Any] | None = None
     ) -> tuple[int, list[dict[str, Any]] | None]:
-        """キャッシュ検索。返り値: (tier, results). tier=-1 はミス."""
+        """キャッシュ検索。返り値: (tier, results). tier=-1 はミス。
+
+        Tier 1 (fuzzy) は Jaccard 類似度 >= fuzzy_threshold のとき適用。
+        境界値 (= threshold) はヒット扱い。フィルタ付きクエリは Tier 1 をスキップ。
+        """
         now = time.monotonic()
         key = self._cache_key(query, filters)
 
