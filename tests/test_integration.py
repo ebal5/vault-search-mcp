@@ -104,41 +104,14 @@ def _call_vault_search_via_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _search_hit_properties(output_schema: dict[str, Any]) -> dict[str, Any]:
-    """vault_search の output_schema から SearchHit 相当の properties を取り出す.
+    """vault_search の output_schema から SearchHit の properties を取り出す.
 
-    path + title + snippet を全て持つ properties dict を、$defs / items /
-    anyOf ブランチのいずれに格納されていても再帰探索して返す。
+    SearchResponse は ``results: list[SearchHit]`` を持つため Pydantic は
+    ``$defs.SearchHit`` に SearchHit を切り出し ``results.items`` を ``$ref``
+    で参照する。直接パスで取り出せばよい (PR #92 で fields 削除後、
+    anyOf / oneOf ブランチは発生しない)。
     """
-    target_keys = {"path", "title", "snippet"}
-
-    def _walk(node: Any) -> dict[str, Any]:
-        if not isinstance(node, dict):
-            return {}
-        props = node.get("properties")
-        if isinstance(props, dict) and target_keys.issubset(props.keys()):
-            return props
-        for key in ("anyOf", "oneOf", "allOf"):
-            branches = node.get(key)
-            if isinstance(branches, list):
-                for branch in branches:
-                    hit = _walk(branch)
-                    if hit:
-                        return hit
-        for key in ("items", "$defs", "definitions", "properties"):
-            sub = node.get(key)
-            if isinstance(sub, dict):
-                if key in {"$defs", "definitions", "properties"}:
-                    for v in sub.values():
-                        hit = _walk(v)
-                        if hit:
-                            return hit
-                else:
-                    hit = _walk(sub)
-                    if hit:
-                        return hit
-        return {}
-
-    return _walk(output_schema)
+    return output_schema["$defs"]["SearchHit"]["properties"]
 
 
 @pytest.fixture(autouse=True)
@@ -201,8 +174,7 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
     assert len(result["results"]) >= 1
 
     # SearchHit の全 8 フィールドが schema にも実レスポンスにも揃っていること
-    # (schema と実データの drift を検知する — `_search_hit_properties` が
-    # 部分一致で早期 return して 3 フィールドだけで pass しないよう強制)
+    # (schema と実データの drift を検知する)
     expected_hit_fields = {
         "path",
         "title",
