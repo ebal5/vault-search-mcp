@@ -131,6 +131,22 @@ def _parse_operator_dict(key: str, op_dict: dict[Any, Any]) -> MetadataCondition
     return _parse_ne(key, op_value)
 
 
+def _format_scalar_for_error(v: object) -> str:
+    """エラーメッセージ用に非 str スカラーを index 側の正規化形に合わせて文字列化.
+
+    小文字 ``"true"``/``"false"`` は意図的選択: ``str(True)`` は ``"True"`` を
+    返すが、parser の ``_normalize_scalar`` は YAML / JSON 慣例に合わせて
+    小文字化する (Issue #15 / #49)。エラーヒントも同じ形で示し、エージェントが
+    そのままコピペしてリトライできるようにする。bool 判定を先にするのは
+    ``isinstance(True, int)`` が True になる Python の罠への対応。
+    """
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    return str(v)
+
+
 def _parse_in(key: str, op_value: Any) -> MetadataCondition:
     if not isinstance(op_value, list):
         raise ValidationError(
@@ -142,12 +158,11 @@ def _parse_in(key: str, op_value: Any) -> MetadataCondition:
     validated: list[str] = []
     for idx, item in enumerate(op_value):
         if not isinstance(item, str):
-            stringified = "true" if item is True else "false" if item is False else str(item)
             raise ValidationError(
                 f"metadata_filter[{key!r}]['in'][{idx}] must be a string, "
                 f"got {type(item).__name__}. Frontmatter scalars are normalized "
                 f"to strings at index time; pass the stringified form "
-                f'(e.g. "{stringified}").'
+                f'(e.g. "{_format_scalar_for_error(item)}").'
             )
         validate_value(item, kind="frontmatter value")
         validated.append(item)
@@ -156,14 +171,11 @@ def _parse_in(key: str, op_value: Any) -> MetadataCondition:
 
 def _parse_ne(key: str, op_value: Any) -> MetadataCondition:
     if not isinstance(op_value, str):
-        stringified = (
-            "true" if op_value is True else "false" if op_value is False else str(op_value)
-        )
         raise ValidationError(
             f"metadata_filter[{key!r}]['ne'] must be a string, "
             f"got {type(op_value).__name__}. Frontmatter scalars are normalized "
             f"to strings at index time; pass the stringified form "
-            f'(e.g. {{{key!r}: {{"ne": "{stringified}"}}}}).'
+            f'(e.g. {{{key!r}: {{"ne": "{_format_scalar_for_error(op_value)}"}}}}).'
         )
     validate_value(op_value, kind="frontmatter value")
     return MetadataCondition(key=key, op="ne", value=op_value)
