@@ -14,6 +14,8 @@ import json
 import logging
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -136,22 +138,29 @@ class VaultIndex:
         self._init_db()
 
     def _init_db(self) -> None:
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             conn.executescript(_SCHEMA)
             conn.executescript(_FTS_SCHEMA)
             conn.executescript(_META_SCHEMA)
             conn.commit()
-        finally:
-            conn.close()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def connection(self) -> Iterator[sqlite3.Connection]:
+        """PRAGMA 適用済み SQLite 接続を context-manager で貸与する.
+
+        finally で確実に ``close()`` するボイラープレートを集約する。トランザクション
+        管理は呼び出し側で ``conn.commit()`` を明示すること (例外時は自動ロールバック
+        相当で単に close される)。
+        """
         conn = sqlite3.connect(str(self.db_path), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=-8000")  # 8MB
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # File iteration (safe)
@@ -200,9 +209,7 @@ class VaultIndex:
         force=True で全件リビルド。False なら mtime ベースの差分更新。
         """
         stats = {"added": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": 0}
-        conn = self._connect()
-
-        try:
+        with self.connection() as conn:
             # 現在のファイル一覧
             current_files: dict[str, float] = {}
             for md in self._iter_markdown_files():
@@ -260,8 +267,6 @@ class VaultIndex:
                 stats["skipped"],
                 stats["errors"],
             )
-        finally:
-            conn.close()
 
         return stats
 
@@ -300,8 +305,7 @@ class VaultIndex:
         except ValueError:
             logger.warning("Path traversal attempt blocked: %s", rel_path)
             return False
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             if not full_path.exists():
                 conn.execute("DELETE FROM notes WHERE path = ?", (rel_path,))
                 conn.commit()
@@ -317,8 +321,6 @@ class VaultIndex:
             conn.commit()
             self._cache.invalidate()
             return True
-        finally:
-            conn.close()
 
     # ------------------------------------------------------------------
     # Search — 3段パイプライン
@@ -416,8 +418,7 @@ class VaultIndex:
         ``metadata_conditions`` のいずれかがあれば、FTS5 を経由せず
         フィルタ専用パスで DB 全体を走査する。
         """
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             terms = query.strip().split()
 
             fts_terms = [t for t in terms if len(t) >= 3]
@@ -498,8 +499,6 @@ class VaultIndex:
                 }
                 for r in rows
             ]
-        finally:
-            conn.close()
 
     # ------------------------------------------------------------------
     # Structured queries (non-FTS)
@@ -507,8 +506,7 @@ class VaultIndex:
 
     def get_note(self, path: str) -> dict[str, Any] | None:
         """指定パスのノート全文を取得."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             row = conn.execute(
                 "SELECT path, title, folder, tags, aliases, created_at, modified_at, "
                 "content, frontmatter FROM notes WHERE path = ?",
@@ -527,8 +525,6 @@ class VaultIndex:
                 "content": row["content"],
                 "frontmatter": json.loads(row["frontmatter"]),
             }
-        finally:
-            conn.close()
 
     def recent_notes(
         self,
@@ -537,8 +533,7 @@ class VaultIndex:
         folder: str | None = None,
     ) -> list[dict[str, Any]]:
         """最近更新されたノート. offset スキップ後 limit 件を返す."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             if folder:
                 clause, folder_params = _folder_filter_clause(folder, column="folder")
                 rows = conn.execute(
@@ -564,13 +559,10 @@ class VaultIndex:
                 }
                 for r in rows
             ]
-        finally:
-            conn.close()
 
     def list_tags(self) -> list[dict[str, Any]]:
         """全タグと出現回数を返す."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             rows = conn.execute("SELECT tags FROM notes").fetchall()
             tag_count: dict[str, int] = {}
             for row in rows:
@@ -581,36 +573,27 @@ class VaultIndex:
                 key=lambda x: x["count"],
                 reverse=True,
             )
-        finally:
-            conn.close()
 
     def list_folders(self) -> list[dict[str, Any]]:
         """フォルダと含まれるノート数を返す."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             rows = conn.execute(
                 "SELECT folder, COUNT(*) as count FROM notes GROUP BY folder ORDER BY folder"
             ).fetchall()
             return [{"folder": r["folder"], "count": r["count"]} for r in rows]
-        finally:
-            conn.close()
 
     def list_frontmatter_keys(self) -> list[str]:
         """Vault 内 frontmatter のトップレベルキーをソート済みで返す."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT key FROM notes, json_each(notes.frontmatter) "
                 "WHERE json_valid(notes.frontmatter) ORDER BY key"
             ).fetchall()
             return [r["key"] for r in rows]
-        finally:
-            conn.close()
 
     def stats(self) -> dict[str, Any]:
         """インデックスの統計情報."""
-        conn = self._connect()
-        try:
+        with self.connection() as conn:
             total = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
             db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
             return {
@@ -619,5 +602,3 @@ class VaultIndex:
                 "db_size_mb": round(db_size / (1024 * 1024), 2),
                 "vault_root": str(self.vault_root),
             }
-        finally:
-            conn.close()
