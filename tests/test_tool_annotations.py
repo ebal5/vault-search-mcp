@@ -212,6 +212,100 @@ def test_schema_tools_resource_exposes_title(vault_index: VaultIndex) -> None:
         )
 
 
+@pytest.mark.parametrize(("tool_name", "expected"), list(_EXPECTED_ANNOTATIONS.items()))
+def test_tool_annotations_wire_model_dump_matches_expected(
+    tool_name: str,
+    expected: dict[str, bool | None],
+) -> None:
+    """tool.model_dump(mode='json')['annotations'] が期待値と一致する (wire-level guard).
+
+    Pydantic 属性アクセス (``tool.annotations.readOnlyHint``) ではなく JSON
+    serialize 後の dict を検証することで、FastMCP upgrade による silent regression
+    を検知する。具体的には:
+
+    - ``readOnlyHint`` が serialize 経路で落ちる (None/absent になる) 変更を検知
+    - None hint が ``False`` に変化して wire 上に現れる変更を検知
+
+    Issue #82 推奨修正: ``tool.model_dump(mode='json')["annotations"]`` 経路の guard。
+    """
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    tool = next((t for t in tools if t.name == tool_name), None)
+    assert tool is not None, f"tool not registered: {tool_name}"
+
+    dumped = tool.model_dump(mode="json")
+    assert "annotations" in dumped, (
+        f"{tool_name}: 'annotations' が model_dump(mode='json') に存在しない "
+        "(FastMCP の wire serialize 経路が annotations を落とした可能性)"
+    )
+    wire_ann = dumped["annotations"]
+    assert isinstance(wire_ann, dict), (
+        f"{tool_name}: wire annotations は dict であるべき, got {type(wire_ann).__name__}"
+    )
+
+    for key, expected_val in expected.items():
+        actual = wire_ann.get(key, "__absent__")
+        if expected_val is None:
+            # None hint は wire 上に現れない (None か absent) こと。
+            # False/True に変化すると auto-approve クライアントが誤判定するため NG。
+            assert actual in (None, "__absent__"), (
+                f"{tool_name}.{key}: None であるべき hint が {actual!r} として "
+                f"wire に serialize された (FastMCP/ToolAnnotations の変化を検知)"
+            )
+        else:
+            assert actual != "__absent__", (
+                f"{tool_name}.{key}: key が wire annotations dict に存在しない"
+            )
+            assert actual == expected_val, (
+                f"{tool_name}.{key}: wire 値不一致 — expected {expected_val!r}, got {actual!r}"
+            )
+
+
+@pytest.mark.parametrize(("tool_name", "expected"), list(_EXPECTED_ANNOTATIONS.items()))
+def test_tool_annotations_exclude_none_wire_omits_null_hints(
+    tool_name: str,
+    expected: dict[str, bool | None],
+) -> None:
+    """tool.annotations.model_dump(mode='json', exclude_none=True) が wire-safe dict を返す.
+
+    FastMCP が MCP wire serialize に ``exclude_none=True`` を使う前提で、
+    None hint が wire 上から落とされ True/False hint のみが残ることを検証する。
+
+    再現シナリオ:
+    - ``ToolAnnotations`` の default 値が ``None`` → ``False`` に変わると、
+      readOnly tool の ``destructiveHint=False`` が wire に載り auto-approve
+      クライアントが誤判定する。
+    - ``readOnlyHint=True`` が exclude_none で落ちると実クライアントが
+      writable として扱うリスクが生じる。
+
+    Issue #82 推奨修正: exclude_none 経路の wire-level guard。
+    """
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    tool = next((t for t in tools if t.name == tool_name), None)
+    assert tool is not None, f"tool not registered: {tool_name}"
+    assert tool.annotations is not None, f"{tool_name}: annotations is None"
+
+    wire_ann = tool.annotations.model_dump(mode="json", exclude_none=True)
+
+    for key, expected_val in expected.items():
+        actual = wire_ann.get(key, "__absent__")
+        if expected_val is None:
+            # None hint は exclude_none で消えているはず (key absent)
+            assert actual == "__absent__", (
+                f"{tool_name}.{key}: None hint が exclude_none dump に "
+                f"{actual!r} として残存 (wire regression — FastMCP/ToolAnnotations の変化)"
+            )
+        else:
+            # True/False hint は残っているはず
+            assert actual != "__absent__", (
+                f"{tool_name}.{key}: expected {expected_val!r} が "
+                f"exclude_none dump から消えた (wire regression)"
+            )
+            assert actual == expected_val, (
+                f"{tool_name}.{key}: exclude_none wire 値不一致 — "
+                f"expected {expected_val!r}, got {actual!r}"
+            )
+
+
 def test_schema_tools_resource_exposes_annotations(vault_index: VaultIndex) -> None:
     """``schema://tools`` リソースも各 tool の annotations を公開する.
 
