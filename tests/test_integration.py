@@ -1,6 +1,6 @@
 """統合シナリオテスト: schema://tools ドリブンのエージェント動作を再現する.
 
-個別ユニット (schema resource / metadata_filter / fields / validation) は
+個別ユニット (schema resource / metadata_filter / validation) は
 各モジュールのテストで既にカバー済み。本ファイルは「AI エージェントが
 schema resource を取得してから vault_search を呼ぶまで」の一連の流れを
 スキーマ構造レベルで辿り、各機能の接合部が壊れていないことを確認する。
@@ -200,14 +200,28 @@ def test_schema_driven_agent_flow(vault_index: VaultIndex) -> None:
     )
     assert len(result["results"]) >= 1
 
-    # SearchHit の基本フィールドが全て揃っていること
+    # SearchHit の全 8 フィールドが schema にも実レスポンスにも揃っていること
+    # (schema と実データの drift を検知する — `_search_hit_properties` が
+    # 部分一致で早期 return して 3 フィールドだけで pass しないよう強制)
+    expected_hit_fields = {
+        "path",
+        "title",
+        "folder",
+        "tags",
+        "snippet",
+        "score",
+        "created_at",
+        "modified_at",
+    }
     vault_search_entry = payload["tools"]["vault_search"]
     hit_props = _search_hit_properties(vault_search_entry["output_schema"])
-    assert hit_props, "SearchHit properties must be discoverable from output_schema"
+    assert expected_hit_fields.issubset(hit_props.keys()), (
+        f"SearchHit schema missing fields: {expected_hit_fields - hit_props.keys()}"
+    )
     for hit in result["results"]:
         assert isinstance(hit, dict)
-        assert set(hit_props).issubset(hit.keys()), (
-            f"missing keys: {set(hit_props) - set(hit.keys())}"
+        assert expected_hit_fields.issubset(hit.keys()), (
+            f"missing keys: {expected_hit_fields - hit.keys()}"
         )
         assert isinstance(hit["path"], str) and hit["path"].endswith(".md")
         assert isinstance(hit["title"], str)

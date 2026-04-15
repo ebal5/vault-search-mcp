@@ -248,9 +248,10 @@ def test_mcp_tool_vault_search_metadata_filter_invalid_operator(
 def _call_tool_structured(tool_name: str, arguments: dict) -> Any:
     """FastMCP の経路 (convert_result=True) でツールを実行し structured content を返す.
 
-    union 戻り型のツールは FastMCP が自動で ``{"result": ...}`` にラップするため、
-    ``result`` キーがあれば内側を返す (MCP プロトコル上も clients は通常
-    unstructured TextContent を読むので実害はないが、テスト側で unwrap する)。
+    全ツールは ``dict[str, Any]`` 戻り型に統一されているため、FastMCP の
+    wrap_output は発動しない前提。万一 FastMCP upgrade 等で ``{"result": ...}``
+    wrap が復活した場合は即座に気づけるよう明示的に assert する
+    (サイレントな unwrap は regression 検知効果を弱めるため行わない)。
     """
     mgr = server_mod.mcp._tool_manager
     tool = mgr.get_tool(tool_name)
@@ -259,8 +260,11 @@ def _call_tool_structured(tool_name: str, arguments: dict) -> Any:
     # output_schema が定義されていれば (unstructured, structured) のタプル。
     assert isinstance(result, tuple), f"expected structured output tuple, got {type(result)}"
     _unstructured, structured = result
-    if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
-        return structured["result"]
+    if isinstance(structured, dict):
+        assert set(structured.keys()) != {"result"}, (
+            f"{tool_name}: structured content wrapped in 'result' (FastMCP wrap_output drift): "
+            f"{structured!r}"
+        )
     return structured
 
 
