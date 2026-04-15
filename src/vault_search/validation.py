@@ -23,6 +23,9 @@ Design notes
 from __future__ import annotations
 
 import re
+from typing import ClassVar
+
+from .exceptions import VaultSearchError
 
 __all__ = [
     "LIMIT_MAX",
@@ -63,13 +66,15 @@ _DEFAULT_IDENTIFIER_MAX_LEN = 128
 _DEFAULT_VALUE_MAX_LEN = 1024
 
 
-class ValidationError(ValueError):
+class ValidationError(VaultSearchError, ValueError):
     """Raised when an agent-supplied input fails validation.
 
-    Inherits from :class:`ValueError` so code that catches ``ValueError``
-    keeps working. Catch ``ValidationError`` explicitly to distinguish
-    input-validation failures from other value errors.
+    Inherits from both :class:`VaultSearchError` and :class:`ValueError` so
+    code that catches ``ValueError`` keeps working. Catch ``ValidationError``
+    explicitly to distinguish input-validation failures from other value errors.
     """
+
+    error_code: ClassVar[str] = "VALIDATION_ERROR"
 
 
 def validate_identifier(
