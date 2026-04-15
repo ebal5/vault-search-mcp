@@ -18,9 +18,9 @@
 
 - `@mcp.tool()` に `output_schema` 引数がないため、dict 戻り型は generic な
   `{"additionalProperties": true}` になる
-- rich schema は起動時に `_inject_rich_output_schemas()` で
-  `_tool_manager.tools[name].fn_metadata.output_schema` を書き換え
-  (内部 API 依存、FastMCP upgrade 時注意、TODO コメント参照)
+- rich schema は起動時に `mcp_contract.inject_rich_output_schemas(mcp)` で
+  `_tool_manager._tools[name].fn_metadata.output_schema` を書き換え
+  (内部 API 依存、FastMCP upgrade 時注意、TODO コメントは mcp_contract.py 内に集約)
 - MCP lowlevel は structuredContent に対し
   `jsonschema.validate(instance, outputSchema)` を強制する
   → 注入する schema は実レスポンスと厳密一致させる (`extra="forbid"` の
@@ -44,4 +44,4 @@
 ## 将来の解消候補
 
 - FastMCP 上流で `@tool(output_schema=...)` 公式対応が入れば
-  `_inject_rich_output_schemas()` のハックは撤去可能
+  `mcp_contract.inject_rich_output_schemas()` のハックは撤去可能

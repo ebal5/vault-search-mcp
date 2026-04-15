@@ -23,7 +23,7 @@ import pytest
 
 from vault_search import server as server_mod
 from vault_search.indexer import VaultIndex
-from vault_search.schemas import build_schema_payload
+from vault_search.mcp_contract import build_schema_payload
 
 
 @pytest.fixture(autouse=True)
