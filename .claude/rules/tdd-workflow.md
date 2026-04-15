@@ -71,6 +71,24 @@ Refactor は「計画 (Sonnet) → 評価 (Opus) → 実施 (Sonnet)」の 3 段
 1 件観測されている (prompt 指示なしの self-elevation) — コミット前に必ず
 `git diff .claude/settings.json` で確認する。
 
+### 既知の落とし穴: 大規模 edit + test 反復タスクは foreground agent でも timeout
+
+Sonnet foreground agent に「広範囲ファイル編集 + pytest 反復で整合性検証」を
+任せると ~90 分で stream idle timeout する実績あり (2026-04、PR #92 の fields
+削除委任時。12 tool use で timeout、commit ゼロ、partial edit のみ残存)。
+
+**判断指針**:
+
+- **read-only 調査** (Explore, review, grep/glob 系) → agent OK、安定
+- **単一ファイル小規模 edit** (1-50 行、pytest 反復不要) → agent OK
+- **広範囲 edit + 整合性検証** (複数ファイル、pytest 反復修正が絡む) → **親直接**
+  - 親の Edit tool 経由なら permission 通過が確実
+  - 途中状態の `git diff` が見える (timeout 時も partial を引き継げる)
+- **複数タスクを agent 並列化したい場合** → 各タスクを小さく切って個別 agent に
+
+timeout した partial edit は `git diff` で状態確認のうえ、親で残作業を完成
+させるか revert するか判断する (今回は partial を活かして親で完成)。
+
 ## Red/Green vs Test/Refactor — prefix 選択ガイド
 
 commit prefix は「振る舞いが変わるか」で選ぶ:
