@@ -120,6 +120,81 @@ def test_validate_identifier_rejects_disallowed_symbols(name: str) -> None:
         validate_identifier(name)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Equivalence classes for empty dot-separated segments.
+        # Keep representatives only; broader coverage (`a..`, `.a.b`,
+        # `a.b.`, `a...b`) is subsumed by these classes.
+        "..",  # dot-only (consecutive)
+        ".",  # dot-only (single)
+        ".a",  # leading empty
+        "a.",  # trailing empty
+        "a..b",  # consecutive empty between non-empty segments
+    ],
+)
+def test_validate_identifier_rejects_malformed_dots(name: str) -> None:
+    """Empty dot-segments expand to malformed SQLite JSON paths.
+
+    See issue #14: inputs like ``a..b`` used to pass ``_IDENTIFIER_RE``
+    and produced ``$.a..b`` which SQLite rejects with
+    ``sqlite3.OperationalError``. They must raise ``ValidationError``.
+    """
+    with pytest.raises(ValidationError):
+        validate_identifier(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.b",  # minimum 2-segment
+        "a.b.c",  # 3-segment
+        "x_y.z-w",  # segments mixing _ and -
+        "_._",  # single-char segments
+        "1.2.3",  # numeric segments
+    ],
+)
+def test_validate_identifier_accepts_dotted_paths(name: str) -> None:
+    """Positive boundary for the segment-joined-by-dot grammar.
+
+    Pairs with ``test_validate_identifier_rejects_malformed_dots`` so a
+    future regex change that accidentally bans valid dotted identifiers
+    is caught (silent regression on Obsidian nested-key support).
+    """
+    assert validate_identifier(name) == name
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "..",
+        ".",
+        ".a",
+        "a.",
+        "a..b",
+    ],
+)
+def test_validate_identifier_malformed_dot_message_names_the_cause(name: str) -> None:
+    """Empty-segment errors must name the structural cause, not the chars.
+
+    The previous message said ``"contains disallowed characters"`` for
+    inputs like ``a..b`` even though every individual character is in
+    the allowed set. That misleads agents into stripping characters
+    instead of fixing the dot structure. The message must instead
+    reference "empty"/"segment" so the agent can self-correct.
+    """
+    with pytest.raises(ValidationError) as exc:
+        validate_identifier(name)
+    msg = str(exc.value)
+    # The new message must name the empty-segment cause...
+    assert "empty" in msg and "segment" in msg, f"message should reference empty/segment: {msg!r}"
+    # ...and must NOT mislead with the char-level "disallowed characters"
+    # phrasing, which tricks agents into character-stripping retries.
+    assert "disallowed characters" not in msg, (
+        f"message should not blame chars for a structural error: {msg!r}"
+    )
+
+
 def test_validate_identifier_rejects_non_ascii_japanese() -> None:
     with pytest.raises(ValidationError):
         validate_identifier("重要")

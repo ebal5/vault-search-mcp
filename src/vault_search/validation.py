@@ -38,11 +38,15 @@ _LIMIT_MAX = 500
 
 
 # Allowed character class for identifiers (field names, frontmatter keys).
-# Obsidian nested-key convention requires ``.``; ``_`` and ``-`` are common
-# in user-authored frontmatter.
-_IDENTIFIER_PATTERN = r"[A-Za-z0-9_\-.]+"
+# Obsidian nested-key convention requires ``.`` as a segment separator; ``_``
+# and ``-`` are common in user-authored frontmatter. Dots are only permitted
+# between non-empty segments: leading, trailing, and consecutive dots would
+# expand to malformed SQLite JSON paths (e.g. ``$..foo``) and surface as
+# ``sqlite3.OperationalError`` instead of ``ValidationError`` (issue #14).
+_IDENTIFIER_SEGMENT = r"[A-Za-z0-9_\-]+"
+_IDENTIFIER_PATTERN = rf"{_IDENTIFIER_SEGMENT}(?:\.{_IDENTIFIER_SEGMENT})*"
 _IDENTIFIER_RE = re.compile(rf"^{_IDENTIFIER_PATTERN}$")
-_IDENTIFIER_ALLOWED_DESC = "A-Z a-z 0-9 _ - ."
+_IDENTIFIER_ALLOWED_DESC = "A-Z a-z 0-9 _ -, with . as separator between non-empty segments"
 
 # C0 controls (0x00-0x1F) + DEL (0x7F). Tabs/newlines are rejected because
 # they are never meaningful inside a field name or filter value and are a
@@ -95,8 +99,10 @@ def validate_identifier(
     ------
     ValidationError
         If ``name`` is empty, exceeds ``max_len``, contains control
-        characters (including NUL), attempts path traversal, or contains
-        any character outside ``A-Z a-z 0-9 _ - .``.
+        characters (including NUL), attempts path traversal, has an
+        empty dot-separated segment (leading/trailing/consecutive ``.``),
+        or contains any character outside ``A-Z a-z 0-9 _ -`` within a
+        segment.
     """
     if not isinstance(name, str):
         raise ValidationError(f"{kind} must be a string, got {type(name).__name__}")
@@ -107,6 +113,16 @@ def validate_identifier(
     if _CONTROL_RE.search(name):
         raise ValidationError(
             f"{kind} contains control characters; allowed: {_IDENTIFIER_ALLOWED_DESC}"
+        )
+    # Detect empty dot-separated segments before the generic char-class check
+    # so the error message names the structural cause (issue #14). Otherwise
+    # `a..b` would be reported as "disallowed characters" even though every
+    # character is in the allowed set, misleading agents into stripping
+    # characters instead of fixing the dot structure.
+    if ".." in name or name.startswith(".") or name.endswith("."):
+        raise ValidationError(
+            f"{kind} has empty dot-separated segment; "
+            f"use 'a.b' for nested keys (no leading/trailing/consecutive '.'): {name!r}"
         )
     if not _IDENTIFIER_RE.match(name):
         raise ValidationError(
