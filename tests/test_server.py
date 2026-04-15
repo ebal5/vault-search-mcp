@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 
 from vault_search import server as server_mod
+from vault_search.exceptions import NoteNotFoundError
 from vault_search.indexer import VaultIndex
 from vault_search.schemas import (
     FolderCount,
     NoteDetail,
-    NoteNotFoundError,
     RecentNote,
     SearchResponse,
     TagCount,

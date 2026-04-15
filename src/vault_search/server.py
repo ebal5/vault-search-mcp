@@ -24,13 +24,13 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .exceptions import NoteNotFoundError
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
     _TOOL_ENTRIES,
     _TOOL_SPECS,
     FolderCount,
     NoteDetail,
-    NoteNotFoundError,
     RecentNote,
     ReindexStats,
     SearchHit,
