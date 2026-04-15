@@ -352,3 +352,43 @@ def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> N
     assert "in" in msg, f"'in' not found in error message: {msg}"
     assert "ne" in msg, f"'ne' not found in error message: {msg}"
     assert "string" in msg, f"'string' not found in error message: {msg}"
+
+
+# ---------------------------------------------------------------------------
+# Operator Literal type consolidation (Issue #13 b)
+# ---------------------------------------------------------------------------
+
+
+def test_operator_literal_exported_from_filter() -> None:
+    """filter.py が Operator 型を公開し、eq/ne/in の 3 演算子を含むこと.
+
+    単一 source of truth として Operator Literal を filter.py で定義し、
+    他箇所が重複定義なしに参照できることを確認する。
+    """
+    import typing
+
+    import vault_search.filter as filter_mod
+
+    assert hasattr(filter_mod, "Operator"), (
+        "filter.py must expose Operator Literal type as single source of truth for operators"
+    )
+    args = set(typing.get_args(filter_mod.Operator))
+    assert args == {"eq", "ne", "in"}, f"Operator must cover exactly eq/ne/in: {args!r}"
+
+
+def test_explicit_ops_derived_from_operator() -> None:
+    """_EXPLICIT_OPS が Operator から eq を除いた派生であること."""
+    import typing
+
+    import vault_search.filter as filter_mod
+
+    assert hasattr(filter_mod, "Operator"), "Operator must be defined to derive _EXPLICIT_OPS"
+    assert hasattr(filter_mod, "_EXPLICIT_OPS"), "_EXPLICIT_OPS must be defined in filter.py"
+
+    expected = frozenset(op for op in typing.get_args(filter_mod.Operator) if op != "eq")
+    actual = frozenset(filter_mod._EXPLICIT_OPS)
+
+    assert actual == expected, (
+        f"_EXPLICIT_OPS {filter_mod._EXPLICIT_OPS!r} must match Operator-minus-eq {expected!r}"
+    )
+    assert "eq" not in filter_mod._EXPLICIT_OPS, "'eq' must not appear in _EXPLICIT_OPS"
