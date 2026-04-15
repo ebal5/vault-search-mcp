@@ -107,6 +107,57 @@ def test_ne_array_excludes_element_containing(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ne 配列型境界値テスト (Issue #43)
+#
+# 仕様まとめ:
+#   - 空配列 []         : key が存在し要素が一切ない → ne にマッチ
+#   - 1 要素一致        : 配列内に value が見つかる → 除外
+#   - 多要素 (一致含む) : 1 つでも value を含めば → 除外
+#   - 重複要素          : NOT EXISTS は重複の有無を問わず同じ → 除外
+#   - キー missing      : IS NOT NULL ガードで除外 (eq と対称の 3 値論理)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fm, ne_value, should_match",
+    [
+        ({"tags": []}, "x", True),
+        ({"tags": ["x"]}, "x", False),
+        ({"tags": ["x", "y", "z"]}, "x", False),
+        ({"tags": ["x", "x"]}, "x", False),
+        ({"other": "y"}, "x", False),
+    ],
+    ids=[
+        "empty-array",
+        "single-element-match",
+        "multi-element-has-match",
+        "duplicate-elements",
+        "missing-key",
+    ],
+)
+def test_ne_array_boundary_values(
+    conn: sqlite3.Connection,
+    fm: dict[str, object],
+    ne_value: str,
+    should_match: bool,
+) -> None:
+    """ne 演算子の配列型境界値テスト (Issue #43).
+
+    仕様:
+    - 空配列はマッチ: key が存在し value を含まない → NOT EXISTS = True
+    - 配列内に value が存在すれば除外 (1 要素 / 多要素 / 重複どれも同様)
+    - キー missing は eq/ne 両方からマッチしない (3 値論理)
+    """
+    conn.execute("INSERT INTO notes VALUES (?, ?)", ("target.md", json.dumps(fm)))
+    conn.commit()
+    hits = _select(conn, MetadataCondition("tags", "ne", ne_value))
+    if should_match:
+        assert "target.md" in hits, f"target.md (fm={fm!r}) should match ne={ne_value!r}"
+    else:
+        assert "target.md" not in hits, f"target.md (fm={fm!r}) should not match ne={ne_value!r}"
+
+
+# ---------------------------------------------------------------------------
 # in
 # ---------------------------------------------------------------------------
 
