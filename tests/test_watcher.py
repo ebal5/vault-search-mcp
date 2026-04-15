@@ -10,16 +10,14 @@ import pytest
 
 pytest.importorskip("watchdog")
 
-from vault_search.indexer import VaultIndex, VaultWatcher  # noqa: E402
+from vault_search.indexer import VaultIndex  # noqa: E402
+from vault_search.watcher import VaultWatcher  # noqa: E402
 
 
 def _indexed(index: VaultIndex, rel_path: str) -> bool:
     """rel_path が index に入っているかを DB 直叩きで確認."""
-    conn = index._connect()
-    try:
+    with index.connection() as conn:
         row = conn.execute("SELECT 1 FROM notes WHERE path = ?", (rel_path,)).fetchone()
-    finally:
-        conn.close()
     return row is not None
 
 
