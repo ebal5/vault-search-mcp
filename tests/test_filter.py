@@ -456,3 +456,112 @@ class TestParseMetadataFilterUnknownKey:
         assert len(err.did_you_mean) == 0
         # allowed には known_keys のソート済みリストが含まれる
         assert set(err.allowed) == {"status", "priority", "tags"}
+
+
+# ---------------------------------------------------------------------------
+# Range operator alias detection (Issue #87)
+#
+# gt / lt / gte / lte / > / < / >= / <= / greater_than / less_than 等の
+# 数値・日付 range 比較 alias を検知し、agent に「未対応であり、
+# クライアント側で post-filter せよ」と明示する。
+#
+# Red フェーズ: filter.py が未対応 alias に対して
+# error_code="UNSUPPORTED_RANGE_OPERATOR" と hint を返すよう
+# 実装される前の失敗テスト。
+# ---------------------------------------------------------------------------
+
+_RANGE_ALIASES = [
+    "gt",
+    "lt",
+    "gte",
+    "lte",
+    ">",
+    "<",
+    ">=",
+    "<=",
+    "greater_than",
+    "less_than",
+    "greater_than_or_equal",
+    "less_than_or_equal",
+]
+
+
+class TestRangeOperatorAliasDetection:
+    """range 比較 alias に対する ValidationError の構造的属性を検証する (Issue #87).
+
+    Red フェーズ: 以下の未実装振る舞いが FAIL することを確認する。
+    - 12 alias すべてで error_code="UNSUPPORTED_RANGE_OPERATOR" が送出される
+    - hint が non-None で "post-filter" または "client" を含む
+    - str(err) に問題のキー名と alias 名が含まれる
+    """
+
+    @pytest.mark.parametrize("alias", _RANGE_ALIASES)
+    def test_range_alias_raises_unsupported_range_operator(self, alias: str) -> None:
+        """range alias で UNSUPPORTED_RANGE_OPERATOR error_code の ValidationError が送出される."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priority": {alias: "3"}})
+        err = exc.value
+        assert err.error_code == "UNSUPPORTED_RANGE_OPERATOR", (
+            f"alias={alias!r}: expected error_code='UNSUPPORTED_RANGE_OPERATOR', "
+            f"got {err.error_code!r}"
+        )
+
+    @pytest.mark.parametrize("alias", _RANGE_ALIASES)
+    def test_range_alias_hint_mentions_post_filter_or_client(self, alias: str) -> None:
+        """range alias のエラー hint に 'post-filter' または 'client' が含まれる."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priority": {alias: "3"}})
+        err = exc.value
+        assert err.hint is not None, (
+            f"alias={alias!r}: hint must be non-None to guide agent self-correction"
+        )
+        hint_lower = err.hint.lower()
+        assert "post-filter" in hint_lower or "client" in hint_lower, (
+            f"alias={alias!r}: hint {err.hint!r} must mention 'post-filter' or 'client'"
+        )
+
+    @pytest.mark.parametrize("alias", _RANGE_ALIASES)
+    def test_range_alias_message_contains_key_and_alias(self, alias: str) -> None:
+        """range alias のエラーメッセージにキー名 'priority' と alias 名が含まれる."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priority": {alias: "3"}})
+        msg = str(exc.value)
+        assert "priority" in msg, (
+            f"alias={alias!r}: message {msg!r} must contain key name 'priority'"
+        )
+        assert alias in msg, f"alias={alias!r}: message {msg!r} must contain alias name {alias!r}"
+
+    # -----------------------------------------------------------------------
+    # Regression guard: generic unknown operator path は壊さない
+    # -----------------------------------------------------------------------
+
+    def test_bogus_operator_keeps_generic_error_code(self) -> None:
+        """完全に未知の演算子 'bogus' は UNSUPPORTED_RANGE_OPERATOR ではない generic error."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"foo": {"bogus": "v"}})
+        err = exc.value
+        assert err.error_code != "UNSUPPORTED_RANGE_OPERATOR", (
+            f"'bogus' should not be classified as a range operator alias; "
+            f"got error_code={err.error_code!r}"
+        )
+
+    def test_bogus_operator_message_contains_unsupported(self) -> None:
+        """完全に未知の演算子 'bogus' は従来通り 'Unsupported operator' メッセージを含む."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"foo": {"bogus": "v"}})
+        msg = str(exc.value)
+        assert "Unsupported operator" in msg or "unsupported" in msg.lower(), (
+            f"'bogus' operator message {msg!r} must mention unsupported operator"
+        )
+
+    def test_in_operator_is_not_range_alias(self) -> None:
+        """'in' 演算子は range alias ではなく、正常に MetadataCondition を返す."""
+        result = parse_metadata_filter({"priority": {"in": ["a"]}})
+        assert len(result) == 1
+        assert result[0].op == "in"
+
+    def test_ne_operator_is_not_range_alias(self) -> None:
+        """'ne' 演算子は range alias ではなく、正常に MetadataCondition を返す."""
+        result = parse_metadata_filter({"priority": {"ne": "a"}})
+        assert len(result) == 1
+        assert result[0].op == "ne"
