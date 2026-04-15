@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING, Any, Literal
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
-from .validation import ValidationError, validate_identifier
-
 if TYPE_CHECKING:
     from .indexer import VaultIndex
 
@@ -254,17 +252,6 @@ _OFFSET_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
-_FIELDS_INPUT_SCHEMA: dict[str, Any] = {
-    "type": ["array", "null"],
-    "items": {"type": "string"},
-    "description": (
-        "返却フィールド指定 (例: ['path', 'title'])。None/未指定で全フィールド返却。"
-        "指定時のレスポンスは output_schema のフルモデルではなく、"
-        "指定キーのみを持つ plain dict (list ツールは要素単位で subset) となる。"
-    ),
-}
-
-
 # MCP ``ToolAnnotations`` (issue #22 + review round 1, reviewers A-D).
 #
 # Spec-strict mapping:
@@ -298,7 +285,6 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "folder": _FOLDER_INPUT_SCHEMA,
                 "limit": _LIMIT_INPUT_SCHEMA,
                 "offset": _OFFSET_INPUT_SCHEMA,
-                "fields": _FIELDS_INPUT_SCHEMA,
                 "metadata_filter": {
                     "type": ["object", "null"],
                     "description": (
@@ -359,7 +345,6 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "fields": _FIELDS_INPUT_SCHEMA,
             },
             "required": ["path"],
         },
@@ -374,7 +359,6 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                 "limit": _LIMIT_INPUT_SCHEMA,
                 "offset": _OFFSET_INPUT_SCHEMA,
                 "folder": _FOLDER_INPUT_SCHEMA,
-                "fields": _FIELDS_INPUT_SCHEMA,
             },
         },
         output_model=RecentNote,
@@ -413,46 +397,16 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
 }
 
 
-_FIELDS_AWARE_TOOLS: frozenset[str] = frozenset({"vault_search", "vault_get_note", "vault_recent"})
-
-
-def _without_required(schema: dict[str, Any]) -> dict[str, Any]:
-    """schema のトップレベル ``required`` を除去した浅いコピーを返す.
-
-    ``additionalProperties`` / ``properties`` などは維持するため、fields subset
-    (指定キーのみを持つ dict) を許容しつつ余計なキー混入は引き続き弾く。
-    """
-    clone = dict(schema)
-    clone.pop("required", None)
-    return clone
-
-
-def _allow_subset(full_schema: dict[str, Any]) -> dict[str, Any]:
-    """full / subset のどちらも受け付ける anyOf schema を返す.
-
-    MCP lowlevel server (``mcp/server/lowlevel/server.py``) は structured content
-    を ``jsonschema.validate(instance, outputSchema)`` で強制検証するため、
-    ``fields`` 指定で subset dict を返す fields-aware ツールでは
-    ``required`` 違反が起きる。full と (required 抜き) subset の ``anyOf`` に
-    すれば両方が通る。``fields=None`` 時のレスポンスは full 分岐で検証されるため
-    required は維持され schema は緩みすぎない。
-    """
-    return {"anyOf": [full_schema, _without_required(full_schema)]}
-
-
 def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
     item_schema = spec.output_model.model_json_schema()
-    supports_fields = tool_name in _FIELDS_AWARE_TOOLS
     if spec.envelope_key is not None:
         # envelope dict: {<envelope_key>: [item, item, ...]}
-        # envelope 自身の required は維持し、items の required だけを緩める。
-        items_schema = _allow_subset(item_schema) if supports_fields else item_schema
         output_schema: dict[str, Any] = {
             "type": "object",
             "properties": {
                 spec.envelope_key: {
                     "type": "array",
-                    "items": items_schema,
+                    "items": item_schema,
                     "description": (
                         f"{spec.output_model.__name__} の配列 "
                         "(list 戻り型の FastMCP wrap を回避する envelope)"
@@ -462,28 +416,6 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
             "required": [spec.envelope_key],
             "additionalProperties": False,
         }
-    elif supports_fields and tool_name == "vault_search":
-        # SearchResponse: {tier, total, results: [SearchHit, ...]}
-        # 外枠 (tier/total/results) の required は維持、
-        # results.items (SearchHit) のみ subset 許容。
-        # Pydantic 生成スキーマは results.items を {"$ref": "#/$defs/SearchHit"}
-        # と参照するため、$defs から SearchHit 本体を取り出して inline anyOf に
-        # 差し替え、もはや参照先がない $defs は削除する (dead schema を残さない)。
-        output_schema = dict(item_schema)
-        hit_schema = output_schema["$defs"]["SearchHit"]
-        results_prop = dict(output_schema["properties"]["results"])
-        results_prop["items"] = _allow_subset(hit_schema)
-        output_schema["properties"] = {
-            **output_schema["properties"],
-            "results": results_prop,
-        }
-        output_schema.pop("$defs", None)
-    elif supports_fields:
-        # vault_get_note: トップレベルは {"type": "object", "properties": ...} の
-        # 対称 shape を維持し、required のみ外して subset を許容する。
-        # fields=None 時の全フィールド存在は server 側 Pydantic が保証するため、
-        # schema 層で required を緩めても runtime 契約は崩れない。
-        output_schema = _without_required(item_schema)
     else:
         output_schema = item_schema
     entry: dict[str, Any] = {
@@ -507,30 +439,6 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
 _TOOL_ENTRIES: dict[str, dict[str, Any]] = {
     name: _build_tool_entry(spec, name) for name, spec in _TOOL_SPECS.items()
 }
-
-
-def validate_fields(
-    model_cls: type[BaseModel],
-    fields: list[str] | None,
-) -> frozenset[str] | None:
-    """fields 指定を検証し、有効なフィールド名集合を返す.
-
-    fields=None → None (全フィールド返却)
-    fields=[] → ValidationError
-    fields に不正名/未知名 → ValidationError
-    """
-    if fields is None:
-        return None
-    if not isinstance(fields, list):
-        raise ValidationError(f"fields must be a list, got {type(fields).__name__}")
-    if len(fields) == 0:
-        raise ValidationError("fields must not be empty; pass null to return all fields")
-    allowed = frozenset(model_cls.model_fields.keys())
-    for name in fields:
-        validate_identifier(name, kind="field name", max_len=64)
-        if name not in allowed:
-            raise ValidationError(f"unknown field name: {name!r} (allowed: {sorted(allowed)})")
-    return frozenset(fields)
 
 
 def build_schema_payload(index: VaultIndex) -> dict[str, Any]:

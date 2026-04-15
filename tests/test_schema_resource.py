@@ -284,18 +284,15 @@ def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -
 
 
 # ---------------------------------------------------------------------------
-# Issue #55 R6.1: vault_get_note output_schema の shape 非対称と
-# vault_search の dead $defs/SearchHit を検出する。
+# vault_get_note output_schema の shape 検証
 # ---------------------------------------------------------------------------
 
 
 def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: VaultIndex) -> None:
     """vault_get_note の output_schema がトップレベルで ``type: object`` を持つこと.
 
-    他 6 ツールは ``{"type": "object", "properties": {...}}`` 形だが、
-    vault_get_note は Round 5 で ``_allow_subset`` 適用によりトップレベルが
-    ``{"anyOf": [...]}`` の包含構造になり、``type`` フィールドを失った。
-    エージェントの schema クローラが ``type == 'object'`` 前提だと silent skip。
+    全 7 ツールで ``{"type": "object", "properties": {...}}`` 形を維持する。
+    エージェントの schema クローラが ``type == 'object'`` 前提のことがあるため。
     """
     from vault_search.schemas import build_schema_payload
 
@@ -308,25 +305,6 @@ def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: Va
     assert "properties" in schema, (
         f"vault_get_note top-level must expose properties; got keys={list(schema.keys())}"
     )
-    # path は NoteDetail の必須キー相当で、subset 許容でも properties には残るべき
     assert "path" in schema["properties"], (
         f"vault_get_note properties must include 'path'; got {list(schema['properties'].keys())}"
-    )
-
-
-def test_vault_search_output_schema_has_no_dead_defs(vault_index: VaultIndex) -> None:
-    """vault_search の output_schema に参照ゼロの ``$defs`` が残存しないこと.
-
-    Round 5 で ``results.items`` は完全インライン anyOf に差し替わったが、
-    元の ``$defs/SearchHit`` が残ったままで、そちらは subset 未許容の
-    古い required を保持しており schema クローラに古い情報を返す dead schema。
-    """
-    from vault_search.schemas import build_schema_payload
-
-    payload = build_schema_payload(vault_index)
-    schema = payload["tools"]["vault_search"]["output_schema"]
-
-    assert "$defs" not in schema, (
-        f"vault_search output_schema still contains dead $defs: "
-        f"{list(schema.get('$defs', {}).keys())}"
     )

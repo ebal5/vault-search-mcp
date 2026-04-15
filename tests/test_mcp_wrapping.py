@@ -50,18 +50,6 @@ def test_vault_search_structured_content_not_wrapped(vault_index: VaultIndex) ->
         )
 
 
-def test_vault_search_fields_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
-    """fields 指定時も structured content が wrap されない."""
-    _content, structured = _call_tool(
-        "vault_search",
-        {"query": "obsidian", "fields": ["path", "title"]},
-    )
-    assert isinstance(structured, dict)
-    assert set(structured.keys()) >= {"tier", "total", "results"}
-    for hit in structured["results"]:
-        assert set(hit.keys()) == {"path", "title"}
-
-
 def test_vault_get_note_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
     """vault_get_note の structured content が wrap されない."""
     _content, structured = _call_tool("vault_get_note", {"path": "Welcome.md"})
@@ -137,60 +125,17 @@ def _get_tool_output_schema(tool_name: str) -> dict[str, Any]:
     return tool.outputSchema
 
 
-def test_mcp_vault_search_fields_subset_passes_lowlevel_validation(
-    vault_index: VaultIndex,
-) -> None:
-    """fields 指定 subset が MCP outputSchema で jsonschema.validate パスすること.
-
-    MCP lowlevel server (mcp/server/lowlevel/server.py) は structured content に
-    対し outputSchema で jsonschema.validate を強制する。rich schema が
-    required=[path, title, folder, ...] を持っていると fields=["path","title"]
-    の subset が required 違反で拒否される regression を検出する。
-    """
-    _content, structured = _call_tool(
-        "vault_search",
-        {"query": "obsidian", "fields": ["path", "title"]},
-    )
-    schema = _get_tool_output_schema("vault_search")
-    jsonschema.validate(structured, schema)
-
-
 def test_mcp_vault_search_full_response_validates(vault_index: VaultIndex) -> None:
-    """fields=None でも schema が緩みすぎないこと (required 維持)."""
+    """vault_search の structured content が outputSchema を満たす (required 維持)."""
     _content, structured = _call_tool("vault_search", {"query": "obsidian"})
     schema = _get_tool_output_schema("vault_search")
     jsonschema.validate(structured, schema)
-    # 少なくとも tier/total は required のまま (schema が緩みすぎていない)
     assert set(schema.get("required", [])) >= {"tier", "total"}
-
-
-def test_mcp_vault_get_note_fields_subset_passes_lowlevel_validation(
-    vault_index: VaultIndex,
-) -> None:
-    """vault_get_note の fields subset が jsonschema.validate パス."""
-    _content, structured = _call_tool(
-        "vault_get_note",
-        {"path": "Welcome.md", "fields": ["path", "title"]},
-    )
-    schema = _get_tool_output_schema("vault_get_note")
-    jsonschema.validate(structured, schema)
 
 
 def test_mcp_vault_get_note_full_response_validates(vault_index: VaultIndex) -> None:
     _content, structured = _call_tool("vault_get_note", {"path": "Welcome.md"})
     schema = _get_tool_output_schema("vault_get_note")
-    jsonschema.validate(structured, schema)
-
-
-def test_mcp_vault_recent_fields_subset_passes_lowlevel_validation(
-    vault_index: VaultIndex,
-) -> None:
-    """vault_recent envelope の items が fields subset でも jsonschema.validate パス."""
-    _content, structured = _call_tool(
-        "vault_recent",
-        {"limit": 3, "fields": ["path", "title"]},
-    )
-    schema = _get_tool_output_schema("vault_recent")
     jsonschema.validate(structured, schema)
 
 
@@ -238,24 +183,16 @@ def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> N
     両者の properties キー集合が一致することを保証する regression。
     """
 
-    def _top_props(schema: dict[str, Any]) -> dict[str, Any]:
-        """anyOf でラップされた schema からも full 分岐の properties を取り出す."""
-        if "properties" in schema:
-            return schema["properties"]
-        if "anyOf" in schema and schema["anyOf"]:
-            return schema["anyOf"][0].get("properties", {})
-        return {}
-
     tools = asyncio.run(server_mod.mcp.list_tools())
     payload = build_schema_payload(vault_index)
     for tool in tools:
         assert tool.outputSchema is not None, f"{tool.name}: outputSchema missing"
         resource_schema = payload["tools"][tool.name]["output_schema"]
-        props = _top_props(tool.outputSchema)
+        props = tool.outputSchema.get("properties", {})
         assert props, (
             f"{tool.name}: MCP outputSchema has no properties (empty schema): {tool.outputSchema}"
         )
-        resource_props = _top_props(resource_schema)
+        resource_props = resource_schema.get("properties", {})
         assert set(props.keys()) == set(resource_props.keys()), (
             f"{tool.name}: MCP outputSchema keys {set(props.keys())} "
             f"!= resource schema keys {set(resource_props.keys())}"
