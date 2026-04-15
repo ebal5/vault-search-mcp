@@ -18,6 +18,7 @@ description: |
   - python -c "print(1+1)" レベルの 1 行 snippet
     (ただし未知モジュールを import する場合は対象)
 allowed-tools: Agent, Read, Write, Bash
+model: haiku
 ---
 
 # Execute Script Safely
