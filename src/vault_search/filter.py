@@ -35,6 +35,27 @@ Operator = Literal["eq", "ne", "in"]
 # 明示的に dict 値で指定できる演算子。``eq`` は str 値による暗黙指定のみ。
 _EXPLICIT_OPS: tuple[str, ...] = tuple(op for op in get_args(Operator) if op != "eq")
 
+# Numeric / date range comparison aliases. These are not supported in
+# metadata_filter (index-time string normalization makes ordered comparison
+# semantically undefined); detecting them lets agents self-correct to a
+# client-side post-filter instead of retrying aliases like gt/gte/>=. (#87)
+_RANGE_OP_ALIASES: frozenset[str] = frozenset(
+    {
+        "gt",
+        "lt",
+        "gte",
+        "lte",
+        ">",
+        "<",
+        ">=",
+        "<=",
+        "greater_than",
+        "less_than",
+        "greater_than_or_equal",
+        "less_than_or_equal",
+    }
+)
+
 
 @dataclass(frozen=True)
 class MetadataCondition:
@@ -138,6 +159,19 @@ def _parse_operator_dict(key: str, op_dict: dict[Any, Any]) -> MetadataCondition
             f"Unsupported operator 'eq' for key {key!r}; "
             f'use a bare string value for equality (e.g. {{{key!r}: "..."}}) '
             f"or one of: {', '.join(_EXPLICIT_OPS)}"
+        )
+    if op in _RANGE_OP_ALIASES:
+        raise ValidationError(
+            f"Unsupported operator {op!r} for key {key!r}: "
+            f"numeric/date range comparison is not supported in metadata_filter. "
+            f"Retrieve the notes first and apply post-filter on the client side. "
+            f"For equality checks use a bare string (implicit eq), ne, or in.",
+            error_code="UNSUPPORTED_RANGE_OPERATOR",
+            hint=(
+                "metadata_filter values are stored as strings (index-time "
+                "normalization). Use in/ne/eq for equality, and perform "
+                "numeric/date comparison on the client side after retrieval."
+            ),
         )
     if op not in _EXPLICIT_OPS:
         raise ValidationError(
