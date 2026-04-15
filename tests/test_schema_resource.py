@@ -247,6 +247,47 @@ def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -
 
 
 # ---------------------------------------------------------------------------
+# ne 演算子スキーマの 3 値論理明示 (Issue #50)
+# ---------------------------------------------------------------------------
+
+
+def test_ne_operator_description_mentions_missing_key_behavior(vault_index: VaultIndex) -> None:
+    """ne 演算子の schema 内 description にキー欠落はマッチしないことが明記されること.
+
+    ``{"status": {"ne": "active"}}`` で status キーを持たないノートが除外される
+    3 値論理は直感に反する。エージェントが「ne が効かない」と誤診しないよう、
+    ne プロパティ自身の description に挙動を明示する (Issue #50)。
+
+    確認項目:
+    - ne プロパティが description を持つ
+    - description に「キー欠落」「存在しない」「3値」「missing」のいずれかを含む
+    """
+    from vault_search.mcp_contract import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    mf_schema = payload["tools"]["vault_search"]["input_schema"]["properties"]["metadata_filter"]
+    ap = mf_schema["additionalProperties"]
+    oneof = ap["oneOf"]
+
+    ne_variant = next(
+        (v for v in oneof if v.get("type") == "object" and "ne" in v.get("properties", {})),
+        None,
+    )
+    assert ne_variant is not None, "ne operator variant not found in oneOf"
+
+    ne_schema = ne_variant["properties"]["ne"]
+    desc = ne_schema.get("description", "")
+    assert isinstance(desc, str) and desc.strip(), (
+        "ne property schema must have a non-empty description"
+    )
+    keywords = ("3値", "キー欠落", "存在しない", "missing")
+    assert any(kw in desc for kw in keywords), (
+        f"ne description must mention 3-value logic or missing-key behavior "
+        f"(expected one of {keywords}): {desc!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # vault_get_note output_schema の shape 検証
 # ---------------------------------------------------------------------------
 
