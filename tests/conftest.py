@@ -64,6 +64,13 @@ SAMPLE_NOTES: dict[str, str] = {
         "---\n"
         "Research notes about obsidian usage patterns.\n"
     ),
+    # folder prefix テスト用マーカーノート (Projects 配下)
+    # test_folder_prefix_does_not_match_sibling が vacuous pass にならないよう
+    # "obsidian-marker-projects" というユニークトークンで positively ヒットさせる
+    "Projects/marker.md": (
+        "---\ntitle: Projects Marker\n---\n"
+        "obsidian-marker-projects unique token for folder prefix test.\n"
+    ),
     # 除外対象: `_` プレフィックスフォルダ (root level)
     "_archive/old.md": ("---\ntags: [archived]\n---\nArchived content about obsidian.\n"),
     # 除外対象: `.` プレフィックスフォルダ

@@ -333,9 +333,10 @@ def test_vault_search_rejects_limit_above_max(vault_index: VaultIndex) -> None:
 def test_vault_recent_accepts_offset_parameter(vault_index: VaultIndex) -> None:
     """vault_recent に offset 引数があり、指定分スキップする."""
     fn = _fn(server_mod.vault_recent)
-    full = fn(limit=5)
+    # limit=50 で全件取得し、SAMPLE_NOTES の増減に依存しない形で検証する
+    full = fn(limit=50)
     assert len(full["notes"]) >= 2, "テスト前提: 最低 2 件の recent notes が必要"
-    skipped = fn(limit=5, offset=1)
+    skipped = fn(limit=50, offset=1)
     assert skipped["notes"] == full["notes"][1:], "offset=1 は先頭 1 件を省いた結果を返すこと"
 
 
