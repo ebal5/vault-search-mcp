@@ -65,7 +65,13 @@ def _parse_yaml_fallback(text: str) -> dict[str, Any]:
 
 @dataclass
 class ParsedNote:
-    """パース済みノートの構造."""
+    """パース済みノートの構造.
+
+    ``frontmatter`` は構築時に :func:`_normalize_fm` で再帰正規化される。
+    ``parse_note`` 以外の経路で ``ParsedNote`` を直接構築しても SQL 層の
+    str→str 不変条件が保たれる (trust boundary を dataclass に閉じ込める)。
+    ``_normalize_scalar`` は str を素通しするため二重適用しても冪等。
+    """
 
     path: str  # Vault ルートからの相対パス
     title: str
@@ -77,13 +83,19 @@ class ParsedNote:
     frontmatter: dict[str, Any] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # 直接構築された ParsedNote にも正規化を強制する (Reviewer D7: trust boundary).
+        self.frontmatter = _normalize_fm(self.frontmatter)
+
     @property
     def tags_json(self) -> str:
         return json.dumps(self.tags, ensure_ascii=False)
 
     @property
     def frontmatter_json(self) -> str:
-        return json.dumps(self.frontmatter, ensure_ascii=False, default=str)
+        # 正規化済みのはずなので default は不要。非 JSON 値が来たら TypeError を
+        # 落として bug を可視化する (Reviewer A3 / D11: silent coercion を許さない).
+        return json.dumps(self.frontmatter, ensure_ascii=False)
 
 
 def _normalize_scalar(v: Any) -> Any:
@@ -157,15 +169,12 @@ def parse_note(file_path: Path, vault_root: Path) -> ParsedNote | None:
     except (UnicodeDecodeError, OSError):
         return None
 
-    # frontmatter 分離
+    # frontmatter 分離 — 正規化は ``ParsedNote.__post_init__`` に一任 (Issue #15 / #49).
     fm: dict[str, Any] = {}
     content = text
     m = _FM_RE.match(text)
     if m:
         fm = _parse_yaml(m.group(1))
-        # metadata_filter 比較は常に str のため、スカラー値を parse 時に正規化
-        # (Issue #15 / #49)。これ以降 fm は str / list[str] / dict / None のみ。
-        fm = _normalize_fm(fm)
         content = text[m.end() :]
 
     # タグ: frontmatter + インライン
