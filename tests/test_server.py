@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -347,3 +348,113 @@ def test_vault_recent_rejects_negative_offset(vault_index: VaultIndex) -> None:
     fn = _fn(server_mod.vault_recent)
     with pytest.raises((ValueError, ValidationError)):
         fn(limit=5, offset=-1)
+
+
+# ---------------------------------------------------------------------------
+# Issue #90: int / bool frontmatter filter の MCP convert_result 経路 regression guard
+# VaultIndex.search 直接呼び出しでは FastMCP の convert_result / structuredContent
+# シリアライズを通らないため、MCP tool 経由での別途 guard が必要。
+# ---------------------------------------------------------------------------
+
+_INT_BOOL_NOTES: dict[str, str] = {
+    "hi.md": (
+        "---\n"
+        "title: High Priority\n"
+        "priority: 5\n"
+        "published: true\n"
+        "---\n"
+        "High priority note with numeric frontmatter.\n"
+    ),
+    "lo.md": (
+        "---\n"
+        "title: Low Priority\n"
+        "priority: 1\n"
+        "published: false\n"
+        "---\n"
+        "Low priority note with different values.\n"
+    ),
+}
+
+
+@pytest.fixture
+def _vault_index_with_int(tmp_path: Path) -> VaultIndex:
+    """int/bool フロントマター付きの一時 Vault を作る local fixture.
+
+    SAMPLE_NOTES を汚染しないよう独立した tmp_path サブディレクトリを使う
+    (conftest.py の ``vault_index`` fixture と db ファイル名が衝突しないよう
+    ``int_vault/`` / ``int_test.db`` で分離)。
+    """
+    root = tmp_path / "int_vault"
+    root.mkdir()
+    for rel, body in _INT_BOOL_NOTES.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    db_path = tmp_path / "int_test.db"
+    idx = VaultIndex(root, db_path=db_path)
+    idx.build_index()
+    return idx
+
+
+def test_mcp_tool_vault_search_metadata_filter_int(
+    _vault_index_with_int: VaultIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """int frontmatter の eq filter が _fn 経路で機能する."""
+    monkeypatch.setattr(server_mod, "_index", _vault_index_with_int)
+    fn = _fn(server_mod.vault_search)
+    res = fn("", None, None, 20, 0, {"priority": "5"})
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
+    assert "hi.md" in paths
+    assert "lo.md" not in paths
+
+
+def test_mcp_tool_vault_search_metadata_filter_bool(
+    _vault_index_with_int: VaultIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bool frontmatter の eq filter が _fn 経路で機能する."""
+    monkeypatch.setattr(server_mod, "_index", _vault_index_with_int)
+    fn = _fn(server_mod.vault_search)
+    res = fn("", None, None, 20, 0, {"published": "true"})
+    assert isinstance(res, dict)
+    paths = {hit["path"] for hit in res["results"]}
+    assert "hi.md" in paths
+    assert "lo.md" not in paths
+
+
+def test_mcp_convert_result_vault_search_metadata_filter_int(
+    _vault_index_with_int: VaultIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """int frontmatter filter が FastMCP convert_result 経路で正しくシリアライズされる guard.
+
+    VaultIndex.search 直呼びでは通らない FastMCP の structuredContent 経路を
+    明示的に通すことで、将来 MCP 層で silent degradation が起きても検知できる。
+    """
+    monkeypatch.setattr(server_mod, "_index", _vault_index_with_int)
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "", "metadata_filter": {"priority": "5"}},
+    )
+    assert isinstance(structured, dict)
+    paths = {hit["path"] for hit in structured["results"]}
+    assert "hi.md" in paths
+    assert "lo.md" not in paths
+
+
+def test_mcp_convert_result_vault_search_metadata_filter_bool(
+    _vault_index_with_int: VaultIndex,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bool frontmatter filter が FastMCP convert_result 経路で正しくシリアライズされる guard."""
+    monkeypatch.setattr(server_mod, "_index", _vault_index_with_int)
+    structured = _call_tool_structured(
+        "vault_search",
+        {"query": "", "metadata_filter": {"published": "true"}},
+    )
+    assert isinstance(structured, dict)
+    paths = {hit["path"] for hit in structured["results"]}
+    assert "hi.md" in paths
+    assert "lo.md" not in paths
