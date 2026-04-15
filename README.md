@@ -89,9 +89,9 @@ AI エージェントが初回起動時に `read_resource` で取得すること
 理由で envelope dict (`{"notes": [...]}` / `{"tags": [...]}` / `{"folders": [...]}`) を返す。
 
 `dict` 戻り型のままだと FastMCP 自動生成の `outputSchema` は空 schema に退化するため、
-登録後に `_TOOL_ENTRIES[<name>]["output_schema"]` を MCP `Tool.output_schema` へ差し戻し、
+登録後に `TOOL_ENTRIES[<name>]["output_schema"]` を MCP `Tool.output_schema` へ差し戻し、
 `schema://tools` と MCP `tools/list` の両方で同一の rich schema を公開している
-(`server._inject_rich_output_schemas()`)。
+(`mcp_contract.inject_rich_output_schemas()`)。
 
 ### Breaking changes (Pydantic 移行)
 

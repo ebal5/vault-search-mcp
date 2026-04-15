@@ -310,24 +310,3 @@ def test_validate_value_error_message_includes_custom_kind() -> None:
     with pytest.raises(ValidationError) as exc:
         validate_value("bad\x00value", kind="frontmatter value")
     assert "frontmatter value" in str(exc.value)
-
-
-# ---------------------------------------------------------------------------
-# LIMIT_MAX single-source invariant — validation.py が真実のソースで、
-# schemas._LIMIT_INPUT_SCHEMA が同じ値を参照していることを pin する。
-# ---------------------------------------------------------------------------
-
-
-def test_limit_input_schema_maximum_matches_limit_max() -> None:
-    from vault_search.schemas import _LIMIT_INPUT_SCHEMA
-    from vault_search.validation import LIMIT_MAX
-
-    assert _LIMIT_INPUT_SCHEMA["maximum"] == LIMIT_MAX
-
-
-def test_limit_input_schema_description_references_limit_max() -> None:
-    """description 文字列中の数値も LIMIT_MAX から展開されていること (stale 防止)."""
-    from vault_search.schemas import _LIMIT_INPUT_SCHEMA
-    from vault_search.validation import LIMIT_MAX
-
-    assert str(LIMIT_MAX) in _LIMIT_INPUT_SCHEMA["description"]

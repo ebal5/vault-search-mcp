@@ -26,9 +26,12 @@ from mcp.server.fastmcp import FastMCP
 
 from .exceptions import NoteNotFoundError
 from .indexer import VaultIndex, VaultWatcher
+from .mcp_contract import (
+    TOOL_SPECS,
+    build_schema_payload,
+    inject_rich_output_schemas,
+)
 from .schemas import (
-    _TOOL_ENTRIES,
-    _TOOL_SPECS,
     FolderCount,
     NoteDetail,
     RecentNote,
@@ -37,7 +40,6 @@ from .schemas import (
     SearchResponse,
     TagCount,
     VaultStats,
-    build_schema_payload,
 )
 from .validation import validate_pagination
 
@@ -63,13 +65,13 @@ def _get_index() -> VaultIndex:
 
 mcp = FastMCP("vault-search")
 
-# MCP tool annotations は ``_TOOL_SPECS`` をカノニカルソースとする
-# (schemas.py: issue #22 + review round 1 の整理を参照)。
+# MCP tool annotations は ``TOOL_SPECS`` をカノニカルソースとする
+# (mcp_contract.py: issue #22 + review round 1 の整理を参照)。
 # schema://tools リソースと MCP tools/list の両経路で同一メタデータを公開し、
 # server.py 側で定数を重複定義しない。
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_search"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_search"].annotations)
 def vault_search(
     query: str,
     tags: list[str] | None = None,
@@ -119,7 +121,7 @@ def vault_search(
     ).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_get_note"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_get_note"].annotations)
 def vault_get_note(path: str) -> dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
@@ -140,7 +142,7 @@ def vault_get_note(path: str) -> dict[str, Any]:
     return NoteDetail(**result).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_recent"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_recent"].annotations)
 def vault_recent(
     limit: int = 20,
     offset: int = 0,
@@ -168,7 +170,7 @@ def vault_recent(
     return {"notes": notes}
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_tags"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_tags"].annotations)
 def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
@@ -180,7 +182,7 @@ def vault_tags() -> dict[str, Any]:
     return {"tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]}
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_folders"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_folders"].annotations)
 def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
 
@@ -197,7 +199,7 @@ def vault_folders() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_reindex"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_reindex"].annotations)
 def vault_reindex(force: bool = False) -> dict[str, Any]:
     """インデックスを再構築する。
 
@@ -213,7 +215,7 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
 
 
-@mcp.tool(annotations=_TOOL_SPECS["vault_stats"].annotations)
+@mcp.tool(annotations=TOOL_SPECS["vault_stats"].annotations)
 def vault_stats() -> dict[str, Any]:
     """インデックスの統計情報を返す。
 
@@ -227,42 +229,9 @@ def vault_stats() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # MCP outputSchema injection
 # ---------------------------------------------------------------------------
-#
-# 背景:
-#   各ツールは戻り型を ``dict[str, Any]`` に統一している。これは
-#   ``SearchResponse | dict[str, Any]`` の Union が FastMCP の wrap_output=True を
-#   誘発し structured content が ``{"result": ...}`` にラップされる問題を回避するため。
-#
-# 副作用:
-#   ``dict[str, Any]`` 戻り型から FastMCP が自動生成する outputSchema は
-#   ``{"type": "object", "additionalProperties": true}`` 相当の空 schema になり、
-#   schema://tools リソースが公開する rich schema と drift する (カノニカルソース 2 つ問題)。
-#
-# 対応:
-#   登録済み Tool の ``fn_metadata.output_schema`` を _TOOL_ENTRIES の rich schema に
-#   差し替え、MCP tools/list の outputSchema を schema://tools と同じカノニカル形に
-#   揃える。``Tool.output_schema`` は cached_property のため、instance dict に
-#   直接書き込んでプロパティ評価をバイパスする。
-#
-# TODO(FastMCP):
-#   FastMCP が @tool(output_schema=...) のような公式 API を提供したら移行する。
-#   参考: mcp/server/fastmcp/server.py の tool() シグネチャ (2026-04 現在 output_schema なし)。
+# 実体 + TODO(FastMCP) コメントは mcp_contract.inject_rich_output_schemas を参照。
 
-
-def _inject_rich_output_schemas() -> None:
-    """登録済み MCP ツールの outputSchema を schema://tools と同じ rich schema に差し替える."""
-    tool_manager = mcp._tool_manager  # noqa: SLF001 — FastMCP 公式 API 不在のため内部参照
-    for tool_name, entry in _TOOL_ENTRIES.items():
-        tool = tool_manager._tools.get(tool_name)  # noqa: SLF001
-        if tool is None:  # pragma: no cover — 実装ミス以外では起きない
-            raise RuntimeError(f"Tool not registered: {tool_name}")
-        rich_schema = entry["output_schema"]
-        tool.fn_metadata.output_schema = rich_schema
-        # cached_property をバイパスして MCP list_tools 経路に rich schema を公開
-        tool.__dict__["output_schema"] = rich_schema
-
-
-_inject_rich_output_schemas()
+inject_rich_output_schemas(mcp)
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +244,8 @@ def schema_resource() -> dict[str, Any]:
     """全ツールの入出力スキーマと frontmatter キー一覧を返す.
 
     schema://tools の output_schema と MCP tools/list の outputSchema は
-    _TOOL_ENTRIES を共通のカノニカルソースとして同一内容になる
-    (_inject_rich_output_schemas 参照)。
+    ``TOOL_ENTRIES`` を共通のカノニカルソースとして同一内容になる
+    (``mcp_contract.inject_rich_output_schemas`` 参照)。
     """
     return build_schema_payload(_get_index().list_frontmatter_keys())
 
