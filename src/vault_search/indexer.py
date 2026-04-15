@@ -183,10 +183,15 @@ def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, lis
     `folder == 'Projects'` が `'Projects Hermes'` 等の兄弟を拾わないよう、
     LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
 
+    入力は `\\` → `/` 置換、末尾 `/` の rstrip で正規化する。正規化後が空
+    文字列 (e.g. `folder='/'`, `'//'`, `'\\'`) の場合は「フィルタなし」を意味
+    する no-op 断片 ``"1=1"`` と空 params を返す。
+
     Parameters
     ----------
     folder:
-        フォルダパス (非空文字列想定; 空文字はフィルタを掛けないので呼び出し側で分岐)。
+        フォルダパス。空文字はフィルタを掛けないので呼び出し側で分岐する前提
+        だが、正規化後に空となるケース (スラッシュのみ) は本関数が no-op で吸収する。
     column:
         SQL 上のカラム名。`n.folder` のようにテーブルエイリアス付きも可。
 
@@ -195,8 +200,14 @@ def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, lis
     tuple[str, list[Any]]
         ``(clause, params)``。clause は前置詞を含まない WHERE 断片
         ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
+        正規化後空の場合は ``("1=1", [])``。
     """
     folder = folder.replace("\\", "/").rstrip("/")
+    if not folder:
+        # `/`, `//`, `\\` 等のスラッシュのみ入力は rstrip 後 '' となり、
+        # 呼び出し側の `if folder:` ガードは素通りしている。ここで no-op
+        # 断片 ("1=1") を返し「フィルタなし」扱いに揃える (Issue #34)。
+        return "1=1", []
     escaped = folder.replace("%", "\\%").replace("_", "\\_")
     clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
     return clause, [folder, escaped + "/%"]

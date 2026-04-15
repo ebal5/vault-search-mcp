@@ -344,7 +344,9 @@ def test_folder_filter_trailing_slash_normalized(vault_index: VaultIndex, tmp_va
     # 基準 (非空) — vacuous pass 防止のため最初に非空を assert
     res_bare = vault_index.search("日本語", folder="Projects")
     paths_bare = {r["path"] for r in res_bare["results"]}
-    assert "Projects/日本語ノート.md" in paths_bare, "fixture regression: bare folder search returned empty"
+    assert "Projects/日本語ノート.md" in paths_bare, (
+        "fixture regression: bare folder search returned empty"
+    )
 
     notes_bare = vault_index.recent_notes(limit=50, folder="Projects")
     bare_note_paths = {n["path"] for n in notes_bare}
