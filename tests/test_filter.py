@@ -189,6 +189,25 @@ def test_eq_ne_partition_on_present_key(conn: sqlite3.Connection) -> None:
         )
 
 
+def test_eq_ne_partition_on_array_key(conn: sqlite3.Connection) -> None:
+    """配列キー (levels) に対しても eq/ne は disjoint かつ和集合でキー保持ノート全体をカバーする。
+
+    配列 ne は ``NOT EXISTS(json_each ...)`` という非対称 SQL を使う。
+    scalar ne と同じ partition property が成立することを固定化し、
+    配列分岐の regression を防ぐ。
+    """
+    # arr.md: {"levels": ["1","2","3"]},  arr-single.md: {"levels": ["1"]}
+    keyed_array = {"arr.md", "arr-single.md"}
+    for value in ("1", "2", "99"):
+        eq_hits = _select(conn, MetadataCondition("levels", "eq", value))
+        ne_hits = _select(conn, MetadataCondition("levels", "ne", value))
+        assert eq_hits.isdisjoint(ne_hits), f"eq and ne overlap for value={value!r}"
+        assert eq_hits | ne_hits == keyed_array, (
+            f"eq ∪ ne != keyed_array for value={value!r}: "
+            f"eq={eq_hits} ne={ne_hits} keyed={keyed_array}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Error message guidance (Round 3 Reviewer B finding)
 #
