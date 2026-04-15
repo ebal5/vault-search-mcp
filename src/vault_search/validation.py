@@ -112,6 +112,16 @@ def validate_identifier(
         raise ValidationError(
             f"{kind} contains control characters; allowed: {_IDENTIFIER_ALLOWED_DESC}"
         )
+    # Detect empty dot-separated segments before the generic char-class check
+    # so the error message names the structural cause (issue #14). Otherwise
+    # `a..b` would be reported as "disallowed characters" even though every
+    # character is in the allowed set, misleading agents into stripping
+    # characters instead of fixing the dot structure.
+    if ".." in name or name.startswith(".") or name.endswith("."):
+        raise ValidationError(
+            f"{kind} has empty dot-separated segment; "
+            f"use 'a.b' for nested keys (no leading/trailing/consecutive '.'): {name!r}"
+        )
     if not _IDENTIFIER_RE.match(name):
         raise ValidationError(
             f"{kind} contains disallowed characters (allowed: {_IDENTIFIER_ALLOWED_DESC}): {name!r}"

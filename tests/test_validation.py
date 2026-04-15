@@ -187,9 +187,7 @@ def test_validate_identifier_malformed_dot_message_names_the_cause(name: str) ->
         validate_identifier(name)
     msg = str(exc.value)
     # The new message must name the empty-segment cause...
-    assert "empty" in msg and "segment" in msg, (
-        f"message should reference empty/segment: {msg!r}"
-    )
+    assert "empty" in msg and "segment" in msg, f"message should reference empty/segment: {msg!r}"
     # ...and must NOT mislead with the char-level "disallowed characters"
     # phrasing, which tricks agents into character-stripping retries.
     assert "disallowed characters" not in msg, (
