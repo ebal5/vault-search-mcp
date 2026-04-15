@@ -62,6 +62,8 @@ src/vault_search/
   → `.claude/rules/fastmcp-gotchas.md` — server.py / schemas.py / filter.py 改修時に必読
 - **TDD ワークフロー** (Red/Green/Refactor 独立 commit、サブエージェント delegate 規約)
   → `.claude/rules/tdd-workflow.md` — 新機能追加・バグ修正時に参照
+- **Issue triage / close 規約** (subagent 判定の盲信禁止、close 前個別検証)
+  → `.claude/rules/issue-triage.md` — `gh issue close` する前に必読
 - **レビュー品質プロセス**: `review-loop` skill を使用
   (「レビューして」「5 以上がなくなるまで」等で起動)
 - **スクリプト実行**: `uv run python` または `.venv/bin/python` 直接呼びを推奨。
