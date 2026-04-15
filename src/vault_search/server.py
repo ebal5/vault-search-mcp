@@ -92,6 +92,8 @@ def vault_search(
         query: 検索クエリ。スペース区切りで AND 検索。日本語・英語混在可。
         tags: タグフィルタ（例: ["project/hermes-agent", "status/decided"]）。全て AND。
         folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
+            末尾 '/' および '\\' 区切りは自動で正規化される（例: "Projects/" → "Projects"）。
+            スラッシュのみの入力（'/', '//', '\\\\'）はフィルタなし（= 全件）として扱う。
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
         metadata_filter: frontmatter プロパティでの AND フィルタ。
@@ -156,7 +158,9 @@ def vault_recent(
         offset: ページング用の開始位置（デフォルト 0, >=0）。vault_search と同じ
                 意味論で、最近更新順 (file_mtime DESC) の先頭から offset 件を
                 スキップして limit 件返す。
-        folder: フォルダプレフィックスで絞り込み（例: "Research"）
+        folder: フォルダプレフィックスで絞り込み（例: "Research"）。
+            末尾 '/' および '\\' 区切りは自動で正規化される（例: "Research/" → "Research"）。
+            スラッシュのみの入力（'/', '//', '\\\\'）はフィルタなし（= 全件）として扱う。
 
     Returns:
         常に plain dict を envelope 形式で返す (``{"notes": [dict, ...]}``)。

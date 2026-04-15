@@ -77,6 +77,11 @@ _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
         "'Projects Hermes/...' など) は除外される。"
         "vault_folders の結果 (FolderCount.folder) をそのまま渡せる。"
         "root 直下に限定したい場合は現状未サポート (null で全件)。"
+        "末尾 '/' および '\\\\' 区切りは自動で正規化される "
+        "(例: 'Projects/' → 'Projects')。"
+        "スラッシュのみの入力 ('/', '//', '\\\\\\\\') はフィルタなし "
+        "(= folder 指定なしと同等) として扱う。"
+        '例: "Projects"、"Projects/Hermes Agent"、"Projects/"。'
     ),
 }
 
