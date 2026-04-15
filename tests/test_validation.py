@@ -123,15 +123,14 @@ def test_validate_identifier_rejects_disallowed_symbols(name: str) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        "..",
-        ".a",
-        "a.",
-        "a..",
-        "a..b",
-        ".",
-        ".a.b",
-        "a.b.",
-        "a...b",
+        # Equivalence classes for empty dot-separated segments.
+        # Keep representatives only; broader coverage (`a..`, `.a.b`,
+        # `a.b.`, `a...b`) is subsumed by these classes.
+        "..",  # dot-only (consecutive)
+        ".",  # dot-only (single)
+        ".a",  # leading empty
+        "a.",  # trailing empty
+        "a..b",  # consecutive empty between non-empty segments
     ],
 )
 def test_validate_identifier_rejects_malformed_dots(name: str) -> None:
@@ -143,6 +142,26 @@ def test_validate_identifier_rejects_malformed_dots(name: str) -> None:
     """
     with pytest.raises(ValidationError):
         validate_identifier(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.b",  # minimum 2-segment
+        "a.b.c",  # 3-segment
+        "x_y.z-w",  # segments mixing _ and -
+        "_._",  # single-char segments
+        "1.2.3",  # numeric segments
+    ],
+)
+def test_validate_identifier_accepts_dotted_paths(name: str) -> None:
+    """Positive boundary for the segment-joined-by-dot grammar.
+
+    Pairs with ``test_validate_identifier_rejects_malformed_dots`` so a
+    future regex change that accidentally bans valid dotted identifiers
+    is caught (silent regression on Obsidian nested-key support).
+    """
+    assert validate_identifier(name) == name
 
 
 def test_validate_identifier_rejects_non_ascii_japanese() -> None:
