@@ -95,7 +95,9 @@ def _parse_entry(key: str, value: Any) -> MetadataCondition:
 
     raise ValidationError(
         f"metadata_filter[{key!r}] must be a string (implicit eq) or a dict "
-        f"(explicit operator), got {type(value).__name__}"
+        f"(explicit operator), got {type(value).__name__}. "
+        f"Frontmatter scalars are normalized to strings at index time; "
+        f'pass the stringified form (e.g. {{{key!r}: "{value}"}}).'
     )
 
 
@@ -139,8 +141,12 @@ def _parse_in(key: str, op_value: Any) -> MetadataCondition:
     validated: list[str] = []
     for idx, item in enumerate(op_value):
         if not isinstance(item, str):
+            stringified = "true" if item is True else "false" if item is False else str(item)
             raise ValidationError(
-                f"metadata_filter[{key!r}]['in'][{idx}] must be a string, got {type(item).__name__}"
+                f"metadata_filter[{key!r}]['in'][{idx}] must be a string, "
+                f"got {type(item).__name__}. Frontmatter scalars are normalized "
+                f"to strings at index time; pass the stringified form "
+                f'(e.g. "{stringified}").'
             )
         validate_value(item, kind="frontmatter value")
         validated.append(item)
@@ -149,8 +155,14 @@ def _parse_in(key: str, op_value: Any) -> MetadataCondition:
 
 def _parse_ne(key: str, op_value: Any) -> MetadataCondition:
     if not isinstance(op_value, str):
+        stringified = (
+            "true" if op_value is True else "false" if op_value is False else str(op_value)
+        )
         raise ValidationError(
-            f"metadata_filter[{key!r}]['ne'] must be a string, got {type(op_value).__name__}"
+            f"metadata_filter[{key!r}]['ne'] must be a string, "
+            f"got {type(op_value).__name__}. Frontmatter scalars are normalized "
+            f"to strings at index time; pass the stringified form "
+            f'(e.g. {{{key!r}: {{"ne": "{stringified}"}}}}).'
         )
     validate_value(op_value, kind="frontmatter value")
     return MetadataCondition(key=key, op="ne", value=op_value)

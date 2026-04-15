@@ -645,20 +645,10 @@ def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
         tmp_path,
         {
             "target.md": (
-                "---\n"
-                "priority: 5\n"
-                "archived: true\n"
-                "score: 3.7\n"
-                "due: 2024-01-15\n"
-                "---\nbody\n"
+                "---\npriority: 5\narchived: true\nscore: 3.7\ndue: 2024-01-15\n---\nbody\n"
             ),
             "other.md": (
-                "---\n"
-                "priority: 3\n"
-                "archived: false\n"
-                "score: 1.2\n"
-                "due: 2024-06-01\n"
-                "---\nbody\n"
+                "---\npriority: 3\narchived: false\nscore: 1.2\ndue: 2024-06-01\n---\nbody\n"
             ),
         },
     )
@@ -670,9 +660,7 @@ def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
     ]:
         res = idx.search("", metadata_filter={key: val})
         paths = {r["path"] for r in res["results"]}
-        assert paths == {"target.md"}, (
-            f"{key}={val!r} did not match exactly target.md: got {paths}"
-        )
+        assert paths == {"target.md"}, f"{key}={val!r} did not match exactly target.md: got {paths}"
 
 
 def test_search_query_with_double_quote_does_not_raise(vault_index: VaultIndex) -> None:
