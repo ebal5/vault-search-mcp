@@ -333,19 +333,58 @@ def test_folder_filter_trailing_slash_normalized(vault_index: VaultIndex, tmp_va
     """末尾スラッシュ付き folder ('Projects/') も 'Projects' と同等に扱う.
 
     Issue #34: `folder='Projects/'` で silent 0 件になる regression の防止。
-    """
-    # search: 'Projects/' と 'Projects' は同じ結果を返す
-    res_bare = vault_index.search("日本語", folder="Projects")
-    res_slash = vault_index.search("日本語", folder="Projects/")
-    paths_bare = {r["path"] for r in res_bare["results"]}
-    paths_slash = {r["path"] for r in res_slash["results"]}
-    assert paths_slash == paths_bare
-    assert "Projects/日本語ノート.md" in paths_slash
 
-    # recent_notes も同様
+    境界値:
+    - 単一 `/` 付与 (`Projects/`)
+    - 複数 `/` 付与 (`Projects//`)
+    - バックスラッシュ混在 (`Projects\\`)
+    - バックスラッシュ + `/` (`Projects\\/`)
+    すべて `Projects` と同一結果となる contract を pin する。
+    """
+    # 基準 (非空) — vacuous pass 防止のため最初に非空を assert
+    res_bare = vault_index.search("日本語", folder="Projects")
+    paths_bare = {r["path"] for r in res_bare["results"]}
+    assert "Projects/日本語ノート.md" in paths_bare, "fixture regression: bare folder search returned empty"
+
     notes_bare = vault_index.recent_notes(limit=50, folder="Projects")
-    notes_slash = vault_index.recent_notes(limit=50, folder="Projects/")
-    assert {n["path"] for n in notes_slash} == {n["path"] for n in notes_bare}
+    bare_note_paths = {n["path"] for n in notes_bare}
+    assert "Projects/日本語ノート.md" in bare_note_paths, (
+        "fixture regression: bare folder recent_notes returned empty"
+    )
+
+    # 正規化バリアント: いずれも Projects と同一結果
+    for variant in ("Projects/", "Projects//", "Projects\\", "Projects\\/"):
+        res_v = vault_index.search("日本語", folder=variant)
+        paths_v = {r["path"] for r in res_v["results"]}
+        assert paths_v == paths_bare, f"search mismatch for folder={variant!r}: {paths_v}"
+
+        notes_v = vault_index.recent_notes(limit=50, folder=variant)
+        assert {n["path"] for n in notes_v} == bare_note_paths, (
+            f"recent_notes mismatch for folder={variant!r}"
+        )
+
+
+def test_folder_filter_slash_only_is_noop(vault_index: VaultIndex, tmp_vault: Path) -> None:
+    """`folder='/'` は rstrip 後に空文字化するので **フィルタなし** 扱いとなる.
+
+    Issue #34 推奨: 「空文字列ケース (`/` だけが渡ったケース) も rstrip 後に
+    空なら no-op で扱う」。rstrip 後 '' で `folder = '' OR folder LIKE '/%'`
+    を発行し root 直下のみ silent にマッチする旧挙動への regression 防止。
+    """
+    # 基準 (folder 未指定 = フィルタなし) との一致を確認
+    res_all = vault_index.search("obsidian")
+    paths_all = {r["path"] for r in res_all["results"]}
+    assert len(paths_all) > 0, "fixture regression: no results for 'obsidian'"
+
+    res_slash = vault_index.search("obsidian", folder="/")
+    assert {r["path"] for r in res_slash["results"]} == paths_all
+
+    # 複数スラッシュも同等 (`//`, `\\`, `\\/` 等)
+    for variant in ("//", "\\", "\\/", "/\\"):
+        res_v = vault_index.search("obsidian", folder=variant)
+        assert {r["path"] for r in res_v["results"]} == paths_all, (
+            f"folder={variant!r} expected to be no-op (== no filter), got differing set"
+        )
 
 
 def test_stats_shape(vault_index: VaultIndex) -> None:
