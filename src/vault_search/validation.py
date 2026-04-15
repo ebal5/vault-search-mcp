@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 
 __all__ = [
+    "LIMIT_MAX",
     "ValidationError",
     "validate_identifier",
     "validate_pagination",
@@ -34,7 +35,9 @@ __all__ = [
 # Hard ceiling on paginated result size. Anchored to the FTS5 cache ceiling
 # (`_MAX_RESULTS` in indexer) so that requested limit never exceeds what the
 # backend actually returns — avoiding silent truncation from the agent's POV.
-_LIMIT_MAX = 500
+# Public (no `_` prefix) because schemas.py references this as the single
+# source of truth for the MCP tool input schema's ``maximum`` constraint.
+LIMIT_MAX = 500
 
 
 # Allowed character class for identifiers (field names, frontmatter keys).
@@ -136,7 +139,7 @@ def validate_pagination(limit: int, offset: int = 0) -> None:
 
     ``limit`` must be a positive integer (zero-result queries waste a round
     trip and usually indicate a hallucinated bound). ``offset`` must be
-    non-negative. ``limit`` is capped at :data:`_LIMIT_MAX` to keep requests
+    non-negative. ``limit`` is capped at :data:`LIMIT_MAX` to keep requests
     aligned with the internal FTS5 cache ceiling.
     """
     if not isinstance(limit, int) or isinstance(limit, bool):
@@ -145,8 +148,8 @@ def validate_pagination(limit: int, offset: int = 0) -> None:
         raise ValidationError(f"offset must be an integer, got {type(offset).__name__}")
     if limit < 1:
         raise ValidationError(f"limit must be >= 1 (got {limit})")
-    if limit > _LIMIT_MAX:
-        raise ValidationError(f"limit must be <= {_LIMIT_MAX} (got {limit})")
+    if limit > LIMIT_MAX:
+        raise ValidationError(f"limit must be <= {LIMIT_MAX} (got {limit})")
     if offset < 0:
         raise ValidationError(f"offset must be >= 0 (got {offset})")
 

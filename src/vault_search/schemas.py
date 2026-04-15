@@ -14,6 +14,8 @@ from typing import Any, Literal
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
+from .validation import LIMIT_MAX
+
 # ---------------------------------------------------------------------------
 # Search responses
 # ---------------------------------------------------------------------------
@@ -216,12 +218,14 @@ _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
 # Shared pagination input schemas. ``minimum`` / ``maximum`` are the single
 # source of truth the agent sees via ``schema://tools``; the runtime guard in
 # ``validation.validate_pagination`` enforces the same bounds server-side.
+# ``LIMIT_MAX`` is imported from validation.py so that the agent-facing bound
+# and the server-side guard cannot drift.
 _LIMIT_INPUT_SCHEMA: dict[str, Any] = {
     "type": "integer",
     "minimum": 1,
-    "maximum": 500,
+    "maximum": LIMIT_MAX,
     "default": 20,
-    "description": "最大返却件数 (1-500)。上限超過は ValidationError。",
+    "description": f"最大返却件数 (1-{LIMIT_MAX})。上限超過は ValidationError。",
 }
 
 
