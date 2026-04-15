@@ -20,14 +20,18 @@ frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from .validation import ValidationError, validate_identifier, validate_value
 
-__all__ = ["MetadataCondition", "build_sql_fragment", "parse_metadata_filter"]
+__all__ = ["MetadataCondition", "Operator", "build_sql_fragment", "parse_metadata_filter"]
+
+# 演算子の単一 source of truth。``eq`` / ``ne`` / ``in`` の 3 演算子。
+# ``MetadataCondition.op`` と ``_EXPLICIT_OPS`` はここから派生させる。
+Operator = Literal["eq", "ne", "in"]
 
 # 明示的に dict 値で指定できる演算子。``eq`` は str 値による暗黙指定のみ。
-_EXPLICIT_OPS: tuple[str, ...] = ("ne", "in")
+_EXPLICIT_OPS: tuple[str, ...] = tuple(op for op in get_args(Operator) if op != "eq")
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class MetadataCondition:
     """
 
     key: str
-    op: Literal["eq", "ne", "in"]
+    op: Operator
     value: str | tuple[str, ...]
 
 
