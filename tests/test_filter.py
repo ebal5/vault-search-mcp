@@ -249,3 +249,55 @@ def test_ne_operator_non_string_value_error_hints_stringification() -> None:
     assert "float" in msg
     assert "normalized to strings" in msg
     assert '"4.5"' in msg
+
+
+# ---------------------------------------------------------------------------
+# Negative tests: LLM-hallucinated operator forms (Issue #41)
+#
+# LLM が MongoDB 風演算子 ($in / $eq 等) や非サポート演算子を生成したとき、
+# および in の引数に string を渡したときに ValidationError を送出することを
+# spec として固定化する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        {"tags": {"$in": ["a", "b"]}},  # MongoDB 風 $ prefix
+        {"tags": {"$eq": "x"}},
+        {"tags": {"$ne": "x"}},
+        {"tags": {"eq": "x"}},  # dict 形式の eq (bare string が正しい)
+        {"tags": {"==": "x"}},  # 比較演算子記号
+        {"tags": {"lt": 1}},  # 未サポート比較演算子
+        {"tags": {"in": "a_string"}},  # in にリストでなく string を渡す
+    ],
+)
+def test_unsupported_operator_raises_validation_error(filter_input: dict) -> None:
+    """LLM がハルシネーションしがちな入力は ValidationError を送出する (Issue #41)."""
+    with pytest.raises(ValidationError):
+        parse_metadata_filter(filter_input)
+
+
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        {"tags": {"$in": ["a", "b"]}},
+        {"tags": {"$eq": "x"}},
+        {"tags": {"$ne": "x"}},
+        {"tags": {"eq": "x"}},
+        {"tags": {"==": "x"}},
+        {"tags": {"lt": 1}},
+    ],
+)
+def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> None:
+    """未サポート演算子エラーのヒントに対応形式 (in / ne / bare string) が含まれる.
+
+    エージェントがエラーメッセージを読んで自己修正できるよう、
+    サポートされている構文 (ne / in / bare string) がヒントに明示されること。
+    """
+    with pytest.raises(ValidationError) as exc:
+        parse_metadata_filter(filter_input)
+    msg = str(exc.value)
+    assert "in" in msg, f"'in' not found in error message: {msg}"
+    assert "ne" in msg, f"'ne' not found in error message: {msg}"
+    assert "string" in msg, f"'string' not found in error message: {msg}"
