@@ -173,7 +173,7 @@ def test_schema_tools_resource_exposes_annotations(vault_index: VaultIndex) -> N
     にしか出していないと、``schema://tools`` だけを読む構造化 agent が tool
     の副作用性を判定できず drift する。
     """
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     tools_entries = payload["tools"]
     assert set(tools_entries.keys()) == set(_EXPECTED_ANNOTATIONS), (
         f"schema://tools tool set mismatch: {set(tools_entries.keys())}"

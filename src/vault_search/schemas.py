@@ -1,4 +1,4 @@
-"""Pydantic models for MCP tool returns and domain errors.
+"""Pydantic models for MCP tool returns.
 
 これらのモデルは FastMCP が JSON Schema を自動生成する際に
 ツール出力の正確な構造を AI エージェントへ伝達するために使う。
@@ -7,31 +7,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
-if TYPE_CHECKING:
-    from .indexer import VaultIndex
-
-# ---------------------------------------------------------------------------
-# Domain errors
-# ---------------------------------------------------------------------------
-
-
-class VaultSearchError(Exception):
-    """vault-search-mcp ドメインの基底例外."""
-
-
-class NoteNotFoundError(VaultSearchError):
-    """指定された path のノートがインデックスに存在しない."""
-
-    def __init__(self, path: str) -> None:
-        super().__init__(f"Note not found: {path}")
-        self.path = path
-
+from .validation import LIMIT_MAX
 
 # ---------------------------------------------------------------------------
 # Search responses
@@ -235,12 +218,14 @@ _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
 # Shared pagination input schemas. ``minimum`` / ``maximum`` are the single
 # source of truth the agent sees via ``schema://tools``; the runtime guard in
 # ``validation.validate_pagination`` enforces the same bounds server-side.
+# ``LIMIT_MAX`` is imported from validation.py so that the agent-facing bound
+# and the server-side guard cannot drift.
 _LIMIT_INPUT_SCHEMA: dict[str, Any] = {
     "type": "integer",
     "minimum": 1,
-    "maximum": 500,
+    "maximum": LIMIT_MAX,
     "default": 20,
-    "description": "最大返却件数 (1-500)。上限超過は ValidationError。",
+    "description": f"最大返却件数 (1-{LIMIT_MAX})。上限超過は ValidationError。",
 }
 
 
@@ -441,9 +426,13 @@ _TOOL_ENTRIES: dict[str, dict[str, Any]] = {
 }
 
 
-def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
-    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
+def build_schema_payload(frontmatter_keys: Iterable[str]) -> dict[str, Any]:
+    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約.
+
+    呼び出し側は ``VaultIndex.list_frontmatter_keys()`` 相当の反復可能オブジェクトを
+    渡す。schemas モジュールが indexer に依存しないよう引数化している。
+    """
     return {
         "tools": _TOOL_ENTRIES,
-        "frontmatter_keys": index.list_frontmatter_keys(),
+        "frontmatter_keys": list(frontmatter_keys),
     }

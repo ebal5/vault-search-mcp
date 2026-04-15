@@ -109,7 +109,7 @@ def test_vault_search_outputschema_top_level_is_flat(vault_index: VaultIndex) ->
 
 def test_schema_resource_output_schema_remains_rich(vault_index: VaultIndex) -> None:
     """schema://tools の output_schema は SearchResponse の rich schema を維持."""
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     output_schema = payload["tools"]["vault_search"]["output_schema"]
     props = output_schema.get("properties", {})
     # 最低でも tier / total / results を直接キーとして持つこと
@@ -184,7 +184,7 @@ def test_mcp_outputschema_is_rich_matches_resource(vault_index: VaultIndex) -> N
     """
 
     tools = asyncio.run(server_mod.mcp.list_tools())
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     for tool in tools:
         assert tool.outputSchema is not None, f"{tool.name}: outputSchema missing"
         resource_schema = payload["tools"][tool.name]["output_schema"]
