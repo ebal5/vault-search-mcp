@@ -85,8 +85,9 @@ class TestTieredCache:
 
 def test_build_index_counts(vault_index: VaultIndex) -> None:
     stats = vault_index.stats()
-    # `_archive/` と `.trash/` は除外。他 5 件が indexed
-    assert stats["total_notes"] == 5
+    # `_archive/` と `.trash/` は除外。他 6 件が indexed
+    # (Welcome, Projects/日本語ノート, Projects/plain, Projects/marker, malformed, Research/alpha)
+    assert stats["total_notes"] == 6
 
 
 def test_excluded_prefix_folders(vault_index: VaultIndex) -> None:
@@ -296,17 +297,23 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
 
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """folder='Projects' が 'Projects Hermes' のような兄弟を拾わないこと."""
-    # 既存 fixture を壊さない範囲で兄弟フォルダを追加
+    # 兄弟フォルダに同一トークンを含むノートを置く。
+    # folder フィルタが壊れていればこのノートが漏れ込み、アサートが失敗する。
     sibling = tmp_vault / "Projects Hermes" / "note.md"
     sibling.parent.mkdir(parents=True, exist_ok=True)
     sibling.write_text(
-        "---\ntitle: hermes\n---\nunique-hermes-marker content obsidian\n",
+        "---\ntitle: hermes\n---\nobsidian-marker-projects content in sibling\n",
         encoding="utf-8",
     )
     vault_index.build_index()
 
-    # search: folder='Projects' は 'Projects Hermes' 配下をマッチさせない
-    res = vault_index.search("obsidian", folder="Projects")
+    # search: folder='Projects' は 'Projects Hermes' 配下をマッチさせない。
+    # conftest の Projects/marker.md が "obsidian-marker-projects" を含むため
+    # 正しい実装では必ず >= 1 件ヒットする (vacuous pass 防止)。
+    res = vault_index.search("obsidian-marker-projects", folder="Projects")
+    assert len(res["results"]) >= 1, (
+        "Projects/marker.md がヒットしない — fixture または検索の不具合"
+    )
     for r in res["results"]:
         assert r["folder"] == "Projects" or r["folder"].startswith("Projects/"), (
             f"sibling folder leaked in search: {r['folder']}"
