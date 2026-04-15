@@ -78,8 +78,6 @@ _EXPECTED_ANNOTATIONS: dict[str, dict[str, bool | None]] = {
     },
 }
 
-_ANNOTATION_FIELDS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
-
 
 @pytest.mark.parametrize(("tool_name", "expected"), list(_EXPECTED_ANNOTATIONS.items()))
 def test_tool_annotations_match_expected(
