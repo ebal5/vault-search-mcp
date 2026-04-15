@@ -9,26 +9,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml  # type: ignore[import-untyped]
+
 # frontmatter の区切り: --- で始まり --- で終わる YAML ブロック
 _FM_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-# YAML パーサーが無い環境でも動くよう、軽量な自前パーサーを用意
-# PyYAML があれば使い、なければ簡易パースにフォールバック
-try:
-    import yaml  # type: ignore[import-untyped]
 
-    def _parse_yaml(text: str) -> dict[str, Any]:
-        try:
-            result = yaml.safe_load(text)
-            return result if isinstance(result, dict) else {}
-        except yaml.YAMLError:
-            # Templater テンプレートや壊れた YAML のフォールバック
-            return _parse_yaml_fallback(text)
-
-except ImportError:
-
-    def _parse_yaml(text: str) -> dict[str, Any]:
-        """PyYAML なしの簡易パーサー。key: value の単純構造のみ対応."""
+def _parse_yaml(text: str) -> dict[str, Any]:
+    """PyYAML で frontmatter をパース。壊れていたら fallback に回す."""
+    try:
+        result = yaml.safe_load(text)
+        return result if isinstance(result, dict) else {}
+    except yaml.YAMLError:
+        # Templater テンプレートや壊れた YAML のフォールバック
         return _parse_yaml_fallback(text)
 
 
