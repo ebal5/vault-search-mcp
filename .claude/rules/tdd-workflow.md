@@ -53,6 +53,13 @@ Refactor は「計画 (Sonnet) → 評価 (Opus) → 実施 (Sonnet)」の 3 段
 評価ステップを Opus に分離することで、計画段階で Opus を長時間走らせる無駄を
 避けつつ、危険な refactor を実施前に止められる。
 
+**Opus 評価は NO-GO を返せる権限がある**: 計画を無批判に追認しない。
+blocker が見つかれば修正版骨子ごと差し戻す。親は Opus の指摘を受けて
+計画を差し替えてから実施に進む。Sonnet 計画に reflexive なバイアス
+(「後方互換を維持するため re-export を残す」「実装詳細に tests が依存
+する形で inline する」等) が混入しやすく、Opus がこれを捕捉した実績
+あり (2026-04、Phase B1 PR #96)。
+
 ### 既知の落とし穴: background subagent は Edit/Write が拒否される
 
 `Agent(..., run_in_background=true, mode="acceptEdits")` および
