@@ -27,6 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from .indexer import VaultIndex, VaultWatcher
 from .schemas import (
     _TOOL_ENTRIES,
+    _TOOL_SPECS,
     FolderCount,
     NoteDetail,
     NoteNotFoundError,
@@ -68,8 +69,13 @@ def _subset_row(data: dict[str, Any], fields_set: frozenset[str]) -> dict[str, A
 
 mcp = FastMCP("vault-search")
 
+# MCP tool annotations は ``_TOOL_SPECS`` をカノニカルソースとする
+# (schemas.py: issue #22 + review round 1 の整理を参照)。
+# schema://tools リソースと MCP tools/list の両経路で同一メタデータを公開し、
+# server.py 側で定数を重複定義しない。
 
-@mcp.tool()
+
+@mcp.tool(annotations=_TOOL_SPECS["vault_search"].annotations)
 def vault_search(
     query: str,
     tags: list[str] | None = None,
@@ -130,7 +136,7 @@ def vault_search(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_get_note"].annotations)
 def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]:
     """指定パスのノート全文とメタデータを取得する。
 
@@ -156,7 +162,7 @@ def vault_get_note(path: str, fields: list[str] | None = None) -> dict[str, Any]
     return _subset_row(result, fields_set)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_recent"].annotations)
 def vault_recent(
     limit: int = 20,
     offset: int = 0,
@@ -191,7 +197,7 @@ def vault_recent(
     return {"notes": notes}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_tags"].annotations)
 def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
@@ -203,7 +209,7 @@ def vault_tags() -> dict[str, Any]:
     return {"tags": [TagCount(**row).model_dump(mode="json") for row in _get_index().list_tags()]}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_folders"].annotations)
 def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
 
@@ -220,7 +226,7 @@ def vault_folders() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_reindex"].annotations)
 def vault_reindex(force: bool = False) -> dict[str, Any]:
     """インデックスを再構築する。
 
@@ -236,7 +242,7 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_TOOL_SPECS["vault_stats"].annotations)
 def vault_stats() -> dict[str, Any]:
     """インデックスの統計情報を返す。
 
