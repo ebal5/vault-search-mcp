@@ -130,9 +130,7 @@ def test_only_vault_reindex_is_writer() -> None:
     """
     tools = asyncio.run(server_mod.mcp.list_tools())
     writers = sorted(
-        t.name
-        for t in tools
-        if t.annotations is not None and t.annotations.readOnlyHint is False
+        t.name for t in tools if t.annotations is not None and t.annotations.readOnlyHint is False
     )
     assert writers == ["vault_reindex"], (
         f"unexpected writer(s) detected — update this invariant intentionally: {writers}"
@@ -164,9 +162,7 @@ def test_all_tools_closed_world() -> None:
     """全 tool は ``openWorldHint=False`` (ローカル vault のみを扱う設計前提)."""
     tools = asyncio.run(server_mod.mcp.list_tools())
     violations = [
-        t.name
-        for t in tools
-        if t.annotations is None or t.annotations.openWorldHint is not False
+        t.name for t in tools if t.annotations is None or t.annotations.openWorldHint is not False
     ]
     assert violations == [], f"tools violating closed-world invariant: {violations}"
 

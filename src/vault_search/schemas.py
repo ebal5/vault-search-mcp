@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from .validation import ValidationError, validate_identifier
@@ -211,6 +212,7 @@ class _ToolSchemaSpec:
     input_schema: dict[str, Any]
     output_model: type[BaseModel]
     envelope_key: str | None = None
+    annotations: ToolAnnotations | None = None
 
 
 _FOLDER_INPUT_SCHEMA: dict[str, Any] = {
@@ -254,6 +256,28 @@ _FIELDS_INPUT_SCHEMA: dict[str, Any] = {
         "指定キーのみを持つ plain dict (list ツールは要素単位で subset) となる。"
     ),
 }
+
+
+# MCP ``ToolAnnotations`` (issue #22 + review round 1, reviewers A-D).
+#
+# Spec-strict mapping:
+#   - 読み取り系は ``readOnlyHint=True`` のみ宣言。MCP spec は
+#     ``destructiveHint`` / ``idempotentHint`` を "meaningful only when
+#     readOnlyHint == false" と定義しているため、読み取り系では None のまま残す
+#     (FastMCP は None フィールドを wire 上で落とす)。
+#   - ``vault_reindex`` は唯一の writer。``destructiveHint=False`` は意図的:
+#     MCP spec の "destructive" は user-facing データの不可逆損失を指し、
+#     派生キャッシュ (``.vault-search.db``) の再構築は vault 本体 (``.md``) を
+#     touch しないため該当しない。auto-approve UX で誤警告が出ないよう False。
+#     ``idempotentHint=True`` は同一入力で同一状態に収束することを示す。
+#   - ``openWorldHint=False`` は全ツールでローカル vault のみを扱うため統一。
+_READ_ONLY_ANNOTATIONS = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+_REINDEX_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 
 _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
@@ -309,6 +333,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "required": ["query"],
         },
         output_model=SearchResponse,
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
     "vault_get_note": _ToolSchemaSpec(
         description="指定パスのノート全文とメタデータを取得する。",
@@ -321,6 +346,7 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "required": ["path"],
         },
         output_model=NoteDetail,
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
     "vault_recent": _ToolSchemaSpec(
         description="最近更新されたノート一覧を取得する。",
@@ -335,18 +361,21 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
         },
         output_model=RecentNote,
         envelope_key="notes",
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
     "vault_tags": _ToolSchemaSpec(
         description="全タグとその使用回数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=TagCount,
         envelope_key="tags",
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
     "vault_folders": _ToolSchemaSpec(
         description="フォルダ構造とノート数を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=FolderCount,
         envelope_key="folders",
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
     "vault_reindex": _ToolSchemaSpec(
         description="インデックスを再構築する。",
@@ -355,11 +384,13 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {"force": {"type": "boolean", "default": False}},
         },
         output_model=ReindexStats,
+        annotations=_REINDEX_ANNOTATIONS,
     ),
     "vault_stats": _ToolSchemaSpec(
         description="インデックスの統計情報を返す。",
         input_schema={"type": "object", "properties": {}},
         output_model=VaultStats,
+        annotations=_READ_ONLY_ANNOTATIONS,
     ),
 }
 
@@ -437,11 +468,16 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
         output_schema = _without_required(item_schema)
     else:
         output_schema = item_schema
-    return {
+    entry: dict[str, Any] = {
         "description": spec.description,
         "input_schema": spec.input_schema,
         "output_schema": output_schema,
     }
+    if spec.annotations is not None:
+        # exclude_none=True で未宣言 hint を落とし、MCP tools/list の wire 形と揃える
+        # (spec で意味を持たない readOnly+destructive/idempotent の組を残さない)。
+        entry["annotations"] = spec.annotations.model_dump(mode="json", exclude_none=True)
+    return entry
 
 
 # ``_TOOL_ENTRIES`` は各ツールの (description / input_schema / output_schema) を
