@@ -1,4 +1,4 @@
-"""Pydantic models for MCP tool returns and domain errors.
+"""Pydantic models for MCP tool returns.
 
 これらのモデルは FastMCP が JSON Schema を自動生成する際に
 ツール出力の正確な構造を AI エージェントへ伝達するために使う。
@@ -7,14 +7,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from .indexer import VaultIndex
 
 # ---------------------------------------------------------------------------
 # Search responses
@@ -424,9 +422,13 @@ _TOOL_ENTRIES: dict[str, dict[str, Any]] = {
 }
 
 
-def build_schema_payload(index: VaultIndex) -> dict[str, Any]:
-    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約."""
+def build_schema_payload(frontmatter_keys: Iterable[str]) -> dict[str, Any]:
+    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約.
+
+    呼び出し側は ``VaultIndex.list_frontmatter_keys()`` 相当の反復可能オブジェクトを
+    渡す。schemas モジュールが indexer に依存しないよう引数化している。
+    """
     return {
         "tools": _TOOL_ENTRIES,
-        "frontmatter_keys": index.list_frontmatter_keys(),
+        "frontmatter_keys": list(frontmatter_keys),
     }

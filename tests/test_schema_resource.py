@@ -58,14 +58,14 @@ def _search_hit_properties(vault_search_output_schema: dict[str, Any]) -> dict[s
 def test_build_schema_payload_returns_dict(vault_index: VaultIndex) -> None:
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert isinstance(payload, dict)
 
 
 def test_build_schema_payload_has_tools_key(vault_index: VaultIndex) -> None:
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "tools" in payload
     assert isinstance(payload["tools"], dict)
 
@@ -73,7 +73,7 @@ def test_build_schema_payload_has_tools_key(vault_index: VaultIndex) -> None:
 def test_build_schema_payload_contains_all_tool_names(vault_index: VaultIndex) -> None:
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     tool_names = set(payload["tools"].keys())
     missing = EXPECTED_TOOL_NAMES - tool_names
     assert not missing, f"Missing tools in payload: {missing}"
@@ -82,7 +82,7 @@ def test_build_schema_payload_contains_all_tool_names(vault_index: VaultIndex) -
 def test_each_tool_entry_has_input_and_output_schema(vault_index: VaultIndex) -> None:
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     for name in EXPECTED_TOOL_NAMES:
         entry = payload["tools"][name]
         assert isinstance(entry, dict), f"{name} entry is not dict"
@@ -100,7 +100,7 @@ def test_vault_search_output_schema_describes_search_hit_fields(
     """
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     out_schema = payload["tools"]["vault_search"]["output_schema"]
     props = _search_hit_properties(out_schema)
     assert props, f"No properties found in output_schema: {out_schema}"
@@ -119,7 +119,7 @@ def test_frontmatter_keys_listed(vault_index: VaultIndex) -> None:
     """
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "frontmatter_keys" in payload
     keys = payload["frontmatter_keys"]
     assert isinstance(keys, list)
@@ -163,7 +163,7 @@ def test_server_exposes_schema_resource_handler(
     assert callable(handler), "schema_resource must be callable"
 
     result = handler()
-    expected = build_schema_payload(vault_index)
+    expected = build_schema_payload(vault_index.list_frontmatter_keys())
 
     assert isinstance(result, dict)
     assert set(result.keys()) == set(expected.keys())
@@ -195,7 +195,7 @@ def test_list_returning_tools_have_envelope_output_schema(vault_index: VaultInde
     """
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     for tool_name, env_key in [
         ("vault_tags", "tags"),
         ("vault_folders", "folders"),
@@ -226,7 +226,7 @@ def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -
     """
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     mf_schema = payload["tools"]["vault_search"]["input_schema"]["properties"]["metadata_filter"]
 
     ap = mf_schema.get("additionalProperties")
@@ -259,7 +259,7 @@ def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: Va
     """
     from vault_search.schemas import build_schema_payload
 
-    payload = build_schema_payload(vault_index)
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
     schema = payload["tools"]["vault_get_note"]["output_schema"]
 
     assert schema.get("type") == "object", (

@@ -278,7 +278,7 @@ def schema_resource() -> dict[str, Any]:
     _TOOL_ENTRIES を共通のカノニカルソースとして同一内容になる
     (_inject_rich_output_schemas 参照)。
     """
-    return build_schema_payload(_get_index())
+    return build_schema_payload(_get_index().list_frontmatter_keys())
 
 
 # ---------------------------------------------------------------------------
