@@ -193,7 +193,16 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                             },
                             {
                                 "type": "object",
-                                "properties": {"ne": {"type": "string"}},
+                                "properties": {
+                                    "ne": {
+                                        "type": "string",
+                                        "description": (
+                                            "値との不一致。キーが存在し、かつ値が一致しない場合のみマッチ。"
+                                            "キー欠落ノートはマッチしない (3値論理)。"
+                                            "配列フィールドは要素のいずれも一致しない場合にマッチ。"
+                                        ),
+                                    }
+                                },
                                 "required": ["ne"],
                                 "additionalProperties": False,
                             },
