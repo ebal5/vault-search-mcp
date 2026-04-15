@@ -458,3 +458,53 @@ def test_mcp_convert_result_vault_search_metadata_filter_bool(
     paths = {hit["path"] for hit in structured["results"]}
     assert "hi.md" in paths
     assert "lo.md" not in paths
+
+
+# ---------------------------------------------------------------------------
+# Issue #19: vault_search MCP tool 経路での unknown frontmatter key 検出
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_vault_search_unknown_key_raises_validation_error(
+    vault_index: VaultIndex,
+) -> None:
+    """vault_search に unknown frontmatter key (typo) を渡すと ValidationError を送出する.
+
+    conftest の SAMPLE_NOTES には 'priority' キーが存在するため、'priorty' という
+    typo に対して did_you_mean に 'priority' が含まれることを確認する。
+    """
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValidationError) as exc_info:
+        fn("", None, None, 20, 0, {"priorty": "high"})
+
+    err = exc_info.value
+    assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+    # SAMPLE_NOTES に 'priority' が存在するので did_you_mean に含まれるはず
+    assert "priority" in err.did_you_mean
+
+
+def test_mcp_tool_vault_search_unknown_key_did_you_mean_is_sequence(
+    vault_index: VaultIndex,
+) -> None:
+    """ValidationError.did_you_mean が tuple/list であることの基本 guard."""
+    from vault_search.validation import ValidationError
+
+    fn = _fn(server_mod.vault_search)
+    with pytest.raises(ValidationError) as exc_info:
+        fn("", None, None, 20, 0, {"completely_bogus_key_xyzzy": "val"})
+
+    err = exc_info.value
+    assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+    assert isinstance(err.did_you_mean, (list, tuple))
+
+
+def test_mcp_tool_vault_search_no_metadata_filter_does_not_raise(
+    vault_index: VaultIndex,
+) -> None:
+    """metadata_filter=None で呼んでも ValidationError が出ない (control)."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian", None, None, 20, 0, None)
+    assert isinstance(res, dict)
+    assert "results" in res
