@@ -19,6 +19,8 @@ frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
 
 from __future__ import annotations
 
+import difflib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -62,11 +64,15 @@ class MetadataCondition:
 
 def parse_metadata_filter(
     raw: dict[str, Any] | None,
+    known_keys: Sequence[str] | None = None,
 ) -> list[MetadataCondition]:
     """``metadata_filter`` dict を :class:`MetadataCondition` リストへ変換する.
 
     - ``None`` または空 dict → 空 list
     - 各キーは :func:`validate_identifier` (kind="frontmatter key") で検証
+    - ``known_keys`` が ``None`` 以外の場合、各キーが ``known_keys`` に含まれるか検証
+      (識別子形式チェックの**後**に実施)。含まれない場合は
+      ``ValidationError(error_code="UNKNOWN_FRONTMATTER_KEY")`` を送出する。
     - str 値 → ``op="eq"``、値は :func:`validate_value` で検証
     - dict 値 → ``{"in": list[str]}`` / ``{"ne": str}`` のみ許可
         - ``in``: 値は非空 list[str]、各要素を :func:`validate_value` で検証
@@ -83,6 +89,17 @@ def parse_metadata_filter(
         if not isinstance(key, str):
             raise ValidationError(f"metadata_filter key must be a string, got {type(key).__name__}")
         validate_identifier(key, kind="frontmatter key")
+
+        if known_keys is not None and key not in known_keys:
+            suggestions = difflib.get_close_matches(key, known_keys, n=3, cutoff=0.6)
+            raise ValidationError(
+                f"Unknown frontmatter key {key!r}; "
+                f"see schema://tools for the frontmatter_keys list",
+                error_code="UNKNOWN_FRONTMATTER_KEY",
+                hint="see schema://tools for the frontmatter_keys list",
+                did_you_mean=suggestions,
+                allowed=sorted(known_keys),
+            )
 
         conditions.append(_parse_entry(key, value))
 
