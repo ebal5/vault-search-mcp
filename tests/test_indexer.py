@@ -37,6 +37,28 @@ class TestTieredCache:
         assert tier == 1
         assert got == result
 
+    def test_tier1_fuzzy_hit_at_threshold(self) -> None:
+        """Jaccard が threshold 丁度 (4/5=0.8) でもヒットする — >= semantics を pin."""
+        cache = TieredCache(fuzzy_threshold=0.8)
+        result = [{"path": "a.md"}]
+        cache.put("alpha beta gamma delta", None, result)
+        # intersection=4, union=5 → Jaccard=4/5=0.8 (= threshold)
+        tier, got = cache.get("alpha beta gamma delta epsilon", None)
+        assert tier == 1
+        assert got == result
+
+    def test_tier1_fuzzy_miss_just_below_threshold(self) -> None:
+        """Jaccard が threshold 未満 (7/9≈0.778) でミスになる."""
+        cache = TieredCache(fuzzy_threshold=0.8)
+        result = [{"path": "a.md"}]
+        # tokens: {"a","b","c","d","e","f","g"} — 7 tokens
+        cache.put("a b c d e f g", None, result)
+        # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
+        # intersection=7, union=9 → Jaccard=7/9≈0.778 < 0.8
+        tier, got = cache.get("a b c d e f g h i", None)
+        assert tier == -1
+        assert got is None
+
     def test_tier2_miss_low_similarity(self) -> None:
         cache = TieredCache(fuzzy_threshold=0.8)
         cache.put("alpha beta", None, [{"path": "a"}])
