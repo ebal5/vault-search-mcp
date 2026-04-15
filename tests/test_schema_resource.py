@@ -1,7 +1,7 @@
-"""`schema://tools` MCP resource のテスト (Red フェーズ).
+"""`schema://tools` MCP resource のテスト.
 
 Runtime Schema Introspection 原則に従い、AI エージェントが初回接続時に
-全 MCP tool の入出力スキーマを取得できるようにする機能の失敗テスト。
+全 MCP tool の入出力スキーマを取得できるようにする機能を検証する。
 
 検証方針:
 - スナップショット / 文字列完全一致は禁止。構造 (キー存在, 型, 部分文字列)
@@ -10,6 +10,8 @@ Runtime Schema Introspection 原則に従い、AI エージェントが初回接
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -270,4 +272,70 @@ def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: Va
     )
     assert "path" in schema["properties"], (
         f"vault_get_note properties must include 'path'; got {list(schema['properties'].keys())}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #25: read_resource 経路での runtime 検証
+# ---------------------------------------------------------------------------
+
+
+def test_read_resource_schema_tools_returns_payload(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """read_resource("schema://tools") が build_schema_payload() と同じ JSON を返す.
+
+    URI 登録チェックだけでなく実際の read_resource 呼び出しまで通す regression guard。
+    """
+    from vault_search import server as server_mod
+    from vault_search.mcp_contract import build_schema_payload
+
+    monkeypatch.setattr(server_mod, "_index", vault_index)
+
+    contents = asyncio.run(server_mod.mcp.read_resource("schema://tools"))
+    items = list(contents)
+    assert len(items) == 1, f"expected 1 content item, got {len(items)}"
+
+    payload = json.loads(items[0].content)
+    expected = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert payload == expected, (
+        f"read_resource payload differs from build_schema_payload:\n"
+        f"  got keys: {list(payload.keys())}\n"
+        f"  expected keys: {list(expected.keys())}"
+    )
+
+
+def test_read_resource_schema_tools_uninitialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_index が None (未初期化) のとき read_resource("schema://tools") がエラーを送出する.
+
+    FastMCP は resource 関数内の例外を ResourceError にラップして再送出する。
+    """
+    from mcp.server.fastmcp.exceptions import ResourceError
+
+    from vault_search import server as server_mod
+
+    monkeypatch.setattr(server_mod, "_index", None)
+
+    with pytest.raises(ResourceError):
+        asyncio.run(server_mod.mcp.read_resource("schema://tools"))
+
+
+def test_read_resource_unknown_uri_raises_error(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """未登録 URI (schema://unknown) で read_resource を呼ぶとエラーが送出される.
+
+    FastMCP は登録なしの URI に対して ValueError("Unknown resource: ...") を送出する。
+    """
+    from vault_search import server as server_mod
+
+    monkeypatch.setattr(server_mod, "_index", vault_index)
+
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        asyncio.run(server_mod.mcp.read_resource("schema://unknown"))
+
+    assert "unknown" in str(exc_info.value).lower() or "resource" in str(exc_info.value).lower(), (
+        f"expected error message to mention resource or unknown, got: {exc_info.value}"
     )
