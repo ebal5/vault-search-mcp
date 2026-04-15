@@ -134,6 +134,18 @@ def validate_identifier(
     return name
 
 
+def _validate_strict_int(value: object, name: str) -> None:
+    """Reject non-``int`` *and* ``bool`` (which is a subclass of ``int``).
+
+    ``isinstance(True, int)`` is ``True`` in Python, so a plain ``isinstance``
+    check would silently accept ``True``/``False`` as pagination bounds.
+    Splitting this out keeps the bool-trap reasoning in one place and avoids
+    duplicating the error message across each paginated argument.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"{name} must be an integer, got {type(value).__name__}")
+
+
 def validate_pagination(limit: int, offset: int = 0) -> None:
     """Validate paginated-query bounds, raising on out-of-range values.
 
@@ -142,10 +154,8 @@ def validate_pagination(limit: int, offset: int = 0) -> None:
     non-negative. ``limit`` is capped at :data:`LIMIT_MAX` to keep requests
     aligned with the internal FTS5 cache ceiling.
     """
-    if not isinstance(limit, int) or isinstance(limit, bool):
-        raise ValidationError(f"limit must be an integer, got {type(limit).__name__}")
-    if not isinstance(offset, int) or isinstance(offset, bool):
-        raise ValidationError(f"offset must be an integer, got {type(offset).__name__}")
+    _validate_strict_int(limit, "limit")
+    _validate_strict_int(offset, "offset")
     if limit < 1:
         raise ValidationError(f"limit must be >= 1 (got {limit})")
     if limit > LIMIT_MAX:
