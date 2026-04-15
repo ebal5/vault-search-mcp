@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass, field
@@ -64,7 +65,13 @@ def _parse_yaml_fallback(text: str) -> dict[str, Any]:
 
 @dataclass
 class ParsedNote:
-    """パース済みノートの構造."""
+    """パース済みノートの構造.
+
+    ``frontmatter`` は構築時に :func:`_normalize_fm` で再帰正規化される。
+    ``parse_note`` 以外の経路で ``ParsedNote`` を直接構築しても SQL 層の
+    str→str 不変条件が保たれる (trust boundary を dataclass に閉じ込める)。
+    ``_normalize_scalar`` は str を素通しするため二重適用しても冪等。
+    """
 
     path: str  # Vault ルートからの相対パス
     title: str
@@ -76,13 +83,52 @@ class ParsedNote:
     frontmatter: dict[str, Any] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # 直接構築された ParsedNote にも正規化を強制する (Reviewer D7: trust boundary).
+        self.frontmatter = _normalize_fm(self.frontmatter)
+
     @property
     def tags_json(self) -> str:
         return json.dumps(self.tags, ensure_ascii=False)
 
     @property
     def frontmatter_json(self) -> str:
-        return json.dumps(self.frontmatter, ensure_ascii=False, default=str)
+        # 正規化済みのはずなので default は不要。非 JSON 値が来たら TypeError を
+        # 落として bug を可視化する (Reviewer A3 / D11: silent coercion を許さない).
+        return json.dumps(self.frontmatter, ensure_ascii=False)
+
+
+def _normalize_scalar(v: Any) -> Any:
+    """frontmatter スカラー値を metadata_filter 比較向けに文字列化.
+
+    metadata_filter は常に str 値で比較するため、YAML が返すネイティブ型
+    (int / float / bool / date) を parse 時に文字列へ正規化する。これにより
+    query-time の CAST が不要になり、bool が ``"1"``/``"0"`` 化する UX ワートも
+    消える (Issue #15 / #49)。
+
+    - bool → ``"true"``/``"false"`` (YAML 表記と一致)
+    - int / float → ``str(v)`` (e.g. ``5`` → ``"5"``, ``4.5`` → ``"4.5"``)
+    - date / datetime → ISO 8601 文字列 (``2024-01-15``)
+    - None / str / その他 → そのまま
+
+    ``isinstance(True, int)`` は Python では True なので bool 判定を先に行う。
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return v.isoformat()
+    return v
+
+
+def _normalize_fm(obj: Any) -> Any:
+    """frontmatter dict を再帰的にスカラー正規化."""
+    if isinstance(obj, dict):
+        return {k: _normalize_fm(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_fm(v) for v in obj]
+    return _normalize_scalar(obj)
 
 
 def _normalize_tags(raw: Any) -> list[str]:
@@ -123,7 +169,7 @@ def parse_note(file_path: Path, vault_root: Path) -> ParsedNote | None:
     except (UnicodeDecodeError, OSError):
         return None
 
-    # frontmatter 分離
+    # frontmatter 分離 — 正規化は ``ParsedNote.__post_init__`` に一任 (Issue #15 / #49).
     fm: dict[str, Any] = {}
     content = text
     m = _FM_RE.match(text)

@@ -629,6 +629,100 @@ def test_search_like_percent_not_wildcard(tmp_path: Path) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# End-to-end regression guards for Issue #15 / #49:
+# YAML frontmatter の非 str 型 (int / bool / float / date) が metadata_filter
+# の str 値で正しくマッチする (parse 時に文字列正規化される前提).
+# ---------------------------------------------------------------------------
+
+
+def _build_vault(tmp_path: Path, notes: dict[str, str]) -> VaultIndex:
+    root = tmp_path / "vault"
+    root.mkdir()
+    for rel, body in notes.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    idx = VaultIndex(root, db_path=tmp_path / "test.db")
+    idx.build_index()
+    return idx
+
+
+def test_metadata_filter_matches_int_frontmatter(tmp_path: Path) -> None:
+    """YAML int ``priority: 5`` が metadata_filter `{"priority": "5"}` でヒット."""
+    idx = _build_vault(
+        tmp_path,
+        {
+            "hi.md": "---\npriority: 5\n---\nbody\n",
+            "lo.md": "---\npriority: 3\n---\nbody\n",
+        },
+    )
+    res = idx.search("", metadata_filter={"priority": "5"})
+    paths = {r["path"] for r in res["results"]}
+    assert paths == {"hi.md"}, f"int priority=5 did not match: got {paths}"
+
+
+def test_metadata_filter_matches_bool_frontmatter(tmp_path: Path) -> None:
+    """YAML bool ``archived: true`` が metadata_filter `{"archived": "true"}` でヒット.
+
+    ``"1"``/``"0"`` UX ワートが解消されていることを確認するガード。
+    """
+    idx = _build_vault(
+        tmp_path,
+        {
+            "a.md": "---\narchived: true\n---\nbody\n",
+            "b.md": "---\narchived: false\n---\nbody\n",
+        },
+    )
+    res = idx.search("", metadata_filter={"archived": "true"})
+    paths = {r["path"] for r in res["results"]}
+    assert paths == {"a.md"}, f"bool archived=true did not match: got {paths}"
+
+
+def test_metadata_filter_ne_bool_frontmatter(tmp_path: Path) -> None:
+    """bool の ne も "true"/"false" 文字列で正しく除外される (#49 対称)."""
+    idx = _build_vault(
+        tmp_path,
+        {
+            "a.md": "---\narchived: true\n---\nbody\n",
+            "b.md": "---\narchived: false\n---\nbody\n",
+        },
+    )
+    res = idx.search("", metadata_filter={"archived": {"ne": "true"}})
+    paths = {r["path"] for r in res["results"]}
+    assert paths == {"b.md"}, f"bool ne 'true' mismatch: got {paths}"
+
+
+def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
+    """全スカラー型 (int/bool/float/date) の正規化 → filter 経路を 1 テストで検証.
+
+    個別型テスト (``matches_int_frontmatter`` / ``matches_bool_frontmatter``) は
+    単一型のみをカバーしているため、float / date の正規化が部分的に壊れた場合に
+    silent regression となりうる (Round 3 Reviewer C finding 1)。本テストは
+    parse → index → filter の full pipeline を全スカラー型で一括検証する。
+    """
+    idx = _build_vault(
+        tmp_path,
+        {
+            "target.md": (
+                "---\npriority: 5\narchived: true\nscore: 3.7\ndue: 2024-01-15\n---\nbody\n"
+            ),
+            "other.md": (
+                "---\npriority: 3\narchived: false\nscore: 1.2\ndue: 2024-06-01\n---\nbody\n"
+            ),
+        },
+    )
+    for key, val in [
+        ("priority", "5"),
+        ("archived", "true"),
+        ("score", "3.7"),
+        ("due", "2024-01-15"),
+    ]:
+        res = idx.search("", metadata_filter={key: val})
+        paths = {r["path"] for r in res["results"]}
+        assert paths == {"target.md"}, f"{key}={val!r} did not match exactly target.md: got {paths}"
+
+
 def test_search_query_with_double_quote_does_not_raise(vault_index: VaultIndex) -> None:
     """query 内に `"` を含んでも sqlite3.OperationalError を漏らさない.
 

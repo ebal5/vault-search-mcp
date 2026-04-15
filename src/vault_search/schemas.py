@@ -116,7 +116,14 @@ class NoteDetail(BaseModel):
     )
     frontmatter: dict[str, Any] = Field(
         default_factory=dict,
-        description="frontmatter の生データ (任意の YAML 構造)",
+        description=(
+            "frontmatter の正規化済みデータ。スカラー値 (int/float/bool/date/datetime) は "
+            "index 時に文字列化されている: "
+            '5→"5" / true→"true" / false→"false" / '
+            '2024-01-15→"2024-01-15" / datetime→ISO 8601 "T" 区切り文字列。'
+            "None (YAML null) と str は保持。list/dict は要素を再帰的に正規化した形で返る。"
+            "YAML 原文の型情報は保持されない (metadata_filter との str 比較を一貫させるため)。"
+        ),
     )
 
 
@@ -298,7 +305,18 @@ _TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "frontmatter の各キーに対する AND フィルタ条件。"
                         "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
                         '{"in": list[str]} / {"ne": str}。'
-                        '例: {"status": "active", "priority": {"in": ["high"]}}'
+                        '例: {"status": "active", "priority": {"in": ["high"]}}。'
+                        "比較値は常に文字列。frontmatter のスカラーは index 時に正規化される: "
+                        'int 5→"5" / float 4.5→"4.5" / bool true→"true" false→"false" / '
+                        'date 2024-01-15→"2024-01-15" / '
+                        "datetime は ISO 8601 の T 区切り "
+                        '(e.g. "2024-01-15 14:30:00"→"2024-01-15T14:30:00", '
+                        'タイムゾーン付きは "+00:00" 形式)。'
+                        "list 要素も再帰的に正規化される (tags: [1,2] なら "
+                        '["1","2"] として要素含有判定)。'
+                        "YAML null / 存在しないキーは eq / ne どちらにもマッチしない (3 値論理)。"
+                        "数値・日付の範囲比較 (gt/lt/gte) は未対応 — 必要なら取得後に"
+                        "クライアント側でフィルタすること。"
                     ),
                     "additionalProperties": {
                         "oneOf": [
