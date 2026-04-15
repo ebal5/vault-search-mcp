@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -153,3 +154,69 @@ def test_watcher_removes_on_delete(vault: Path, index: VaultIndex) -> None:
     with _running_watcher(index):
         note.unlink()
         assert _wait_until(lambda: not _indexed(index, "gone.md"))
+
+
+# ---------------------------------------------------------------------------
+# Logging observability — issue #78
+# ---------------------------------------------------------------------------
+
+
+def test_watcher_logs_rename_detected_at_info(
+    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FileMovedEvent で logger.info('rename detected: ...') が出ること (#78)."""
+    src = vault / "A.md"
+    src.write_text("# A\nbody\n", encoding="utf-8")
+    index.build_index()
+    dest = vault / "B.md"
+
+    with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
+        with _running_watcher(index):
+            src.rename(dest)
+            _wait_until(lambda: _indexed(index, "B.md"))
+
+    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert any("rename detected" in m for m in info_msgs), (
+        f"Expected 'rename detected' in INFO logs, got: {info_msgs}"
+    )
+
+
+def test_watcher_logs_indexed_at_info_on_flush(
+    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_flush 成功後に logger.info('indexed: ...') が出ること (#78)."""
+    index.build_index()
+
+    with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
+        with _running_watcher(index):
+            note = vault / "new_note.md"
+            note.write_text("# New\nbody\n", encoding="utf-8")
+            _wait_until(lambda: _indexed(index, "new_note.md"))
+
+    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert any("indexed:" in m for m in info_msgs), (
+        f"Expected 'indexed:' in INFO logs, got: {info_msgs}"
+    )
+
+
+def test_watcher_logs_debug_on_hidden_dest_exclusion(
+    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
+) -> None:
+    """隠しフォルダへの rename で dest_path 除外時に logger.debug が出ること (#78)."""
+    src = vault / "note.md"
+    src.write_text("# N\n", encoding="utf-8")
+    index.build_index()
+    hidden_dir = vault / ".archive"
+    hidden_dir.mkdir()
+
+    with caplog.at_level(logging.DEBUG, logger="vault_search.watcher"):
+        with _running_watcher(index):
+            src.rename(hidden_dir / "note.md")
+            # src 側の update_single が走るまで待つ
+            _wait_until(lambda: not _indexed(index, "note.md"))
+            time.sleep(0.2)  # dest 除外の debug log が出る余裕を持たせる
+
+    debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any(".archive" in m or "excluded" in m or "skip" in m for m in debug_msgs), (
+        f"Expected exclusion debug log for hidden dest, got: {debug_msgs}"
+    )

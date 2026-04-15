@@ -46,14 +46,17 @@ class VaultWatcher:
 
             def _schedule_if_valid(raw_path: str) -> None:
                 if not raw_path.endswith(".md"):
+                    logger.debug("skipped non-.md path: %s", raw_path)
                     return
                 try:
                     rel = str(Path(raw_path).relative_to(watcher._index.vault_root)).replace(
                         "\\", "/"
                     )
                 except ValueError:
+                    logger.debug("skipped path outside vault: %s", raw_path)
                     return
                 if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
+                    logger.debug("skipped excluded path: %s", rel)
                     return
                 watcher._schedule_update(rel)
 
@@ -64,6 +67,11 @@ class VaultWatcher:
                     # FileMovedEvent はリネーム/移動。src_path (旧) と
                     # dest_path (新) の両方をインデックス更新対象にする (#58)。
                     if isinstance(event, FileMovedEvent):
+                        logger.info(
+                            "rename detected: %s -> %s",
+                            event.src_path,
+                            event.dest_path,
+                        )
                         _schedule_if_valid(event.src_path)
                         _schedule_if_valid(event.dest_path)
                         return
@@ -102,9 +110,10 @@ class VaultWatcher:
             paths = list(self._pending.keys())
             self._pending.clear()
 
-        for rel_path in paths:
+        n = len(paths)
+        for i, rel_path in enumerate(paths):
             try:
                 self._index.update_single(rel_path)
-                logger.debug("Updated index: %s", rel_path)
+                logger.info("indexed: %s (pending=%d)", rel_path, n - i - 1)
             except Exception:
                 logger.exception("Failed to update index for %s", rel_path)
