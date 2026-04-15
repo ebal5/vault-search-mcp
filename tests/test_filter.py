@@ -392,3 +392,67 @@ def test_explicit_ops_derived_from_operator() -> None:
         f"_EXPLICIT_OPS {filter_mod._EXPLICIT_OPS!r} must match Operator-minus-eq {expected!r}"
     )
     assert "eq" not in filter_mod._EXPLICIT_OPS, "'eq' must not appear in _EXPLICIT_OPS"
+
+
+# ---------------------------------------------------------------------------
+# Unknown frontmatter key detection + did_you_mean (Issue #19)
+#
+# parse_metadata_filter に known_keys を渡すと、入力キーが known_keys 外の場合に
+# ValidationError (error_code="UNKNOWN_FRONTMATTER_KEY") を送出する。
+# difflib.get_close_matches で候補を提示し、hint に schema://tools を含める。
+# ---------------------------------------------------------------------------
+
+
+class TestParseMetadataFilterUnknownKey:
+    """parse_metadata_filter の known_keys による未知キー検出を検証する (Issue #19).
+
+    Red フェーズ: 以下の未実装の振る舞いが FAIL することを確認する。
+    - known_keys 外のキーは ValidationError (error_code=UNKNOWN_FRONTMATTER_KEY)
+    - did_you_mean に difflib が提示した候補が含まれる
+    - hint に "schema://tools" が含まれる
+    - known_keys=None は後方互換 (従来通り通る)
+    - known_keys に含まれるキーは通る
+    - known_keys=[] は全キーが unknown (ValidationError)
+    - 近似候補なしでも allowed に known_keys が含まれる
+    """
+
+    def test_typo_key_raises_with_did_you_mean(self) -> None:
+        """タイポキーで ValidationError を送出し、did_you_mean に修正候補が含まれる."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priorty": "5"}, known_keys=["priority", "status"])
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        assert "priority" in err.did_you_mean
+        assert "schema://tools" in (err.hint or "")
+
+    def test_known_key_passes(self) -> None:
+        """known_keys に含まれるキーは ValidationError を送出しない."""
+        result = parse_metadata_filter({"priority": "5"}, known_keys=["priority", "status"])
+        assert len(result) == 1
+        assert result[0].key == "priority"
+
+    def test_known_keys_none_backward_compat(self) -> None:
+        """known_keys=None (デフォルト) は後方互換 — 従来通り通る."""
+        result = parse_metadata_filter({"xyz": "v"}, known_keys=None)
+        assert len(result) == 1
+        assert result[0].key == "xyz"
+
+    def test_empty_known_keys_rejects_any_key(self) -> None:
+        """known_keys=[] のとき全キーが unknown として ValidationError を送出する."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"xyz": "v"}, known_keys=[])
+        assert exc.value.error_code == "UNKNOWN_FRONTMATTER_KEY"
+
+    def test_no_close_match_still_raises_with_allowed(self) -> None:
+        """近似候補なし (cutoff=0.6 未満) でもエラーを送出し、allowed に known_keys を含める."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"nonexistent": "v"},
+                known_keys=["status", "priority", "tags"],
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        # did_you_mean は空 sequence (近似なし)
+        assert len(err.did_you_mean) == 0
+        # allowed には known_keys のソート済みリストが含まれる
+        assert set(err.allowed) == {"status", "priority", "tags"}
