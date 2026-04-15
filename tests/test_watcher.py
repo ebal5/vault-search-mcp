@@ -10,7 +10,8 @@ import pytest
 
 pytest.importorskip("watchdog")
 
-from vault_search.indexer import VaultIndex, VaultWatcher  # noqa: E402
+from vault_search.indexer import VaultIndex  # noqa: E402
+from vault_search.watcher import VaultWatcher  # noqa: E402
 
 
 def _indexed(index: VaultIndex, rel_path: str) -> bool:

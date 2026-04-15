@@ -1,118 +1,27 @@
-"""SQLite + FTS5 インデクサー、3段キャッシュ、ファイル監視.
+"""SQLite + FTS5 インデクサー.
 
 ByteRover の 5段階プログレッシブ検索 (Tier 0-2) を参考にした設計:
-  Tier 0: 完全キャッシュヒット (~0ms)
-  Tier 1: ファジーキャッシュ — Jaccard 類似度 ≥ 0.8 (~1ms)
-  Tier 2: FTS5 全文検索 — trigram トークナイザ (~10-100ms)
+  Tier 0: 完全キャッシュヒット (~0ms) — ``cache.TieredCache``
+  Tier 1: ファジーキャッシュ — Jaccard 類似度 ≥ 0.8 (~1ms) — 同上
+  Tier 2: FTS5 全文検索 — trigram トークナイザ (~10-100ms) — 本モジュール
+
+ファイル監視は ``watcher.VaultWatcher`` が担う。
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
 import threading
-import time
-from collections import OrderedDict
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .cache import TieredCache
 from .filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
 from .parser import ParsedNote, parse_note
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class CacheEntry:
-    result: list[dict[str, Any]]
-    tokens: frozenset[str]
-    created_at: float = field(default_factory=time.monotonic)
-
-
-class TieredCache:
-    """Tier 0 (exact) + Tier 1 (fuzzy) キャッシュ."""
-
-    def __init__(self, max_size: int = 256, ttl: float = 300.0, fuzzy_threshold: float = 0.8):
-        self._store: OrderedDict[str, CacheEntry] = OrderedDict()
-        self._max_size = max_size
-        self._ttl = ttl
-        self._fuzzy_threshold = fuzzy_threshold
-        self._lock = threading.Lock()
-
-    def _tokenize(self, query: str) -> frozenset[str]:
-        """クエリをトークン集合に変換."""
-        return frozenset(query.lower().split())
-
-    def _cache_key(self, query: str, filters: dict[str, Any] | None) -> str:
-        raw = query + "|" + json.dumps(filters or {}, sort_keys=True, ensure_ascii=False)
-        return hashlib.md5(raw.encode()).hexdigest()
-
-    def _jaccard(self, a: frozenset[str], b: frozenset[str]) -> float:
-        if not a and not b:
-            return 1.0
-        union = a | b
-        if not union:
-            return 0.0
-        return len(a & b) / len(union)
-
-    def get(
-        self, query: str, filters: dict[str, Any] | None = None
-    ) -> tuple[int, list[dict[str, Any]] | None]:
-        """キャッシュ検索。返り値: (tier, results). tier=-1 はミス."""
-        now = time.monotonic()
-        key = self._cache_key(query, filters)
-
-        with self._lock:
-            # Tier 0: 完全一致
-            if key in self._store:
-                entry = self._store[key]
-                if now - entry.created_at < self._ttl:
-                    self._store.move_to_end(key)
-                    return (0, entry.result)
-                else:
-                    del self._store[key]
-
-            # Tier 1: ファジー検索（フィルタなしの場合のみ）
-            if not filters:
-                query_tokens = self._tokenize(query)
-                best_score = 0.0
-                best_entry: CacheEntry | None = None
-
-                for _k, entry in self._store.items():
-                    if now - entry.created_at >= self._ttl:
-                        continue
-                    score = self._jaccard(query_tokens, entry.tokens)
-                    if score > best_score:
-                        best_score = score
-                        best_entry = entry
-
-                if best_score >= self._fuzzy_threshold and best_entry is not None:
-                    return (1, best_entry.result)
-
-        return (-1, None)
-
-    def put(self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]) -> None:
-        key = self._cache_key(query, filters)
-        tokens = self._tokenize(query)
-
-        with self._lock:
-            self._store[key] = CacheEntry(result=result, tokens=tokens)
-            self._store.move_to_end(key)
-
-            while len(self._store) > self._max_size:
-                self._store.popitem(last=False)
-
-    def invalidate(self) -> None:
-        """全キャッシュクリア（インデックス更新時）."""
-        with self._lock:
-            self._store.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -712,100 +621,3 @@ class VaultIndex:
             }
         finally:
             conn.close()
-
-
-# ---------------------------------------------------------------------------
-# File Watcher
-# ---------------------------------------------------------------------------
-
-
-class VaultWatcher:
-    """watchdog ベースのファイル監視.
-
-    watchdog が無い環境では polling フォールバック。
-    """
-
-    def __init__(self, index: VaultIndex, debounce_sec: float = 2.0):
-        self._index = index
-        self._debounce_sec = debounce_sec
-        self._observer: Any = None
-        self._pending: dict[str, float] = {}
-        self._timer: threading.Timer | None = None
-        self._lock = threading.Lock()
-
-    def start(self) -> bool:
-        """監視開始。watchdog が利用可能なら True."""
-        try:
-            from watchdog.events import (
-                FileMovedEvent,
-                FileSystemEvent,
-                FileSystemEventHandler,
-            )
-            from watchdog.observers import Observer
-
-            watcher = self
-
-            def _schedule_if_valid(raw_path: str) -> None:
-                if not raw_path.endswith(".md"):
-                    return
-                try:
-                    rel = str(Path(raw_path).relative_to(watcher._index.vault_root)).replace(
-                        "\\", "/"
-                    )
-                except ValueError:
-                    return
-                if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
-                    return
-                watcher._schedule_update(rel)
-
-            class Handler(FileSystemEventHandler):
-                def on_any_event(self, event: FileSystemEvent) -> None:
-                    if event.is_directory:
-                        return
-                    # FileMovedEvent はリネーム/移動。src_path (旧) と
-                    # dest_path (新) の両方をインデックス更新対象にする (#58)。
-                    if isinstance(event, FileMovedEvent):
-                        _schedule_if_valid(event.src_path)
-                        _schedule_if_valid(event.dest_path)
-                        return
-                    _schedule_if_valid(event.src_path)
-
-            self._observer = Observer()
-            self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
-            self._observer.daemon = True
-            self._observer.start()
-            logger.info("File watcher started: %s", self._index.vault_root)
-            return True
-
-        except ImportError:
-            logger.warning("watchdog not installed — file watching disabled")
-            return False
-
-    def stop(self) -> None:
-        if self._observer:
-            self._observer.stop()
-            self._observer.join(timeout=5)
-            self._observer = None
-
-    def _schedule_update(self, rel_path: str) -> None:
-        """デバウンス付きインデックス更新スケジューリング."""
-        with self._lock:
-            self._pending[rel_path] = time.monotonic()
-
-            if self._timer is not None:
-                self._timer.cancel()
-            self._timer = threading.Timer(self._debounce_sec, self._flush)
-            self._timer.daemon = True
-            self._timer.start()
-
-    def _flush(self) -> None:
-        with self._lock:
-            paths = list(self._pending.keys())
-            self._pending.clear()
-
-        for rel_path in paths:
-            try:
-                self._index.update_single(rel_path)
-                logger.debug("Updated index: %s", rel_path)
-            except Exception:
-                logger.exception("Failed to update index for %s", rel_path)

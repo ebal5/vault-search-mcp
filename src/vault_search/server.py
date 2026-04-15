@@ -25,7 +25,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .exceptions import NoteNotFoundError
-from .indexer import VaultIndex, VaultWatcher
+from .indexer import VaultIndex
 from .mcp_contract import (
     TOOL_SPECS,
     build_schema_payload,
@@ -42,6 +42,7 @@ from .schemas import (
     VaultStats,
 )
 from .validation import validate_pagination
+from .watcher import VaultWatcher
 
 logger = logging.getLogger(__name__)
 
