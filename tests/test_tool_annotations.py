@@ -195,11 +195,7 @@ def test_tool_annotations_title(tool_name: str, expected_title: str) -> None:
 def test_all_tools_have_title() -> None:
     """MCP list_tools で返る全 tool の annotations.title が設定済みである (Issue #85)."""
     tools = asyncio.run(server_mod.mcp.list_tools())
-    missing = [
-        t.name
-        for t in tools
-        if t.annotations is None or t.annotations.title is None
-    ]
+    missing = [t.name for t in tools if t.annotations is None or t.annotations.title is None]
     assert missing == [], f"tools without annotations.title: {missing}"
 
 
