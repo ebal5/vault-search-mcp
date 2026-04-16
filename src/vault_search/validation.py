@@ -33,7 +33,6 @@ __all__ = [
     "IDENTIFIER_MAX_LEN",
     "LIMIT_MAX",
     "ValidationError",
-    "format_unknown_key_message",
     "format_unknown_keys_message",
     "validate_identifier",
     "validate_known_key",
@@ -255,20 +254,6 @@ def format_unknown_keys_message(
             f"See {schema_ref} for the {registry_label}"
         )
     return f"Unknown {kind}s: {keys_str}. See {schema_ref} for the {registry_label}"
-
-
-def format_unknown_key_message(
-    name: str,
-    kind: str,
-    suggestions: Sequence[str],
-    known_keys: Sequence[str],
-) -> str:
-    """Deprecated: single-key message builder. Delegates to :func:`format_unknown_keys_message`.
-
-    Retained temporarily to keep ``filter.py`` imports working; call sites
-    should migrate to :func:`format_unknown_keys_message` directly.
-    """
-    return format_unknown_keys_message({name: tuple(suggestions)}, kind, known_keys)
 
 
 def validate_known_keys(
