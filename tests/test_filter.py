@@ -466,6 +466,19 @@ class TestParseMetadataFilterUnknownKey:
             f"did_you_mean candidate 'priority' must appear in error message for agent DX; got: {msg!r}"
         )
 
+    def test_no_close_match_message_includes_allowed_keys(self) -> None:
+        """近似候補なし時もメッセージに valid keys が含まれる (F2 fix)."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"nonexistent": "v"},
+                known_keys=["status", "priority", "tags"],
+            )
+        msg = str(exc.value)
+        # At least one known key should appear in the message for agent self-correction
+        assert any(k in msg for k in ["status", "priority", "tags"]), (
+            f"At least one known key must appear in error message when no close match exists; got: {msg!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Range operator alias detection (Issue #87)
