@@ -12,6 +12,7 @@ import pytest
 from vault_search.validation import (
     ValidationError,
     validate_identifier,
+    validate_known_key,
     validate_value,
 )
 
@@ -310,3 +311,54 @@ def test_validate_value_error_message_includes_custom_kind() -> None:
     with pytest.raises(ValidationError) as exc:
         validate_value("bad\x00value", kind="frontmatter value")
     assert "frontmatter value" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# validate_known_key — Issue #117
+#
+# filter.py の parse_metadata_filter から抽出した unknown key 検出ヘルパ。
+# known_keys に含まれる場合は入力を素通し、未知キーは
+# ValidationError(error_code="UNKNOWN_FRONTMATTER_KEY") を
+# did_you_mean (difflib) + allowed (sorted) 付きで送出する。
+# ---------------------------------------------------------------------------
+
+
+class TestValidateKnownKey:
+    """validate_known_key の直接テスト (Issue #117)."""
+
+    def test_known_key_returns_unchanged(self) -> None:
+        assert (
+            validate_known_key("priority", ["priority", "status"], kind="frontmatter key")
+            == "priority"
+        )
+
+    def test_unknown_key_raises_with_error_code(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            validate_known_key("priorty", ["priority", "status"], kind="frontmatter key")
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        assert "priority" in err.did_you_mean
+        assert tuple(sorted(err.allowed)) == ("priority", "status")
+        assert "schema://tools" in str(err)
+
+    def test_no_close_match_still_raises_with_allowed(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            validate_known_key(
+                "nonexistent",
+                ["status", "priority", "tags"],
+                kind="frontmatter key",
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        assert err.did_you_mean == ()
+        assert set(err.allowed) == {"status", "priority", "tags"}
+
+    def test_empty_known_keys_rejects_any_key(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            validate_known_key("xyz", [], kind="frontmatter key")
+        assert exc.value.error_code == "UNKNOWN_FRONTMATTER_KEY"
+
+    def test_kind_label_appears_in_message(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            validate_known_key("xyz", ["a"], kind="frontmatter key")
+        assert "frontmatter key" in str(exc.value)
