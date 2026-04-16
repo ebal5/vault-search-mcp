@@ -22,6 +22,7 @@ from typing import Any
 from .cache import TieredCache
 from .filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
 from .parser import ParsedNote, parse_note
+from .validation import normalize_folder
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +110,12 @@ def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, lis
     `folder == 'Projects'` が `'Projects Hermes'` 等の兄弟を拾わないよう、
     LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
 
-    入力は `\\` → `/` 置換、末尾 `/` の rstrip で正規化する。正規化後が空
-    文字列 (e.g. `folder='/'`, `'//'`, `'\\'`) の場合は「フィルタなし」を意味
-    する no-op 断片 ``"1=1"`` と空 params を返す。
-
     Parameters
     ----------
     folder:
-        フォルダパス。空文字はフィルタを掛けないので呼び出し側で分岐する前提
-        だが、正規化後に空となるケース (スラッシュのみ) は本関数が no-op で吸収する。
+        canonical 形式の非空フォルダパス。呼び出し側 (``server.py``) が
+        :func:`~vault_search.validation.normalize_folder` で正規化済みであること
+        を前提とする。先頭 ``/`` や連続 ``/`` は含まない。
     column:
         SQL 上のカラム名。`n.folder` のようにテーブルエイリアス付きも可。
 
@@ -126,14 +124,7 @@ def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, lis
     tuple[str, list[Any]]
         ``(clause, params)``。clause は前置詞を含まない WHERE 断片
         ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
-        正規化後空の場合は ``("1=1", [])``。
     """
-    folder = folder.replace("\\", "/").rstrip("/")
-    if not folder:
-        # `/`, `//`, `\\` 等のスラッシュのみ入力は rstrip 後 '' となり、
-        # 呼び出し側の `if folder:` ガードは素通りしている。ここで no-op
-        # 断片 ("1=1") を返し「フィルタなし」扱いに揃える (Issue #34)。
-        return "1=1", []
     escaped = folder.replace("%", "\\%").replace("_", "\\_")
     clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
     return clause, [folder, escaped + "/%"]
@@ -386,6 +377,10 @@ class VaultIndex:
         いずれかが指定されていれば、DB 全体を対象に構造化フィルタだけで
         絞り込む。全引数が空の場合は空結果を返す。
         """
+        # folder を canonical 形式に正規化する。先頭 '/' や '\\' 区切りの
+        # 入力を吸収し、スラッシュのみの場合は None (フィルタなし) にする。
+        folder = normalize_folder(folder) if folder is not None else None
+
         # Validate (raises ValidationError on malformed input).
         # metadata_filter が指定された場合のみ known_keys を取得する
         # (filter なしでは不要なので呼ばない)。list_frontmatter_keys() は
@@ -560,6 +555,7 @@ class VaultIndex:
         folder: str | None = None,
     ) -> list[dict[str, Any]]:
         """最近更新されたノート. offset スキップ後 limit 件を返す."""
+        folder = normalize_folder(folder) if folder is not None else None
         with self.connection() as conn:
             if folder:
                 clause, folder_params = _folder_filter_clause(folder, column="folder")
