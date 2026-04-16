@@ -101,7 +101,11 @@ def vault_search(
             対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
             リスト型 frontmatter 値は「含む」判定 (tags と同様)。
             unknown frontmatter key を指定すると ValidationError
-            (did_you_mean 付き) を返す (Issue #19)。
+            (did_you_mean 付き) を返す (Issue #19)。複数 unknown key を同時に
+            指定した場合は 1 回の ValidationError にまとめて報告され、各キーの
+            did_you_mean 候補は ``err.unknown_keys[key]`` を参照する (Issue #123)。
+            unknown key と unsupported operator が混在する場合、unknown key が
+            優先して報告される (3-pass 検証順)。
 
     Returns:
         常に plain dict を返す ({"tier", "total", "results": [dict]})。
