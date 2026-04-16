@@ -464,7 +464,8 @@ class TestParseMetadataFilterUnknownKey:
             parse_metadata_filter({"priorty": "5"}, known_keys=["priority", "status"])
         msg = str(exc.value)
         assert "priority" in msg, (
-            f"did_you_mean candidate 'priority' must appear in error message for agent DX; got: {msg!r}"
+            "did_you_mean candidate 'priority' must appear in error message "
+            f"for agent DX; got: {msg!r}"
         )
 
     def test_no_close_match_message_includes_allowed_keys(self) -> None:
@@ -477,7 +478,8 @@ class TestParseMetadataFilterUnknownKey:
         msg = str(exc.value)
         # At least one known key should appear in the message for agent self-correction
         assert any(k in msg for k in ["status", "priority", "tags"]), (
-            f"At least one known key must appear in error message when no close match exists; got: {msg!r}"
+            "At least one known key must appear in error message when no close "
+            f"match exists; got: {msg!r}"
         )
 
 
