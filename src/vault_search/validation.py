@@ -35,7 +35,6 @@ __all__ = [
     "ValidationError",
     "format_unknown_keys_message",
     "validate_identifier",
-    "validate_known_key",
     "validate_known_keys",
     "validate_pagination",
     "validate_value",
@@ -202,13 +201,8 @@ def format_unknown_keys_message(
 ) -> str:
     """Build a unified unknown-key error message covering 1 and N unknown keys.
 
-    Consolidates the single-key (``validate_known_key``) and multi-key
-    (``filter._raise_unknown_keys``) paths into one builder so preview length
-    and schema-reference wording live in one place (#140).
-
     MCP / frontmatter-specific wording is injected via ``schema_ref`` and
-    ``registry_label`` instead of hardcoded strings; defaults match the
-    legacy callsites so existing messages remain bit-identical (#138).
+    ``registry_label`` instead of hardcoded strings (#138).
 
     ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
     を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
@@ -266,11 +260,9 @@ def validate_known_keys(
 ) -> None:
     """Validate that every name in ``names`` appears in ``known_keys`` (batch).
 
-    Supersedes :func:`validate_known_key` for callers that need to check
-    multiple names at once (filter.py's ``parse_metadata_filter``). Single-
-    and multi-unknown cases produce the same :class:`ValidationError` shape
-    (``error_code="UNKNOWN_FRONTMATTER_KEY"``) so agents can self-correct
-    uniformly (#141 Option A).
+    Used by filter.py's ``parse_metadata_filter`` to report all unknown keys
+    in one :class:`ValidationError` (``error_code="UNKNOWN_FRONTMATTER_KEY"``)
+    so agents can self-correct in a single round-trip (#123/#141).
 
     Parameters
     ----------
@@ -313,21 +305,6 @@ def validate_known_keys(
         allowed=sorted(known_keys),
         unknown_keys=sorted_unknowns,
     )
-
-
-def validate_known_key(
-    name: str,
-    known_keys: Sequence[str],
-    *,
-    kind: str,
-) -> str:
-    """Validate that ``name`` appears in ``known_keys`` and return it unchanged.
-
-    Thin wrapper over :func:`validate_known_keys`; kept for callers that
-    handle a single name at a time. New code should prefer the batch API.
-    """
-    validate_known_keys([name], known_keys, kind=kind)
-    return name
 
 
 def _validate_strict_int(value: object, name: str) -> None:
