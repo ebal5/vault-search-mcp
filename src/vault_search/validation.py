@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import ClassVar
 
 from .exceptions import VaultSearchError
 
@@ -79,8 +78,7 @@ class ValidationError(VaultSearchError, ValueError):
     message:
         Human-readable description of the validation failure.
     error_code:
-        Optional override for the class-level ``error_code`` attribute.
-        When provided, the instance shadows the class attribute.
+        Per-instance error code; defaults to ``"VALIDATION_ERROR"``.
     hint:
         Optional short guidance for self-correction (e.g. "see schema://tools").
     did_you_mean:
@@ -89,21 +87,19 @@ class ValidationError(VaultSearchError, ValueError):
         Optional sorted list of all allowed values / keys.
     """
 
-    error_code: ClassVar[str] = "VALIDATION_ERROR"
+    error_code: str = "VALIDATION_ERROR"
 
     def __init__(
         self,
         message: str,
         *,
-        error_code: str | None = None,
+        error_code: str = "VALIDATION_ERROR",
         hint: str | None = None,
         did_you_mean: Sequence[str] | None = None,
         allowed: Sequence[str] | None = None,
     ) -> None:
         super().__init__(message)
-        if error_code is not None:
-            # instance attribute shadows the class-level ClassVar
-            self.error_code = error_code
+        self.error_code = error_code
         self.hint = hint
         self.did_you_mean: tuple[str, ...] = tuple(did_you_mean) if did_you_mean else ()
         self.allowed: tuple[str, ...] = tuple(allowed) if allowed else ()
