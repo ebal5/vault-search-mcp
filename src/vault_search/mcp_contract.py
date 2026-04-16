@@ -29,7 +29,7 @@ from .schemas import (
     TagCount,
     VaultStats,
 )
-from .validation import LIMIT_MAX
+from .validation import IDENTIFIER_JSON_PATTERN, IDENTIFIER_MAX_LEN, LIMIT_MAX
 
 __all__ = [
     "TOOL_ENTRIES",
@@ -158,6 +158,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "frontmatter の各キーに対する AND フィルタ条件。"
                         "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
                         '{"in": list[str]} / {"ne": str}。'
+                        "各キーにつき exactly one operator (str / in / ne のいずれか 1 つ) を指定すること。"
                         '例: {"status": "active", "priority": {"in": ["high"]}}。'
                         "比較値は常に文字列。frontmatter のスカラーは index 時に正規化される: "
                         'int 5→"5" / float 4.5→"4.5" / bool true→"true" false→"false" / '
@@ -171,6 +172,10 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "数値・日付の範囲比較 (gt/lt/gte) は未対応 — 必要なら取得後に"
                         "クライアント側でフィルタすること。"
                     ),
+                    "propertyNames": {
+                        "pattern": IDENTIFIER_JSON_PATTERN,
+                        "maxLength": IDENTIFIER_MAX_LEN,
+                    },
                     "additionalProperties": {
                         "oneOf": [
                             {
