@@ -113,9 +113,20 @@ def parse_metadata_filter(
 
         if known_keys is not None and key not in known_keys:
             suggestions = difflib.get_close_matches(key, known_keys, n=3, cutoff=0.6)
+            if suggestions:
+                suggestion_str = ", ".join(suggestions)
+                msg = (
+                    f"Unknown frontmatter key {key!r}; "
+                    f"did you mean: {suggestion_str}? "
+                    f"See schema://tools for the frontmatter_keys list"
+                )
+            else:
+                msg = (
+                    f"Unknown frontmatter key {key!r}; "
+                    f"see schema://tools for the frontmatter_keys list"
+                )
             raise ValidationError(
-                f"Unknown frontmatter key {key!r}; "
-                f"see schema://tools for the frontmatter_keys list",
+                msg,
                 error_code="UNKNOWN_FRONTMATTER_KEY",
                 hint="see schema://tools for the frontmatter_keys list",
                 did_you_mean=suggestions,
