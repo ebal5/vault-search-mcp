@@ -362,3 +362,41 @@ class TestValidateKnownKey:
         with pytest.raises(ValidationError) as exc:
             validate_known_key("xyz", ["a"], kind="frontmatter key")
         assert "frontmatter key" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# ValidationError.unknown_keys 契約 (Issue #123 round 1 review D5)
+#
+# ``unknown_keys`` 属性は ``parse_metadata_filter`` の batch 経路専用だが、
+# ValidationError の契約は validation 層の単体テストとして独立に pin する。
+# 将来 subclass 化 (#32 follow-up) や属性名変更時の source of truth。
+# ---------------------------------------------------------------------------
+
+
+class TestValidationErrorUnknownKeysAttribute:
+    """ValidationError.unknown_keys 属性の直接契約テスト."""
+
+    def test_default_is_empty_dict(self) -> None:
+        """unknown_keys を渡さないと空 dict になる."""
+        err = ValidationError("msg")
+        assert err.unknown_keys == {}
+
+    def test_mapping_converted_to_dict_of_tuple(self) -> None:
+        """渡した Mapping は ``dict[str, tuple[str, ...]]`` に正規化される."""
+        err = ValidationError(
+            "msg",
+            unknown_keys={"priorty": ["priority"], "statu": ["status"]},
+        )
+        assert isinstance(err.unknown_keys, dict)
+        assert err.unknown_keys["priorty"] == ("priority",)
+        assert err.unknown_keys["statu"] == ("status",)
+
+    def test_empty_sequence_preserved_per_key(self) -> None:
+        """候補なしキーは空 tuple として保持される (None でなく空 tuple)."""
+        err = ValidationError("msg", unknown_keys={"foo": []})
+        assert err.unknown_keys == {"foo": ()}
+
+    def test_non_unknown_key_error_has_empty_unknown_keys(self) -> None:
+        """他 error_code の ValidationError は unknown_keys が常に空."""
+        err = ValidationError("bad op", error_code="VALIDATION_ERROR")
+        assert err.unknown_keys == {}

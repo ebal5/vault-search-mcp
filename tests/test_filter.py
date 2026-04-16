@@ -507,7 +507,13 @@ class TestParseMetadataFilterMultipleUnknownKeys:
     """
 
     def test_multiple_unknown_keys_reported_together(self) -> None:
-        """2 つ以上の unknown key が 1 回の ValidationError で報告される."""
+        """2 つ以上の unknown key が 1 回の ValidationError で報告される.
+
+        ``known_keys`` にも ``"priority"`` を含めたケースで「メッセージに
+        ``"priority"`` が含まれる」だけだと valid-keys preview 経由で通過する
+        vacuous pass 余地がある。構造化属性 ``unknown_keys`` と
+        ``did you mean: priority`` の逐語 pattern の両方で pin する。
+        """
         with pytest.raises(ValidationError) as exc:
             parse_metadata_filter(
                 {"priorty": "5", "statu": "active"},
@@ -515,13 +521,20 @@ class TestParseMetadataFilterMultipleUnknownKeys:
             )
         err = exc.value
         assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        # 構造化属性で両キー batch 収集を primary に検証
+        assert set(err.unknown_keys.keys()) == {"priorty", "statu"}
         msg = str(err)
         # 両方の unknown key 名がメッセージに含まれる (first-fail-only なら片方欠落)
         assert "priorty" in msg, f"first unknown key missing from message: {msg!r}"
         assert "statu" in msg, f"second unknown key missing from message: {msg!r}"
-        # 各キーの did_you_mean 候補もメッセージに含まれる (agent の 1-shot 修正用)
-        assert "priority" in msg, f"suggestion for 'priorty' missing: {msg!r}"
-        assert "status" in msg, f"suggestion for 'statu' missing: {msg!r}"
+        # 候補が "did you mean: ..." 逐語 pattern で現れることを pin
+        # (単に ``"priority" in msg`` だと valid-keys preview 経由で vacuous に通る)
+        assert "did you mean: priority" in msg, (
+            f"suggestion for 'priorty' must appear in 'did you mean:' pattern; got {msg!r}"
+        )
+        assert "did you mean: status" in msg, (
+            f"suggestion for 'statu' must appear in 'did you mean:' pattern; got {msg!r}"
+        )
 
     def test_unknown_keys_attribute_structured_per_key(self) -> None:
         """unknown_keys 属性が各 key ごとの did_you_mean 候補を dict で保持する."""
@@ -579,14 +592,72 @@ class TestParseMetadataFilterMultipleUnknownKeys:
         assert set(err.allowed) == {"priority", "status"}
 
     def test_multiple_unknown_keys_allowed_full_sorted(self) -> None:
-        """multi-unknown 時も allowed は known_keys のソート済み全集合を含む."""
+        """multi-unknown 時も allowed は known_keys をソート済み tuple で含む."""
         with pytest.raises(ValidationError) as exc:
             parse_metadata_filter(
                 {"typo1": "a", "typo2": "b"},
-                known_keys=["priority", "status", "tags"],
+                known_keys=["tags", "priority", "status"],
             )
         err = exc.value
-        assert set(err.allowed) == {"priority", "status", "tags"}
+        # 集合比較ではなく順序付き tuple で pin (C2 review: "sorted" 主張の担保)
+        assert tuple(err.allowed) == ("priority", "status", "tags"), (
+            f"allowed must be sorted ascending; got {err.allowed!r}"
+        )
+
+    def test_multi_key_no_candidates_message_includes_valid_keys(self) -> None:
+        """全キーに候補なしの multi-key batch で message が valid keys を列挙 (C3).
+
+        ``known_keys=["zzz"]`` と close match 不能な key の組み合わせで、
+        ``_raise_unknown_keys`` の「候補なし混在」分岐が正しく valid keys
+        preview を付加することを pin する。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"foo": "a", "bar": "b"},
+                known_keys=["zzz"],
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        # 各 key の候補は空 tuple
+        assert err.unknown_keys == {"foo": (), "bar": ()}, (
+            f"all keys must have empty suggestions; got {err.unknown_keys!r}"
+        )
+        msg = str(err)
+        # message に valid keys preview と "no close match" が含まれる
+        assert "zzz" in msg, f"valid keys preview missing; got {msg!r}"
+        assert "no close match" in msg, f"no-close-match annotation missing; got {msg!r}"
+
+    def test_known_keys_none_allows_multiple_keys(self) -> None:
+        """known_keys=None で複数キーを渡しても batch 収集経路に落ちず通る (C5).
+
+        ``if known_keys is not None:`` の早期 skip が壊れた場合の regression
+        guard。multi-key 収集経路が誤って None でも発動する変更を検知する。
+        """
+        conditions = parse_metadata_filter(
+            {"foo": "a", "bar": "b", "baz": "c"},
+            known_keys=None,
+        )
+        assert len(conditions) == 3
+        assert {c.key for c in conditions} == {"foo", "bar", "baz"}
+
+    def test_unknown_key_takes_precedence_over_bad_operator(self) -> None:
+        """3-pass 化で unknown key 検出が op/value error より先に発火する (A3).
+
+        旧 per-key interleave では ``{"known": {"bad_op": 5}, "typo": "x"}`` が
+        bad_op で先に fail していたが、3-pass 化後は pass 2 が typo を検出して
+        UNKNOWN_FRONTMATTER_KEY を raise する。この契約変更を明示的に pin する。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"priority": {"bad_op": 5}, "typo": "x"},
+                known_keys=["priority", "status"],
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY", (
+            "unknown key detection must precede per-entry operator validation; "
+            f"got error_code={err.error_code!r}"
+        )
+        assert "typo" in err.unknown_keys
 
 
 # ---------------------------------------------------------------------------
