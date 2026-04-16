@@ -457,6 +457,15 @@ class TestParseMetadataFilterUnknownKey:
         # allowed には known_keys のソート済みリストが含まれる
         assert set(err.allowed) == {"status", "priority", "tags"}
 
+    def test_unknown_key_message_includes_suggestions(self) -> None:
+        """UNKNOWN_FRONTMATTER_KEY のメッセージに did_you_mean 候補が含まれる (F1 fix)."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priorty": "5"}, known_keys=["priority", "status"])
+        msg = str(exc.value)
+        assert "priority" in msg, (
+            f"did_you_mean candidate 'priority' must appear in error message for agent DX; got: {msg!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Range operator alias detection (Issue #87)
