@@ -26,7 +26,7 @@ import difflib
 import re
 from collections.abc import Sequence
 
-from .exceptions import VaultSearchError
+from .exceptions import ErrorCode, VaultSearchError
 
 __all__ = [
     "IDENTIFIER_JSON_PATTERN",
@@ -97,13 +97,13 @@ class ValidationError(VaultSearchError, ValueError):
         Optional sorted list of all allowed values / keys.
     """
 
-    error_code: str = "VALIDATION_ERROR"
+    error_code: ErrorCode = "VALIDATION_ERROR"
 
     def __init__(
         self,
         message: str,
         *,
-        error_code: str = "VALIDATION_ERROR",
+        error_code: ErrorCode = "VALIDATION_ERROR",
         hint: str | None = None,
         did_you_mean: Sequence[str] | None = None,
         allowed: Sequence[str] | None = None,
