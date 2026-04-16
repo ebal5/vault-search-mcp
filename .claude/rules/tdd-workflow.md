@@ -116,6 +116,74 @@ commit prefix は「振る舞いが変わるか」で選ぶ:
 - `git pull --rebase` 相当の自動調停は禁止 (意図しないマージは親の責任)
 - 同一ファイルを 2 エージェントが書く予定があれば逐次化、並列しない
 
+## 複数 issue の並列運用パターン
+
+Phase A/B のように「互いにほぼ独立した 2-4 issue を短時間でまとめて片付けたい」
+場合の運用指針。試行結果を蓄積しつつ更新していく (2026-04-16 時点)。
+
+### Baseline: 親セッション worktree 逐次切替 (実績あり)
+
+親 Claude 自身が `EnterWorktree` → Red/Green/Refactor 直接 Edit → PR 作成 →
+`ExitWorktree(remove)` → 次 issue 用に新 worktree を作る、を逐次繰り返す。
+
+- **安定性**: 2026-04-16 セッションで #117 / #120 / #119 を ~30 分/件で
+  回せた実績あり。timeout / permission 拒否なし
+- **向く task**: 1 PR あたり <100 行、TDD 3 commit 程度。filter.py のような
+  中核ファイルを触っても親の Edit は permission 通過が確実
+- **向かない task**: 1 PR あたり >500 行の広範囲 edit。親が逐次だと時間が
+  累積する
+- **弱点**: 「並列」ではなく単にシリアライズしているだけ。壁時計時間は
+  issue 数に比例
+
+### 試行錯誤中: TeamCreate ベースの parallel PDCA
+
+`TeamCreate` で team を作り、親 (team lead) が issue ごとに worktree 付き
+teammate を spawn して並列実行する案。2026-04-16 時点で未試行。次回セッションで
+SMALL × 2 issue 程度で試す想定。
+
+**想定フロー**:
+
+1. 親が `TeamCreate(team_name="phase-X-parallel")` で team を開く
+2. 親が各 issue を `TaskCreate` で team 共通タスクリストに登録 (completion
+   条件・禁止事項・lint/test の完了チェック項目を含める)
+3. 各 teammate を `Agent(subagent_type="general-purpose", team_name=...,
+   isolation="worktree")` で spawn。`general-purpose` は Edit 可能、
+   `isolation: "worktree"` で独立 git worktree が切られる
+4. teammate は Red → Green → Refactor → PR 作成まで完結し `TaskUpdate` で
+   完了報告
+5. 親は teammate からの完了メッセージ (自動配信) を受けて review / merge 判断
+6. 全 issue 完了後 `TeamDelete` で cleanup
+
+**期待される効果**:
+
+- 壁時計時間: 最も遅い teammate 1 件分で済む (真の並列)
+- 親コンテキスト節約: teammate が Red/Green/Refactor 往復を吸収
+- 設計判断の分担: 親は triage / integration、teammate は実装
+
+**懸念点 / 事前検証事項**:
+
+- **`isolation: "worktree"` で Edit/Write が通るか**: foreground / background
+  の区別、permission 継承が実測未確認。最初の試行では単純な #120 相当
+  (exceptions.py のみ触る) から始めて確認
+- **timeout リスク**: 広範囲 edit では ~90 分 stream idle timeout
+  (§既知の落とし穴) が再発する可能性。teammate が timeout した場合、
+  partial edit を親が引き継げる設計にしておく (task description に
+  「中断した場合の recovery 指針」を明記)
+- **同ファイル衝突**: 各 teammate が独立 worktree を持つなら conflict は
+  merge 時に発生。事前に衝突マトリクスを組み、衝突可能性ある issue は
+  同一 team で並走させない (Phase を切る)
+- **メッセージの取り回し**: teammate は plain text で報告する。親は
+  teammate を name で識別 (`agentId` ではなく)。JSON status 禁止規定
+  (TeamCreate tool doc 参照) を team lead プロンプトに埋め込むこと
+- **親の review 疲労**: 2-4 teammate が同時に PR を揚げてくると、親が
+  review ボトルネックになる。小規模 PR のみ並列化、大規模は逐次に戻す
+
+**失敗時の fallback**:
+
+試行中に timeout / permission 拒否 / conflict 暴発が発生したら、その時点で
+teammate を shutdown し、親セッションの worktree 逐次切替 (Baseline) に
+戻す。test/commit のロールバックは各 worktree 独立なので影響局所化済。
+
 ## commit メッセージの prefix 規約
 
 - `Red:` — 失敗テスト追加
