@@ -195,7 +195,7 @@ def format_unknown_key_message(
     name: str,
     kind: str,
     suggestions: Sequence[str],
-    allowed_sorted: Sequence[str],
+    known_keys: Sequence[str],
 ) -> str:
     """Build the single-unknown-key error message shared across validators.
 
@@ -203,6 +203,10 @@ def format_unknown_key_message(
     :func:`~vault_search.filter.parse_metadata_filter` (single-unknown batch
     path) so both produce identical text for the 1-key case and agents can
     rely on one canonical error shape (#123).
+
+    ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
+    を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
+    リスクを低減する (Round 1 review D4)。
     """
     if suggestions:
         return (
@@ -210,6 +214,7 @@ def format_unknown_key_message(
             f"did you mean: {', '.join(suggestions)}? "
             f"See schema://tools for the frontmatter_keys list"
         )
+    allowed_sorted = sorted(known_keys)
     preview = ", ".join(allowed_sorted[:5])
     suffix = ", ..." if len(allowed_sorted) > 5 else ""
     return (
@@ -250,12 +255,11 @@ def validate_known_key(
     if name in known_keys:
         return name
     suggestions = tuple(difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6))
-    allowed_sorted = sorted(known_keys)
     raise ValidationError(
-        format_unknown_key_message(name, kind, suggestions, allowed_sorted),
+        format_unknown_key_message(name, kind, suggestions, known_keys),
         error_code="UNKNOWN_FRONTMATTER_KEY",
         did_you_mean=suggestions,
-        allowed=allowed_sorted,
+        allowed=sorted(known_keys),
         unknown_keys={name: suggestions},
     )
 

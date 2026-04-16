@@ -166,7 +166,7 @@ def _raise_unknown_keys(
     if len(unknowns) == 1:
         ((key, suggestions),) = unknowns.items()
         raise ValidationError(
-            format_unknown_key_message(key, "frontmatter key", suggestions, allowed_sorted),
+            format_unknown_key_message(key, "frontmatter key", suggestions, known_keys),
             error_code="UNKNOWN_FRONTMATTER_KEY",
             did_you_mean=suggestions,
             allowed=allowed_sorted,
