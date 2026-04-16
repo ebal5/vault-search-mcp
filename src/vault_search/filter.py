@@ -138,7 +138,6 @@ def parse_metadata_filter(
             raise ValidationError(
                 msg,
                 error_code="UNKNOWN_FRONTMATTER_KEY",
-                hint="see schema://tools for the frontmatter_keys list",
                 did_you_mean=suggestions,
                 allowed=sorted(known_keys),
             )

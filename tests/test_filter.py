@@ -423,7 +423,8 @@ class TestParseMetadataFilterUnknownKey:
         err = exc.value
         assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
         assert "priority" in err.did_you_mean
-        assert "schema://tools" in (err.hint or "")
+        assert "schema://tools" in str(err)  # message に含まれる (hint は削除済み)
+        assert err.hint is None
 
     def test_known_key_passes(self) -> None:
         """known_keys に含まれるキーは ValidationError を送出しない."""
