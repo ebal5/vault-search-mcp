@@ -8,9 +8,11 @@ surfaces the ``kind`` of input in error messages so the agent can self-correct.
 Design notes
 ------------
 
-* Identifiers (``field`` names, frontmatter keys) use a conservative ASCII
-  allow-list: ``A-Z a-z 0-9 _ - .``. The dot is kept because Obsidian users
-  conventionally express nested frontmatter keys as ``nested.key``.
+* Identifiers (``field`` names, frontmatter keys) accept Unicode word
+  characters (``\\w``), hyphens, and dots as segment separators. This allows
+  non-ASCII frontmatter keys such as ``タイトル`` that Obsidian users author
+  natively (#33). Control characters, path separators, and other punctuation
+  are still rejected. The dot is kept for nested-key notation (``nested.key``).
 * Values (``metadata_filter`` right-hand side) accept any Unicode text
   except C0/C1-adjacent control characters. Empty string is valid because
   ``key == ""`` is a meaningful filter ("frontmatter key present but
@@ -162,8 +164,8 @@ def validate_identifier(
         If ``name`` is empty, exceeds ``max_len``, contains control
         characters (including NUL), attempts path traversal, has an
         empty dot-separated segment (leading/trailing/consecutive ``.``),
-        or contains any character outside ``A-Z a-z 0-9 _ -`` within a
-        segment.
+        or contains a character outside Unicode word characters (``\\w``) and
+        hyphen within a segment (e.g. spaces, punctuation, path separators).
     """
     if not isinstance(name, str):
         raise ValidationError(f"{kind} must be a string, got {type(name).__name__}")
