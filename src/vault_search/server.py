@@ -41,7 +41,7 @@ from .schemas import (
     TagCount,
     VaultStats,
 )
-from .validation import validate_pagination
+from .validation import normalize_folder, validate_pagination
 from .watcher import VaultWatcher
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,7 @@ def vault_search(
     raw = _get_index().search(
         query,
         tags=tags,
-        folder=folder,
+        folder=normalize_folder(folder) if folder is not None else None,
         metadata_filter=metadata_filter,
         limit=limit,
         offset=offset,
@@ -183,7 +183,11 @@ def vault_recent(
         してしまうため dict envelope に統一している。
     """
     validate_pagination(limit, offset)
-    rows = _get_index().recent_notes(limit=limit, offset=offset, folder=folder)
+    rows = _get_index().recent_notes(
+        limit=limit,
+        offset=offset,
+        folder=normalize_folder(folder) if folder is not None else None,
+    )
     notes = [RecentNote(**note).model_dump(mode="json") for note in rows]
     return {"notes": notes}
 

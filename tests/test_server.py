@@ -514,3 +514,34 @@ def test_mcp_tool_vault_search_no_metadata_filter_does_not_raise(
     res = fn("obsidian", None, None, 20, 0, None)
     assert isinstance(res, dict)
     assert "results" in res
+
+
+# ---------------------------------------------------------------------------
+# Issue #73: folder 入力正規化の integration regression guard
+# server.py 入口で normalize_folder を呼ぶことで、先頭 '/' や '\\' 区切りの
+# folder 引数が silent-miss にならないことを pin する。
+# ---------------------------------------------------------------------------
+
+
+def test_vault_search_leading_slash_folder_same_as_bare(vault_index: VaultIndex) -> None:
+    """`folder='/Projects'` が `folder='Projects'` と同件数を返すこと (silent-miss 防止)."""
+    fn = _fn(server_mod.vault_search)
+    bare = fn("日本語", None, "Projects", 50)
+    leading = fn("日本語", None, "/Projects", 50)
+    assert bare["total"] > 0, "fixture regression: bare folder returned 0 results"
+    assert leading["total"] == bare["total"], (
+        f"leading-slash folder '/Projects' returned {leading['total']} hits, "
+        f"expected {bare['total']} (same as 'Projects')"
+    )
+
+
+def test_vault_recent_leading_slash_folder_same_as_bare(vault_index: VaultIndex) -> None:
+    """`folder='/Projects'` が `vault_recent` でも silent-miss にならないこと."""
+    fn = _fn(server_mod.vault_recent)
+    bare = fn(limit=50, folder="Projects")
+    leading = fn(limit=50, folder="/Projects")
+    assert len(bare["notes"]) > 0, "fixture regression: bare folder returned 0 notes"
+    assert len(leading["notes"]) == len(bare["notes"]), (
+        f"leading-slash folder '/Projects' returned {len(leading['notes'])} notes, "
+        f"expected {len(bare['notes'])} (same as 'Projects')"
+    )

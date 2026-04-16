@@ -557,3 +557,35 @@ class TestFormatUnknownKeysMessage:
             ["a", "b", "c", "d", "e", "f", "g"],
         )
         assert "a, b, c, d, e, ..." in msg
+
+
+# ---------------------------------------------------------------------------
+# normalize_folder — Issue #73 folder 入力正規化
+#
+# 先頭 `/`、末尾 `/`、連続 `/`、`\\` 区切りを canonical 形式に正規化する。
+# 正規化後が空なら None を返す (フィルタなし = 全件)。
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeFolder:
+    """normalize_folder の境界値テスト (#73)."""
+
+    @pytest.mark.parametrize(
+        "folder,expected",
+        [
+            ("", None),
+            ("/", None),
+            ("//", None),
+            ("\\", None),
+            ("Projects", "Projects"),
+            ("/Projects", "Projects"),
+            ("Projects/", "Projects"),
+            ("Projects//Hermes", "Projects/Hermes"),
+            ("Projects\\Hermes", "Projects/Hermes"),
+            ("Projects/Hermes/", "Projects/Hermes"),
+        ],
+    )
+    def test_normalize_folder_boundaries(self, folder: str, expected: str | None) -> None:
+        from vault_search.validation import normalize_folder
+
+        assert normalize_folder(folder) == expected

@@ -34,6 +34,7 @@ __all__ = [
     "LIMIT_MAX",
     "ValidationError",
     "format_unknown_keys_message",
+    "normalize_folder",
     "validate_identifier",
     "validate_known_keys",
     "validate_pagination",
@@ -305,6 +306,28 @@ def validate_known_keys(
         allowed=sorted(known_keys),
         unknown_keys=sorted_unknowns,
     )
+
+
+def normalize_folder(folder: str) -> str | None:
+    """入力 folder を canonical 形式に正規化する。
+
+    - ``\\`` → ``/``
+    - 連続 ``/`` を単一化
+    - 先頭 ``/`` を strip
+    - 末尾 ``/`` を strip
+    - 結果が空なら ``None`` を返す (フィルタなし — ``'/'`` や ``''`` も吸収)
+
+    Returns
+    -------
+    str | None
+        正規化済みフォルダパス。空になった場合は ``None``。
+
+    Notes
+    -----
+    path traversal (``..`` 等) の検出はこの関数の scope 外。
+    """
+    normalized = re.sub(r"/+", "/", folder.replace("\\", "/")).strip("/")
+    return normalized if normalized else None
 
 
 def _validate_strict_int(value: object, name: str) -> None:
