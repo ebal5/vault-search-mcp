@@ -69,21 +69,21 @@ class _ToolSchemaSpec:
 # ---------------------------------------------------------------------------
 
 
-_FOLDER_INPUT_SCHEMA: dict[str, Any] = {
-    "type": ["string", "null"],
-    "description": (
-        "フォルダパス (Vault ルートからの相対)。指定したフォルダ自身と"
-        "その配下のみを対象とし、同プレフィックス兄弟 ('Projects' 指定で "
-        "'Projects Hermes/...' など) は除外される。"
-        "vault_folders の結果 (FolderCount.folder) をそのまま渡せる。"
-        "root 直下に限定したい場合は現状未サポート (null で全件)。"
-        "末尾 '/' および '\\\\' 区切りは自動で正規化される "
-        "(例: 'Projects/' → 'Projects')。"
-        "スラッシュのみの入力 ('/', '//', '\\\\\\\\') はフィルタなし "
-        "(= folder 指定なしと同等) として扱う。"
-        '例: "Projects"、"Projects/Hermes Agent"、"Projects/"。'
-    ),
-}
+# folder パラメータの description 文字列 — 単一ソース。
+# server.py の Annotated[str | None, Field(description=_FOLDER_DESCRIPTION)] と
+# TOOL_SPECS の input_schema 両方から参照することで drift を防ぐ (Issue #47)。
+_FOLDER_DESCRIPTION: str = (
+    "フォルダパス (Vault ルートからの相対)。指定したフォルダ自身と"
+    "その配下のみを対象とし、同プレフィックス兄弟 ('Projects' 指定で "
+    "'Projects Hermes/...' など) は除外される。"
+    "vault_folders の結果 (FolderCount.folder) をそのまま渡せる。"
+    "root 直下に限定したい場合は現状未サポート (null で全件)。"
+    "末尾 '/' および '\\\\' 区切りは自動で正規化される "
+    "(例: 'Projects/' → 'Projects')。"
+    "スラッシュのみの入力 ('/', '//', '\\\\\\\\') はフィルタなし "
+    "(= folder 指定なしと同等) として扱う。"
+    '例: "Projects"、"Projects/Hermes Agent"、"Projects/"。'
+)
 
 
 # Shared pagination input schemas. ``minimum`` / ``maximum`` are the single
@@ -149,7 +149,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {
                 "query": {"type": "string", "description": "検索クエリ"},
                 "tags": {"type": ["array", "null"], "items": {"type": "string"}},
-                "folder": _FOLDER_INPUT_SCHEMA,
+                "folder": {"type": ["string", "null"], "description": _FOLDER_DESCRIPTION},
                 "limit": _LIMIT_INPUT_SCHEMA,
                 "offset": _OFFSET_INPUT_SCHEMA,
                 "metadata_filter": {
@@ -240,7 +240,7 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
             "properties": {
                 "limit": _LIMIT_INPUT_SCHEMA,
                 "offset": _OFFSET_INPUT_SCHEMA,
-                "folder": _FOLDER_INPUT_SCHEMA,
+                "folder": {"type": ["string", "null"], "description": _FOLDER_DESCRIPTION},
             },
         },
         output_model=RecentNote,

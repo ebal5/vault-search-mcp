@@ -20,13 +20,15 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from .exceptions import NoteNotFoundError
 from .indexer import VaultIndex
 from .mcp_contract import (
+    _FOLDER_DESCRIPTION,
     TOOL_SPECS,
     build_schema_payload,
     inject_rich_output_schemas,
@@ -76,7 +78,7 @@ mcp = FastMCP("vault-search")
 def vault_search(
     query: str,
     tags: list[str] | None = None,
-    folder: str | None = None,
+    folder: Annotated[str | None, Field(description=_FOLDER_DESCRIPTION)] = None,
     limit: int = 20,
     offset: int = 0,
     metadata_filter: dict[str, Any] | None = None,
@@ -160,7 +162,7 @@ def vault_get_note(path: str) -> dict[str, Any]:
 def vault_recent(
     limit: int = 20,
     offset: int = 0,
-    folder: str | None = None,
+    folder: Annotated[str | None, Field(description=_FOLDER_DESCRIPTION)] = None,
 ) -> dict[str, Any]:
     """最近更新されたノート一覧を取得する。
 
