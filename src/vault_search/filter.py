@@ -121,9 +121,12 @@ def parse_metadata_filter(
                     f"See schema://tools for the frontmatter_keys list"
                 )
             else:
+                preview = ", ".join(sorted(known_keys)[:5])
+                suffix = ", ..." if len(known_keys) > 5 else ""
                 msg = (
                     f"Unknown frontmatter key {key!r}; "
-                    f"see schema://tools for the frontmatter_keys list"
+                    f"valid keys include: {preview}{suffix}. "
+                    f"See schema://tools for the full list"
                 )
             raise ValidationError(
                 msg,
