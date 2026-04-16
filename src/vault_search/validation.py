@@ -8,9 +8,11 @@ surfaces the ``kind`` of input in error messages so the agent can self-correct.
 Design notes
 ------------
 
-* Identifiers (``field`` names, frontmatter keys) use a conservative ASCII
-  allow-list: ``A-Z a-z 0-9 _ - .``. The dot is kept because Obsidian users
-  conventionally express nested frontmatter keys as ``nested.key``.
+* Identifiers (``field`` names, frontmatter keys) accept Unicode word
+  characters (``\\w``), hyphens, and dots as segment separators. This allows
+  non-ASCII frontmatter keys such as ``タイトル`` that Obsidian users author
+  natively (#33). Control characters, path separators, and other punctuation
+  are still rejected. The dot is kept for nested-key notation (``nested.key``).
 * Values (``metadata_filter`` right-hand side) accept any Unicode text
   except C0/C1-adjacent control characters. Empty string is valid because
   ``key == ""`` is a meaningful filter ("frontmatter key present but
@@ -55,10 +57,10 @@ LIMIT_MAX = 500
 # between non-empty segments: leading, trailing, and consecutive dots would
 # expand to malformed SQLite JSON paths (e.g. ``$..foo``) and surface as
 # ``sqlite3.OperationalError`` instead of ``ValidationError`` (issue #14).
-_IDENTIFIER_SEGMENT = r"[A-Za-z0-9_\-]+"
+_IDENTIFIER_SEGMENT = r"[\w\-]+"
 _IDENTIFIER_PATTERN = rf"{_IDENTIFIER_SEGMENT}(?:\.{_IDENTIFIER_SEGMENT})*"
 _IDENTIFIER_RE = re.compile(rf"^{_IDENTIFIER_PATTERN}$")
-_IDENTIFIER_ALLOWED_DESC = "A-Z a-z 0-9 _ -, with . as separator between non-empty segments"
+_IDENTIFIER_ALLOWED_DESC = "Unicode word chars (\\w) and hyphen, with . as segment separator"
 
 # C0 controls (0x00-0x1F) + DEL (0x7F). Tabs/newlines are rejected because
 # they are never meaningful inside a field name or filter value and are a
@@ -162,8 +164,8 @@ def validate_identifier(
         If ``name`` is empty, exceeds ``max_len``, contains control
         characters (including NUL), attempts path traversal, has an
         empty dot-separated segment (leading/trailing/consecutive ``.``),
-        or contains any character outside ``A-Z a-z 0-9 _ -`` within a
-        segment.
+        or contains a character outside Unicode word characters (``\\w``) and
+        hyphen within a segment (e.g. spaces, punctuation, path separators).
     """
     if not isinstance(name, str):
         raise ValidationError(f"{kind} must be a string, got {type(name).__name__}")
