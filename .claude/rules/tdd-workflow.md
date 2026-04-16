@@ -355,6 +355,44 @@ annotations docs、`phase-c-docs-parallel`):
   事実ではなく「teammate がそう認識している」と解釈。ブランチ誤切替のような
   teammate 自身が追跡しきれない事象は、親の独立検証でしか検知できない
 
+### Teammate prompt 標準テンプレート (3 試行の蓄積を集約)
+
+2-4 teammate の並列 spawn 時、teammate prompt に以下のセクションを**必ず**
+埋め込む。3 回の試行で判明した pitfall を全て回避するための最低要件。
+
+より詳細な boilerplate は `.claude/skills/teammate-spawn/SKILL.md` を参照。
+
+#### 必須セクション
+
+1. **Scope** — 対象 issue 番号、完了条件、禁止事項 (scope 外ファイル)
+2. **環境**:
+   - `dangerouslyDisableSandbox: true` が必要な場面 (git commit/push、
+     `rm .venv && uv sync --all-extras`)
+   - `.venv/bin/pytest` / `.venv/bin/ruff` 直接呼出 (`uv run` は sandbox で死ぬ)
+3. **commit 規約**: Red/Green/Refactor 独立 commit、prefix 規約
+4. **PR 作成 checklist** (第 3 試行の新規 pitfall 対策):
+   - `gh pr create` **直前に** `git branch --show-current` を実行
+   - 期待する branch 名と一致しない場合は `git switch <expected>` してから再試行
+   - PR 作成後、`gh pr view <N> --json headRefName,commits,files` で
+     自分の PR のメタデータを目視確認
+5. **報告**: 完了時に team-lead へ `SendMessage` で PR 番号と CI status を送る
+6. **Shutdown プロトコル**: `shutdown_request` を受けたら
+   `shutdown_response({approve: true})` で自発終了
+7. **禁止事項 (衝突対策)**: 他 teammate が触るファイルを列挙し「絶対に触らない」
+   を明示
+
+#### 親側の protocol
+
+- **事前**: 衝突マトリクス (どの teammate が何ファイルを触るか) を必ず作成
+- **teammate spawn**: `isolation: "worktree"` + `model: "sonnet"` +
+  `subagent_type: "general-purpose"` + `team_name` + `name` を全て設定
+- **PR 受領時**: `gh pr view <N> --json headRefName,commits,files` で
+  3 点検証 (branch / commits / files)。teammate の自己申告だけで merge しない
+- **merge 順**: 先 merge → 後 rebase (必要なら `git rebase --empty=drop
+  origin/main`) → 後 merge
+- **shutdown 順**: teammate 全員 idle 確認 → `shutdown_request` →
+  `teammate_terminated` 通知 → `TeamDelete`
+
 ## commit メッセージの prefix 規約
 
 - `Red:` — 失敗テスト追加
