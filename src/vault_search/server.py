@@ -225,17 +225,31 @@ def vault_folders() -> dict[str, Any]:
 def vault_reindex(force: bool = False) -> dict[str, Any]:
     """インデックスを再構築する。
 
-    通常はファイル監視が差分更新するため手動実行は不要。
-    Vault の大規模変更後やインデックス破損時に使う。
+    通常はファイル監視 (VaultWatcher) が差分更新するため手動実行は不要。
+    インデックス破損の疑いがある場合や、Vault の大規模変更後に用いる。
 
     Args:
-        force: True なら全件リビルド。False なら mtime ベースの差分更新。
+        force: 再構築の範囲を制御する。
 
-    副作用: `.vault-search.db` (派生インデックス) のみを更新。
-        vault 本体 (.md ファイル) は一切 touch しない。
+            ``force=False`` (デフォルト — 差分更新):
+                既存 DB を保持したまま、各ファイルの mtime を DB 内レコードと比較し、
+                変更があったファイルのみ UPSERT、消失ファイルを DELETE する。
+                変更がなければ skip カウントが増えるだけで副作用は最小。
+                idempotent であり通常はこちらで十分。
+
+            ``force=True`` (全件リビルド):
+                DB の既存レコードを無視して全 .md ファイルを再パースし直す。
+                notes テーブルが実質全件 UPSERT で置換される。
+                インデックス破損の疑いがある場合や大規模な Vault 再編成後に使う。
+
+    副作用:
+        どちらの場合も ``vault 本体の .md ファイルは一切 touch しない``。
+        更新されるのは ``.vault-search.db`` (派生インデックス DB) のみ。
+        ``destructiveHint=False`` を明示しているのはこの理由による。
 
     Returns:
-        dict: ReindexStats に相当する flat JSON (added / updated / deleted / skipped / errors)。
+        dict: ReindexStats に相当する flat JSON
+            (``added`` / ``updated`` / ``deleted`` / ``skipped`` / ``errors``)。
     """
     return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
 

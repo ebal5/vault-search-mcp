@@ -222,7 +222,9 @@ class VaultIndex:
     def build_index(self, *, force: bool = False) -> dict[str, int]:
         """Vault 全体をスキャンしてインデックスを構築.
 
-        force=True で全件リビルド。False なら mtime ベースの差分更新。
+        force=False (デフォルト): mtime 差分更新。変更ファイルのみ UPSERT、消失ファイルを DELETE。
+        force=True: 全件リビルド。既存 DB レコードを無視して全ファイルを再パース・UPSERT する。
+        どちらも vault (.md) は読み取りのみ。更新対象は .vault-search.db のみ。
         """
         stats = {"added": 0, "updated": 0, "deleted": 0, "skipped": 0, "errors": 0}
         with self.connection() as conn:

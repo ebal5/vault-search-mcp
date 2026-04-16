@@ -306,6 +306,28 @@ def test_tool_annotations_exclude_none_wire_omits_null_hints(
             )
 
 
+def test_vault_reindex_docstring_explains_force_behavior() -> None:
+    """vault_reindex docstring に force=True/False の挙動差分を説明するキーワードが含まれる.
+
+    Issue #83: docstring が force パラメータの内部挙動差分を agent に伝えていることを
+    regression guard する。docstring drift があればここが失敗するので気づける。
+    """
+    import inspect
+
+    doc = inspect.getdoc(server_mod.vault_reindex)
+    assert doc is not None, "vault_reindex has no docstring"
+
+    # force パラメータの両変種を説明する
+    assert "force=False" in doc, "docstring must explain force=False (incremental) behavior"
+    assert "force=True" in doc, "docstring must explain force=True (full rebuild) behavior"
+    # mtime ベースの差分更新について言及する
+    assert "mtime" in doc, "docstring must mention mtime-based incremental update"
+    # 更新対象は .vault-search.db のみ (vault .md は touch しない)
+    assert ".vault-search.db" in doc, (
+        "docstring must name .vault-search.db as the only modified artifact"
+    )
+
+
 def test_schema_tools_resource_exposes_annotations(vault_index: VaultIndex) -> None:
     """``schema://tools`` リソースも各 tool の annotations を公開する.
 
