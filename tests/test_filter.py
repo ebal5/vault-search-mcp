@@ -282,6 +282,30 @@ def test_implicit_eq_non_string_error_hints_stringification() -> None:
     assert '"5"' in msg  # 具体例
 
 
+def test_implicit_eq_bool_value_error_hints_lowercase_stringification() -> None:
+    """暗黙 eq に bool を渡したエラーヒントは YAML/index 正規化と同じ小文字 ``"true"`` を示す.
+
+    #123 Round 2 review A-R2-1: ne / in 経路は ``_format_scalar_for_error`` 経由で
+    ``"true"`` (小文字) を hint に出すが、implicit eq の fallback hint は生 str
+    のため ``"True"`` (大文字) になり、agent がコピペすると index 側の
+    ``"true"`` と silent miss する。ne / in と対称に小文字化する。
+    """
+    with pytest.raises(ValidationError) as exc:
+        parse_metadata_filter({"archived": True})
+    msg = str(exc.value)
+    assert "bool" in msg
+    assert "normalized to strings" in msg
+    # 実際 index には "true" (小文字) で格納されるため、hint も小文字で示す
+    assert '"true"' in msg, (
+        f"bool True の hint は小文字 'true' を示すべき (YAML/normalization 整合); got {msg!r}"
+    )
+    # 大文字 "True" で示さないことを明示 (silent miss 防止)
+    assert '"True"' not in msg, (
+        f"bool True の hint に大文字 'True' が混入すると agent の copy-paste が "
+        f"silent miss する; got {msg!r}"
+    )
+
+
 def test_in_operator_non_string_item_error_hints_stringification() -> None:
     """in のリスト要素に bool を渡したエラーも stringify を指示する."""
     with pytest.raises(ValidationError) as exc:
@@ -741,6 +765,46 @@ class TestMultiKeyMessageRefinements:
         msg = str(exc.value)
         assert "frontmatter_keys" in msg, (
             f"multi-key message must reference 'frontmatter_keys' for navigation; got {msg!r}"
+        )
+
+    def test_multi_key_did_you_mean_deduplicated(self) -> None:
+        """2 つの unknown key が同じ候補を提示した場合、did_you_mean は dedup される (R2-2).
+
+        e.g. ``{"prio": ..., "priori": ...}`` は両方 ``"priority"`` を候補に挙げる。
+        agent が ``for candidate in err.did_you_mean`` でリトライ UI を組むと、
+        同一候補の二重提示は UX を悪化させる。順序を保持しつつ dedup する。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"prio": "5", "priori": "3"},
+                known_keys=["priority", "status"],
+            )
+        err = exc.value
+        # "priority" は重複なく 1 回のみ含まれる
+        assert err.did_you_mean.count("priority") == 1, (
+            f"did_you_mean must dedup candidates; got {err.did_you_mean!r}"
+        )
+
+    def test_multi_key_message_key_order_deterministic(self) -> None:
+        """multi-key message / did_you_mean の key 順が入力挿入順に依存しない (R2-3).
+
+        agent が ``{"a": ..., "b": ...}`` と ``{"b": ..., "a": ...}`` を投げた際、
+        エラーメッセージが文字単位で異なると log 検索性・snapshot test の
+        再現性が劣化する。unknown key 名のソート順で固定する。
+        """
+        with pytest.raises(ValidationError) as exc1:
+            parse_metadata_filter({"zapple": "a", "aapple": "b"}, known_keys=["banana"])
+        with pytest.raises(ValidationError) as exc2:
+            parse_metadata_filter({"aapple": "b", "zapple": "a"}, known_keys=["banana"])
+        # 同一入力内容で挿入順が違っても message は一致する (deterministic)
+        assert str(exc1.value) == str(exc2.value), (
+            "multi-key message must be deterministic under input reordering; "
+            f"got:\n  1st: {str(exc1.value)!r}\n  2nd: {str(exc2.value)!r}"
+        )
+        # message 内で 'aapple' が 'zapple' より先に現れる (alphabetical sort)
+        msg = str(exc1.value)
+        assert msg.index("aapple") < msg.index("zapple"), (
+            f"keys must appear in alphabetical order; got {msg!r}"
         )
 
 
