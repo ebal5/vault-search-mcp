@@ -136,14 +136,14 @@ class TestValidationErrorStructured:
         assert err.hint == "see schema://tools"
 
     def test_did_you_mean_kwarg(self) -> None:
-        """did_you_mean keyword arg が err.did_you_mean として参照できる."""
+        """did_you_mean keyword arg が err.did_you_mean として tuple で参照できる."""
         err = ValidationError("msg", did_you_mean=["priority"])
-        assert err.did_you_mean == ["priority"] or err.did_you_mean == ("priority",)
+        assert err.did_you_mean == ("priority",)
 
     def test_allowed_kwarg(self) -> None:
-        """allowed keyword arg が err.allowed として参照できる (list or tuple)."""
+        """allowed keyword arg が err.allowed として tuple で参照できる."""
         err = ValidationError("msg", allowed=["a", "b"])
-        assert list(err.allowed) == ["a", "b"]
+        assert err.allowed == ("a", "b")
 
     def test_default_hint_is_none(self) -> None:
         """デフォルト (kw なし) のとき err.hint は None."""
