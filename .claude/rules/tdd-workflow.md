@@ -306,6 +306,55 @@ annotations docs、`phase-c-docs-parallel`):
   後続 PR の branch に混入している可能性に備え、先 merge → 後 rebase →
   後 merge の順を既定プロトコルにする
 
+**第 3 試行結果** (2026-04-16、2 teammate 並列、#83 vault_reindex docstring
++ #73 folder normalize、`phase-d-small-parallel`。doc ではなく **実装コード
++ tests** の scope で初めて試行):
+
+- ✅ **壁時計短縮 & timeout 回避**: spawn → 両 PR 作成まで ~10 分 (CI 除く)。
+  実装 + pytest 反復の scope でも stream idle timeout は発生せず。SMALL〜MEDIUM
+  (1 PR 3 〜 5 ファイル、Red/Green/Refactor TDD 3 commit) の負荷帯では
+  foreground teammate が安定して完走できると確認
+- ❌ **teammate が間違った branch で `gh pr create` する事故を観測**
+  (**新規 pitfall**):
+  reindex-teammate (#83 担当) が自分の push 済 branch
+  `docs/issue-83-vault-reindex-docstring` ではなく、並行作業中の
+  folder-teammate の branch `refactor/issue-73-folder-normalize` 上で
+  `gh pr create` を実行してしまい、PR #151 が **title=#83 / contents=#73**
+  という mismatch 状態で作成された。teammate 自身は「ブランチ誤切替があった
+  が影響なし」と自己申告していたが、実態は PR 本体のメタデータが破綻しており
+  自己検知できていなかった
+- ✅ **救済は容易 (push 自体は正しかった)**: 両 teammate とも自分の作業を
+  正しい branch に push 完了していたため、親が `gh pr view --json headRefName`
+  で PR と branch の対応を確認し、PR #151 の title/body を #73 用に訂正 +
+  `docs/issue-83-vault-reindex-docstring` から新規 PR #152 を作成して救済。
+  **データロスなし**
+- ✅ **衝突マトリクス設計は有効だった**: 事前に「両方 server.py を touch
+  するが異なる tool docstring / 行」「indexer.py は別関数」と衝突可能性を
+  解析していたため、merge 時の実衝突はゼロ。`MERGEABLE / CLEAN` で merge 成功
+- ⚠️ **PR 作成に関する指示を teammate prompt に追加すべき** (次回改善):
+  prompt には「ブランチ名」を明示していたが、「`gh pr create` を実行する
+  直前に `git branch --show-current` で自分のブランチを確認すること」を
+  明記していなかった。teammate はブランチ誤切替の事実を申告しつつも PR 作成
+  時の branch 確認を忘れた
+
+**第 3 試行からの追加教訓**:
+
+- **PR メタデータの整合性検証を protocol に追加**: 親は必ず
+  `gh pr view <N> --json headRefName,commits,files` で以下 3 点を確認:
+  1. `headRefName` が teammate が spawn 時に指示した branch と一致する
+  2. `commits` の prefix (Red/Green/Refactor/Docs/Test) と内容が issue と一致
+  3. `files` が scope 外ファイルを含まない
+  `gh pr diff` だけでは file 混入は検出できるが branch/title の mismatch は
+  見逃す (第 3 試行の PR #151 は `gh pr diff` 単独では #73 の正常な diff に
+  見えてしまう)
+- **teammate prompt に PR 作成チェックリストを埋め込む**: 「`gh pr create`
+  直前に `git branch --show-current` を実行し、期待する branch 名と一致する
+  ことを確認。不一致なら `git switch <expected-branch>` してから再試行」
+  という手順を明示する
+- **teammate の自己申告は信用度階層で扱う**: 「〜と確認した」の report は
+  事実ではなく「teammate がそう認識している」と解釈。ブランチ誤切替のような
+  teammate 自身が追跡しきれない事象は、親の独立検証でしか検知できない
+
 ## commit メッセージの prefix 規約
 
 - `Red:` — 失敗テスト追加
