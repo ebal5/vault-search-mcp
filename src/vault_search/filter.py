@@ -38,7 +38,8 @@ _EXPLICIT_OPS: tuple[str, ...] = tuple(op for op in get_args(Operator) if op != 
 # Numeric / date range comparison aliases. These are not supported in
 # metadata_filter (index-time string normalization makes ordered comparison
 # semantically undefined); detecting them lets agents self-correct to a
-# client-side post-filter instead of retrying aliases like gt/gte/>=. (#87)
+# client-side post-filter instead of retrying aliases like gt/gte/>= or
+# after/before/between/from/to/range. (#87, #121)
 _RANGE_OP_ALIASES: frozenset[str] = frozenset(
     {
         "gt",
@@ -184,8 +185,7 @@ def _parse_operator_dict(key: str, op_dict: dict[Any, Any]) -> MetadataCondition
         raise ValidationError(
             f"Unsupported operator {op!r} for key {key!r}: "
             f"numeric/date range comparison is not supported in metadata_filter. "
-            f"Retrieve the notes first and apply post-filter on the client side. "
-            f"For equality checks use a bare string (implicit eq), ne, or in.",
+            f"Retrieve the notes first and apply post-filter on the client side.",
             error_code="UNSUPPORTED_RANGE_OPERATOR",
             hint=(
                 "metadata_filter values are stored as strings (index-time "

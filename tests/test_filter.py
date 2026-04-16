@@ -337,7 +337,9 @@ def test_unsupported_operator_raises_validation_error(filter_input: dict) -> Non
         {"tags": {"$ne": "x"}},
         {"tags": {"eq": "x"}},
         {"tags": {"==": "x"}},
-        {"tags": {"lt": 1}},
+        # Note: range aliases (lt/gt/after/between/…) are excluded here because
+        # they route to UNSUPPORTED_RANGE_OPERATOR with a different message.
+        # They are fully covered by TestRangeOperatorAliasDetection.
     ],
 )
 def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> None:
@@ -345,6 +347,7 @@ def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> N
 
     エージェントがエラーメッセージを読んで自己修正できるよう、
     サポートされている構文 (ne / in / bare string) がヒントに明示されること。
+    range alias は TestRangeOperatorAliasDetection で別途検証する。
     """
     with pytest.raises(ValidationError) as exc:
         parse_metadata_filter(filter_input)
@@ -522,7 +525,7 @@ class TestRangeOperatorAliasDetection:
     """range 比較 alias に対する ValidationError の構造的属性を検証する (Issue #87).
 
     Red フェーズ: 以下の未実装振る舞いが FAIL することを確認する。
-    - 12 alias すべてで error_code="UNSUPPORTED_RANGE_OPERATOR" が送出される
+    - 18 alias すべてで error_code="UNSUPPORTED_RANGE_OPERATOR" が送出される
     - hint が non-None で "post-filter" または "client" を含む
     - str(err) に問題のキー名と alias 名が含まれる
     """
