@@ -14,7 +14,7 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -333,7 +333,6 @@ class VaultIndex:
         tags: list[str] | None = None,
         folder: str | None = None,
         metadata_filter: dict[str, Any] | None = None,
-        known_keys: Sequence[str] | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -355,11 +354,9 @@ class VaultIndex:
             frontmatter 任意プロパティを対象とする AND フィルタ。
             構文は :func:`vault_search.filter.parse_metadata_filter` を参照。
             不正構造は :class:`ValidationError` を送出する。
-        known_keys:
-            ``metadata_filter`` のキー検証に使う既知 frontmatter キーのリスト。
-            渡された場合は unknown frontmatter key を ``ValidationError`` として
-            拒否する (agent UX 向け、Issue #19)。``None`` の場合はキー検証を
-            スキップするため後方互換が保たれる。
+            unknown frontmatter key は ``list_frontmatter_keys()`` を内部で
+            呼び出して自己検証する (Issue #119)。``UNKNOWN_FRONTMATTER_KEY``
+            を持つ ``ValidationError`` として拒否される。
         limit, offset:
             ページング用。
 
@@ -369,7 +366,11 @@ class VaultIndex:
         いずれかが指定されていれば、DB 全体を対象に構造化フィルタだけで
         絞り込む。全引数が空の場合は空結果を返す。
         """
-        # Validate (raises ValidationError on malformed input)
+        # Validate (raises ValidationError on malformed input).
+        # metadata_filter が指定された場合のみ known_keys を取得する:
+        # list_frontmatter_keys() は現状 DB フルスキャン (#118) のため、
+        # filter なしの通常検索でコストを払わない。
+        known_keys = self.list_frontmatter_keys() if metadata_filter else None
         conditions = parse_metadata_filter(metadata_filter, known_keys=known_keys)
 
         filters: dict[str, Any] | None = None

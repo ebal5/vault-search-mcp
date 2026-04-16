@@ -116,7 +116,6 @@ def vault_search(
         tags=tags,
         folder=folder,
         metadata_filter=metadata_filter,
-        known_keys=_get_index().list_frontmatter_keys() if metadata_filter else None,
         limit=limit,
         offset=offset,
     )
