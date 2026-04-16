@@ -400,3 +400,207 @@ class TestValidationErrorUnknownKeysAttribute:
         """他 error_code の ValidationError は unknown_keys が常に空."""
         err = ValidationError("bad op", error_code="VALIDATION_ERROR")
         assert err.unknown_keys == {}
+
+
+# ---------------------------------------------------------------------------
+# validate_known_keys (batch) + format_unknown_keys_message — Issues #138/#140/#141
+#
+# - #141: validate_known_key が filter.py production から orphan 化 → batch API に
+#   統合し filter.py から直接呼べるようにする
+# - #140: message 構築が validation.format_unknown_key_message と
+#   filter._raise_unknown_keys に 2 箇所分散 → 統一 builder に集約
+# - #138: validation.py に「schema://tools」「frontmatter_keys list」等の MCP /
+#   frontmatter 固有文言が hardcode → schema_ref / registry_label 引数で注入
+# ---------------------------------------------------------------------------
+
+
+class TestValidateKnownKeysBatch:
+    """validate_known_keys (batch API) の契約テスト (#141 Option A)."""
+
+    def test_all_known_names_no_op(self) -> None:
+        """全 name が known_keys に含まれる場合、例外は送出されない."""
+        from vault_search.validation import validate_known_keys
+
+        validate_known_keys(
+            ["priority", "status"], ["priority", "status", "tags"], kind="frontmatter key"
+        )
+
+    def test_empty_names_no_op_even_with_empty_known_keys(self) -> None:
+        """names が空なら known_keys も空でも no-op (空 dict frontmatter への配慮)."""
+        from vault_search.validation import validate_known_keys
+
+        validate_known_keys([], [], kind="frontmatter key")
+
+    def test_single_unknown_raises_with_single_key_shape(self) -> None:
+        """単一 unknown は従来の validate_known_key と同形で error を返す (backward compat)."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(["priorty"], ["priority", "status"], kind="frontmatter key")
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        assert err.did_you_mean == ("priority",)
+        assert tuple(sorted(err.allowed)) == ("priority", "status")
+        assert err.unknown_keys == {"priorty": ("priority",)}
+
+    def test_multiple_unknown_batched_and_sorted(self) -> None:
+        """複数 unknown は 1 回の error にまとめられ alphabetical に整列される."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(["zapple", "aapple"], ["banana"], kind="frontmatter key")
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        # insertion order に依存せず alphabetical で固定
+        assert list(err.unknown_keys.keys()) == ["aapple", "zapple"]
+
+    def test_mixed_known_unknown_only_unknown_reported(self) -> None:
+        """known と unknown の混在で unknown のみ報告される."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(
+                ["priority", "typo", "status"],
+                ["priority", "status", "tags"],
+                kind="frontmatter key",
+            )
+        err = exc.value
+        assert set(err.unknown_keys.keys()) == {"typo"}
+
+    def test_no_close_match_yields_empty_suggestions(self) -> None:
+        """close match が無いキーは空 tuple suggestion を持つ."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(["xyzqqq"], ["priority", "status"], kind="frontmatter key")
+        err = exc.value
+        assert err.unknown_keys == {"xyzqqq": ()}
+        assert err.did_you_mean == ()
+
+    def test_schema_ref_and_registry_label_injected_into_message(self) -> None:
+        """MCP/frontmatter 固有文言が引数で注入される (#138)."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(
+                ["foo"],
+                ["bar"],
+                kind="custom kind",
+                schema_ref="config://alt",
+                registry_label="custom_list",
+            )
+        msg = str(exc.value)
+        # param が message に到達する
+        assert "config://alt" in msg, f"schema_ref must be injected; got {msg!r}"
+        assert "custom_list" in msg, f"registry_label must be injected; got {msg!r}"
+        # デフォルト値がリークしない
+        assert "schema://tools" not in msg
+        assert "frontmatter_keys" not in msg
+
+    def test_default_schema_ref_and_registry_label_match_legacy_messages(self) -> None:
+        """デフォルト値で従来 message が bit-identical で生成される (#138/#140)."""
+        from vault_search.validation import validate_known_keys
+
+        with pytest.raises(ValidationError) as exc:
+            validate_known_keys(["priorty"], ["priority", "status"], kind="frontmatter key")
+        expected = (
+            "Unknown frontmatter key 'priorty'; "
+            "did you mean: priority? "
+            "See schema://tools for the frontmatter_keys list"
+        )
+        assert str(exc.value) == expected
+
+
+class TestFormatUnknownKeysMessage:
+    """統一 message builder (format_unknown_keys_message) の契約 (#140)."""
+
+    def test_single_key_with_suggestions_bit_identical(self) -> None:
+        """1 key with suggestions は従来 format_unknown_key_message と bit-identical."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"priorty": ("priority",)},
+            "frontmatter key",
+            ["priority", "status"],
+        )
+        assert msg == (
+            "Unknown frontmatter key 'priorty'; "
+            "did you mean: priority? "
+            "See schema://tools for the frontmatter_keys list"
+        )
+
+    def test_single_key_no_suggestions_bit_identical(self) -> None:
+        """1 key without suggestions は従来 "full list" 文言を維持 (bit-identical)."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"xyz": ()},
+            "frontmatter key",
+            ["a", "b", "c"],
+        )
+        assert msg == (
+            "Unknown frontmatter key 'xyz'; "
+            "valid keys include: a, b, c. "
+            "See schema://tools for the full list"
+        )
+
+    def test_multi_key_all_suggestions_bit_identical(self) -> None:
+        """複数 key 全候補ありは従来 _raise_unknown_keys と bit-identical."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"priorty": ("priority",), "statu": ("status",)},
+            "frontmatter key",
+            ["priority", "status"],
+        )
+        assert msg == (
+            "Unknown frontmatter keys: "
+            "'priorty' (did you mean: priority), "
+            "'statu' (did you mean: status). "
+            "See schema://tools for the frontmatter_keys list"
+        )
+
+    def test_multi_key_mixed_suggestions_bit_identical(self) -> None:
+        """複数 key 混在 (候補あり + なし) は valid keys preview 付き."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"priorty": ("priority",), "foo": ()},
+            "frontmatter key",
+            ["priority", "status"],
+        )
+        assert msg == (
+            "Unknown frontmatter keys: "
+            "'foo' (no close match), "
+            "'priorty' (did you mean: priority). "
+            "Valid keys include: priority, status. "
+            "See schema://tools for the frontmatter_keys list"
+        )
+
+    def test_multi_key_all_no_suggestions_bit_identical(self) -> None:
+        """複数 key 全候補なしは valid keys preview 付き."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"foo": (), "bar": ()},
+            "frontmatter key",
+            ["priority", "status"],
+        )
+        assert msg == (
+            "Unknown frontmatter keys: "
+            "'bar' (no close match), "
+            "'foo' (no close match). "
+            "Valid keys include: priority, status. "
+            "See schema://tools for the frontmatter_keys list"
+        )
+
+    def test_preview_truncates_to_five_entries(self) -> None:
+        """6 件以上の known_keys は 5 件 preview + ', ...' 末尾で truncate される."""
+        from vault_search.validation import format_unknown_keys_message
+
+        msg = format_unknown_keys_message(
+            {"xyz": ()},
+            "frontmatter key",
+            ["a", "b", "c", "d", "e", "f", "g"],
+        )
+        assert "a, b, c, d, e, ..." in msg
