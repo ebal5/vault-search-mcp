@@ -505,6 +505,13 @@ _RANGE_ALIASES = [
     "less_than",
     "greater_than_or_equal",
     "less_than_or_equal",
+    # Issue #121: natural-language aliases LLMs tend to generate
+    "after",
+    "before",
+    "between",
+    "range",
+    "from",
+    "to",
 ]
 
 
