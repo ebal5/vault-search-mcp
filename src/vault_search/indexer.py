@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from .cache import TieredCache
-from .filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
+from .filter import (
+    MetadataCondition,
+    build_folder_filter_clause,
+    build_sql_fragment,
+    parse_metadata_filter,
+)
 from .parser import ParsedNote, parse_note
 from .validation import normalize_folder
 
@@ -102,32 +107,6 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 """
-
-
-def _folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, list[Any]]:
-    """folder プレフィックスフィルタを「folder 自身 OR その配下」に厳密化する.
-
-    `folder == 'Projects'` が `'Projects Hermes'` 等の兄弟を拾わないよう、
-    LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
-
-    Parameters
-    ----------
-    folder:
-        canonical 形式の非空フォルダパス。呼び出し側 (``server.py``) が
-        :func:`~vault_search.validation.normalize_folder` で正規化済みであること
-        を前提とする。先頭 ``/`` や連続 ``/`` は含まない。
-    column:
-        SQL 上のカラム名。`n.folder` のようにテーブルエイリアス付きも可。
-
-    Returns
-    -------
-    tuple[str, list[Any]]
-        ``(clause, params)``。clause は前置詞を含まない WHERE 断片
-        ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は ``[folder, folder/%]``。
-    """
-    escaped = folder.replace("%", "\\%").replace("_", "\\_")
-    clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
-    return clause, [folder, escaped + "/%"]
 
 
 class VaultIndex:
@@ -485,7 +464,7 @@ class VaultIndex:
 
             # メタデータフィルタ — folder は同プレフィックス兄弟の誤マッチを避ける
             if folder:
-                clause, folder_params = _folder_filter_clause(folder, column="n.folder")
+                clause, folder_params = build_folder_filter_clause(folder, column="n.folder")
                 sql_parts.append(f"AND {clause}")
                 params.extend(folder_params)
 
@@ -560,7 +539,7 @@ class VaultIndex:
         folder = normalize_folder(folder) if folder is not None else None
         with self.connection() as conn:
             if folder:
-                clause, folder_params = _folder_filter_clause(folder, column="folder")
+                clause, folder_params = build_folder_filter_clause(folder, column="folder")
                 rows = conn.execute(
                     "SELECT path, title, folder, tags, created_at, modified_at FROM notes "
                     f"WHERE {clause} "

@@ -1,20 +1,34 @@
-"""metadata_filter parser/validator and SQL fragment builder (Issue #5).
+"""SQL fragment builders for ``notes`` search queries (Issues #5 / #29 / #46).
 
-frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
-バリデーション済みの :class:`MetadataCondition` リストへ変換し、
-さらに SQLite 用の WHERE 断片に変換する。
+本モジュールは 2 系統の SQL 断片 builder を集約する:
 
-構文:
-    {
-        "status": "active",                       # 暗黙 eq
-        "priority": {"in": ["high", "critical"]}, # in 演算
-        "archived": {"ne": "true"},               # ne 演算
-    }
+1. **metadata_filter** (``parse_metadata_filter`` + ``build_sql_fragment``):
+   frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
+   バリデーション済みの :class:`MetadataCondition` リストへ変換し、
+   さらに SQLite 用の WHERE 断片に変換する。
 
-不正演算子・不正キー名・不正値はすべて
-:class:`~vault_search.validation.ValidationError` を送出する。
-エラーメッセージは、エージェントがどのキー・どの演算子を
-どう直せばよいかを自己修正できるよう具体的に構成する。
+   構文::
+
+       {
+           "status": "active",                       # 暗黙 eq
+           "priority": {"in": ["high", "critical"]}, # in 演算
+           "archived": {"ne": "true"},               # ne 演算
+       }
+
+   不正演算子・不正キー名・不正値はすべて
+   :class:`~vault_search.validation.ValidationError` を送出する。
+   エラーメッセージは、エージェントがどのキー・どの演算子を
+   どう直せばよいかを自己修正できるよう具体的に構成する。
+
+2. **folder filter** (``build_folder_filter_clause``):
+   正規化済み folder パスを「folder 自身 OR その配下」の厳密プレフィックス
+   WHERE 断片に変換する (Issue #46)。folder 正規化自体は
+   :func:`vault_search.validation.normalize_folder` が担う
+   (責務分離、PR #151)。
+
+``build_sql_fragment`` / ``build_folder_filter_clause`` の両方が
+テーブル別名・カラム名を引数で受け取るため、indexer 側のクエリ構造
+(別名 ``n``、frontmatter カラム名) に依存しない (Issue #29)。
 """
 
 from __future__ import annotations
