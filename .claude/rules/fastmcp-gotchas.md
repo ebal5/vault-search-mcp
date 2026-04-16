@@ -41,7 +41,27 @@
 - `eq` / `in` / `ne` の全演算子で scalar / array 対応の非対称性に注意
   (`ne` の配列対応は `NOT EXISTS(json_each...)` が必須)
 
+## Tool error — 構造化属性の wire 消失
+
+- FastMCP `Tool.run()` が例外をキャッチして
+  `ToolError(f"Error executing tool {name}: {e}") from e` で再 raise する
+- MCP lowlevel は `_make_error_result(str(e))` で `TextContent` のみの error
+  response を生成する
+- 結果: `ValidationError` が持つ `error_code` / `did_you_mean` / `allowed` /
+  `unknown_keys` / `hint` 属性はエージェントに届かない — `str(err)` 経由の
+  平文メッセージのみが届く
+- 影響: PR #135 (#123) で追加した `unknown_keys` batch 情報は MCP 実運用では
+  不可視、`error_code` での programmatic 分岐も不可
+- **本プロジェクトの現状ポリシー: 受容** (workaround 非採用)
+  - `ValidationError.__str__` を JSON-like にする案は message 冗長化の副作用
+    があり採用見送り
+  - 長期的には上流 MCP SDK の structured error payload 対応待ち
+- 撤去候補: MCP 2.0 / FastMCP 上流で `ToolError` が structured payload を
+  サポートした時点で本 Gotcha は解消
+
 ## 将来の解消候補
 
 - FastMCP 上流で `@tool(output_schema=...)` 公式対応が入れば
   `mcp_contract.inject_rich_output_schemas()` のハックは撤去可能
+- MCP lowlevel の `ToolError` wrap が structured payload を通せるようになれば、
+  `ValidationError` 属性 (`error_code` 等) が agent に届くようになる
