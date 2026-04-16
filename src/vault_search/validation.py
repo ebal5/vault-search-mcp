@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from .exceptions import ErrorCode, VaultSearchError
 
@@ -33,6 +33,7 @@ __all__ = [
     "IDENTIFIER_MAX_LEN",
     "LIMIT_MAX",
     "ValidationError",
+    "format_unknown_key_message",
     "validate_identifier",
     "validate_known_key",
     "validate_pagination",
@@ -92,9 +93,18 @@ class ValidationError(VaultSearchError, ValueError):
     hint:
         Optional short guidance for self-correction (e.g. "see schema://tools").
     did_you_mean:
-        Optional list of close-match candidates (from difflib).
+        Optional list of close-match candidates (from difflib). Populated for
+        single-unknown-key errors for backward compatibility; multi-key errors
+        expose per-key candidates via ``unknown_keys`` instead.
     allowed:
         Optional sorted list of all allowed values / keys.
+    unknown_keys:
+        Optional per-key close-match map for batched unknown-key reports
+        (``error_code="UNKNOWN_FRONTMATTER_KEY"`` from
+        :func:`~vault_search.filter.parse_metadata_filter`). Each entry maps an
+        unknown key to its suggestion tuple (empty tuple when no close match
+        exists). Single-key errors still populate this with one entry so agents
+        can inspect the structured form uniformly (#123).
     """
 
     error_code: ErrorCode = "VALIDATION_ERROR"
@@ -107,12 +117,16 @@ class ValidationError(VaultSearchError, ValueError):
         hint: str | None = None,
         did_you_mean: Sequence[str] | None = None,
         allowed: Sequence[str] | None = None,
+        unknown_keys: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
         self.did_you_mean: tuple[str, ...] = tuple(did_you_mean) if did_you_mean else ()
         self.allowed: tuple[str, ...] = tuple(allowed) if allowed else ()
+        self.unknown_keys: dict[str, tuple[str, ...]] = (
+            {k: tuple(v) for k, v in unknown_keys.items()} if unknown_keys else {}
+        )
 
 
 def validate_identifier(
@@ -177,6 +191,39 @@ def validate_identifier(
     return name
 
 
+def format_unknown_key_message(
+    name: str,
+    kind: str,
+    suggestions: Sequence[str],
+    known_keys: Sequence[str],
+) -> str:
+    """Build the single-unknown-key error message shared across validators.
+
+    Used by :func:`validate_known_key` (single-key path) and
+    :func:`~vault_search.filter.parse_metadata_filter` (single-unknown batch
+    path) so both produce identical text for the 1-key case and agents can
+    rely on one canonical error shape (#123).
+
+    ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
+    を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
+    リスクを低減する (Round 1 review D4)。
+    """
+    if suggestions:
+        return (
+            f"Unknown {kind} {name!r}; "
+            f"did you mean: {', '.join(suggestions)}? "
+            f"See schema://tools for the frontmatter_keys list"
+        )
+    allowed_sorted = sorted(known_keys)
+    preview = ", ".join(allowed_sorted[:5])
+    suffix = ", ..." if len(allowed_sorted) > 5 else ""
+    return (
+        f"Unknown {kind} {name!r}; "
+        f"valid keys include: {preview}{suffix}. "
+        f"See schema://tools for the full list"
+    )
+
+
 def validate_known_key(
     name: str,
     known_keys: Sequence[str],
@@ -207,26 +254,13 @@ def validate_known_key(
     """
     if name in known_keys:
         return name
-    suggestions = difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6)
-    if suggestions:
-        msg = (
-            f"Unknown {kind} {name!r}; "
-            f"did you mean: {', '.join(suggestions)}? "
-            f"See schema://tools for the frontmatter_keys list"
-        )
-    else:
-        preview = ", ".join(sorted(known_keys)[:5])
-        suffix = ", ..." if len(known_keys) > 5 else ""
-        msg = (
-            f"Unknown {kind} {name!r}; "
-            f"valid keys include: {preview}{suffix}. "
-            f"See schema://tools for the full list"
-        )
+    suggestions = tuple(difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6))
     raise ValidationError(
-        msg,
+        format_unknown_key_message(name, kind, suggestions, known_keys),
         error_code="UNKNOWN_FRONTMATTER_KEY",
         did_you_mean=suggestions,
         allowed=sorted(known_keys),
+        unknown_keys={name: suggestions},
     )
 
 

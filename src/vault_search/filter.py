@@ -19,14 +19,15 @@ frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
 
 from __future__ import annotations
 
+import difflib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, get_args
+from typing import Any, Literal, NoReturn, get_args
 
 from .validation import (
     ValidationError,
+    format_unknown_key_message,
     validate_identifier,
-    validate_known_key,
     validate_value,
 )
 
@@ -103,9 +104,13 @@ def parse_metadata_filter(
 
     - ``None`` または空 dict → 空 list
     - 各キーは :func:`validate_identifier` (kind="frontmatter key") で検証
-    - ``known_keys`` が ``None`` 以外の場合、各キーが ``known_keys`` に含まれるか検証
-      (識別子形式チェックの**後**に実施)。含まれない場合は
-      ``ValidationError(error_code="UNKNOWN_FRONTMATTER_KEY")`` を送出する。
+    - ``known_keys`` が ``None`` 以外の場合、全キーを走査して ``known_keys`` に
+      含まれないものを **一括** 収集し、1 個の
+      ``ValidationError(error_code="UNKNOWN_FRONTMATTER_KEY")`` として送出する
+      (#123)。各 unknown key に対する ``did_you_mean`` 候補は
+      ``unknown_keys`` 属性 (dict[str, tuple[str, ...]]) に構造化保持され、
+      単一 key 時は従来通り ``did_you_mean`` / ``allowed`` も populated
+      (backward compat)。
     - str 値 → ``op="eq"``、値は :func:`validate_value` で検証
     - dict 値 → ``{"in": list[str]}`` / ``{"ne": str}`` のみ許可
         - ``in``: 値は非空 list[str]、各要素を :func:`validate_value` で検証
@@ -117,18 +122,92 @@ def parse_metadata_filter(
     if not isinstance(raw, dict):
         raise ValidationError(f"metadata_filter must be a dict, got {type(raw).__name__}")
 
-    conditions: list[MetadataCondition] = []
-    for key, value in raw.items():
+    # First pass: validate per-key type/identifier structure (fail-first).
+    # 構造エラーは入力 shape 全体の破綻を示唆するため batch しない。
+    for key in raw:
         if not isinstance(key, str):
             raise ValidationError(f"metadata_filter key must be a string, got {type(key).__name__}")
         validate_identifier(key, kind="frontmatter key")
 
-        if known_keys is not None:
-            validate_known_key(key, known_keys, kind="frontmatter key")
+    # Second pass: collect ALL unknown keys and raise once if any (#123).
+    # LLM agent は複数キーを同時に hallucinate しやすいため、first-fail では
+    # self-correction に N round-trip かかる。1 回の batch 報告に統合する。
+    if known_keys is not None:
+        unknowns: dict[str, tuple[str, ...]] = {}
+        for key in raw:
+            if key not in known_keys:
+                unknowns[key] = tuple(difflib.get_close_matches(key, known_keys, n=3, cutoff=0.6))
+        if unknowns:
+            _raise_unknown_keys(unknowns, known_keys)
 
+    # Third pass: parse individual entries. op / value 検証は fail-first。
+    conditions: list[MetadataCondition] = []
+    for key, value in raw.items():
         conditions.append(_parse_entry(key, value))
 
     return conditions
+
+
+def _raise_unknown_keys(
+    unknowns: dict[str, tuple[str, ...]],
+    known_keys: Sequence[str],
+) -> NoReturn:
+    """収集済み unknown key を 1 個の ValidationError にまとめて raise (#123).
+
+    単一 key 時は既存の ``validate_known_key`` と同形式のメッセージを返し、
+    ``did_you_mean`` / ``allowed`` 属性も populated (backward compat)。
+    複数 key 時は ``Unknown frontmatter keys: ...`` 形式で各 key ごとの候補を
+    列挙し、候補なしキーは明示的に ``(no close match)`` と注釈する。
+    構造化情報は ``unknown_keys`` 属性に格納し、``did_you_mean`` にも全候補を
+    flatten populate することで agent の旧分岐ロジックと対称性を保つ。
+    """
+    allowed_sorted = sorted(known_keys)
+
+    if len(unknowns) == 1:
+        ((key, suggestions),) = unknowns.items()
+        raise ValidationError(
+            format_unknown_key_message(key, "frontmatter key", suggestions, known_keys),
+            error_code="UNKNOWN_FRONTMATTER_KEY",
+            did_you_mean=suggestions,
+            allowed=allowed_sorted,
+            unknown_keys=unknowns,
+        )
+
+    # Multi-key path: 各キーに候補/なしを明示注釈して混在ケースの曖昧さを解消。
+    # unknown key 名でソートして、入力挿入順に依存しない決定的 message / did_you_mean
+    # を生成する (R2-3)。log 検索性と snapshot 再現性のため。
+    sorted_unknowns = dict(sorted(unknowns.items()))
+    parts = [
+        f"{k!r} (did you mean: {', '.join(s)})" if s else f"{k!r} (no close match)"
+        for k, s in sorted_unknowns.items()
+    ]
+    keys_str = ", ".join(parts)
+    if any(not s for s in sorted_unknowns.values()):
+        # 少なくとも 1 キーに候補なし → 全 allowed preview を message に添える
+        preview = ", ".join(allowed_sorted[:5])
+        suffix = ", ..." if len(allowed_sorted) > 5 else ""
+        msg = (
+            f"Unknown frontmatter keys: {keys_str}. "
+            f"Valid keys include: {preview}{suffix}. "
+            f"See schema://tools for the frontmatter_keys list"
+        )
+    else:
+        msg = (
+            f"Unknown frontmatter keys: {keys_str}. "
+            f"See schema://tools for the frontmatter_keys list"
+        )
+    # did_you_mean は単一/複数で非対称にならないよう全候補を flatten populate。
+    # 旧 agent が ``if err.did_you_mean:`` で分岐した場合でも候補ゼロ扱いにならない。
+    # ``dict.fromkeys`` で挿入順を保持しつつ重複候補を排除 (R2-2)。
+    # 2 つの unknown key が同じ candidate を提示した場合の二重提示を回避する。
+    all_candidates = tuple(dict.fromkeys(c for s in sorted_unknowns.values() for c in s))
+    raise ValidationError(
+        msg,
+        error_code="UNKNOWN_FRONTMATTER_KEY",
+        did_you_mean=all_candidates,
+        allowed=allowed_sorted,
+        unknown_keys=sorted_unknowns,
+    )
 
 
 def _parse_entry(key: str, value: Any) -> MetadataCondition:
@@ -144,7 +223,7 @@ def _parse_entry(key: str, value: Any) -> MetadataCondition:
         f"metadata_filter[{key!r}] must be a string (implicit eq) or a dict "
         f"(explicit operator), got {type(value).__name__}. "
         f"Frontmatter scalars are normalized to strings at index time; "
-        f'pass the stringified form (e.g. {{{key!r}: "{value}"}}).'
+        f'pass the stringified form (e.g. {{{key!r}: "{_format_scalar_for_error(value)}"}}).'
     )
 
 
