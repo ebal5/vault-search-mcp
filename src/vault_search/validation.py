@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from .exceptions import ErrorCode, VaultSearchError
 
@@ -92,9 +92,18 @@ class ValidationError(VaultSearchError, ValueError):
     hint:
         Optional short guidance for self-correction (e.g. "see schema://tools").
     did_you_mean:
-        Optional list of close-match candidates (from difflib).
+        Optional list of close-match candidates (from difflib). Populated for
+        single-unknown-key errors for backward compatibility; multi-key errors
+        expose per-key candidates via ``unknown_keys`` instead.
     allowed:
         Optional sorted list of all allowed values / keys.
+    unknown_keys:
+        Optional per-key close-match map for batched unknown-key reports
+        (``error_code="UNKNOWN_FRONTMATTER_KEY"`` from
+        :func:`~vault_search.filter.parse_metadata_filter`). Each entry maps an
+        unknown key to its suggestion tuple (empty tuple when no close match
+        exists). Single-key errors still populate this with one entry so agents
+        can inspect the structured form uniformly (#123).
     """
 
     error_code: ErrorCode = "VALIDATION_ERROR"
@@ -107,12 +116,16 @@ class ValidationError(VaultSearchError, ValueError):
         hint: str | None = None,
         did_you_mean: Sequence[str] | None = None,
         allowed: Sequence[str] | None = None,
+        unknown_keys: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint
         self.did_you_mean: tuple[str, ...] = tuple(did_you_mean) if did_you_mean else ()
         self.allowed: tuple[str, ...] = tuple(allowed) if allowed else ()
+        self.unknown_keys: dict[str, tuple[str, ...]] = (
+            {k: tuple(v) for k, v in unknown_keys.items()} if unknown_keys else {}
+        )
 
 
 def validate_identifier(
@@ -227,6 +240,7 @@ def validate_known_key(
         error_code="UNKNOWN_FRONTMATTER_KEY",
         did_you_mean=suggestions,
         allowed=sorted(known_keys),
+        unknown_keys={name: tuple(suggestions)},
     )
 
 
