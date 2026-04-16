@@ -108,6 +108,8 @@ def vault_search(
             (batch) → operator/value エラー (fail-first)。identifier エラーと
             unknown key が混在する場合、identifier エラーが先に報告される。
 
+    副作用: 読み取り専用。内部的に query cache を更新するが vault / DB への書き込みは無し。
+
     Returns:
         常に plain dict を返す ({"tier", "total", "results": [dict]})。
         構造の詳細 (SearchResponse の rich JSON Schema) は ``schema://tools``
@@ -137,6 +139,8 @@ def vault_get_note(path: str) -> dict[str, Any]:
 
     Args:
         path: Vault ルートからの相対パス（例: "Projects/Hermes Agent/Vault連携方針.md"）
+
+    副作用: 読み取り専用 (vault / DB 書き込み無し)。
 
     Returns:
         常に plain dict を返す。構造の詳細 (NoteDetail の rich JSON Schema) は
@@ -169,6 +173,8 @@ def vault_recent(
             末尾 '/' および '\\' 区切りは自動で正規化される（例: "Research/" → "Research"）。
             スラッシュのみの入力（'/', '//', '\\\\'）はフィルタなし（= 全件）として扱う。
 
+    副作用: 読み取り専用 (vault / DB 書き込み無し)。
+
     Returns:
         常に plain dict を envelope 形式で返す (``{"notes": [dict, ...]}``)。
         file_mtime 降順。構造の詳細 (RecentNote の rich JSON Schema) は
@@ -186,6 +192,8 @@ def vault_recent(
 def vault_tags() -> dict[str, Any]:
     """全タグとその使用回数を返す。出現回数降順。
 
+    副作用: 読み取り専用 (vault / DB 書き込み無し)。
+
     Returns:
         envelope dict (``{"tags": [{"tag": ..., "count": ...}, ...]}``)。
         frontmatter.tags と本文インライン #tag の両方が集計対象。
@@ -197,6 +205,8 @@ def vault_tags() -> dict[str, Any]:
 @mcp.tool(annotations=TOOL_SPECS["vault_folders"].annotations)
 def vault_folders() -> dict[str, Any]:
     """フォルダ構造とノート数を返す。
+
+    副作用: 読み取り専用 (vault / DB 書き込み無し)。
 
     Returns:
         envelope dict (``{"folders": [{"folder": ..., "count": ...}, ...]}``)。
@@ -221,6 +231,9 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     Args:
         force: True なら全件リビルド。False なら mtime ベースの差分更新。
 
+    副作用: `.vault-search.db` (派生インデックス) のみを更新。
+        vault 本体 (.md ファイル) は一切 touch しない。
+
     Returns:
         dict: ReindexStats に相当する flat JSON (added / updated / deleted / skipped / errors)。
     """
@@ -230,6 +243,8 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
 @mcp.tool(annotations=TOOL_SPECS["vault_stats"].annotations)
 def vault_stats() -> dict[str, Any]:
     """インデックスの統計情報を返す。
+
+    副作用: 読み取り専用 (vault / DB 書き込み無し)。
 
     Returns:
         dict: VaultStats に相当する flat JSON
