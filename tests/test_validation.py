@@ -195,14 +195,25 @@ def test_validate_identifier_malformed_dot_message_names_the_cause(name: str) ->
     )
 
 
-def test_validate_identifier_rejects_non_ascii_japanese() -> None:
-    with pytest.raises(ValidationError):
-        validate_identifier("重要")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "タイトル",
+        "カテゴリ",
+        "日本語_キー",
+        "重要",
+        "café",
+    ],
+)
+def test_validate_identifier_accepts_unicode_keys(name: str) -> None:
+    """Unicode frontmatter keys (Japanese, accented Latin) must be accepted.
 
-
-def test_validate_identifier_rejects_non_ascii_latin() -> None:
-    with pytest.raises(ValidationError):
-        validate_identifier("café")
+    Issue #33: schema://tools exposes non-ASCII keys from vault frontmatter,
+    but validate_identifier used an ASCII-only pattern, causing every
+    Japanese / accented key to raise ValidationError even when passed
+    verbatim from the schema resource.
+    """
+    assert validate_identifier(name) == name
 
 
 # ---------------------------------------------------------------------------
