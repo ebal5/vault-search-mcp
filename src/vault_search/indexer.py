@@ -26,6 +26,21 @@ from .parser import ParsedNote, parse_note
 logger = logging.getLogger(__name__)
 
 
+def _collect_nested_keys(obj: Any, prefix: str, out: set[str]) -> None:
+    """frontmatter dict を再帰 walk して dotted key を ``out`` に収集する.
+
+    array 要素の dict (``tags: [{a: 1}]``) は走査しない — SQL の
+    ``$.tags.a`` パスは不成立で意味がないため、known_keys に含めない。
+    """
+    if not isinstance(obj, dict):
+        return
+    for k, v in obj.items():
+        key = f"{prefix}.{k}" if prefix else k
+        out.add(key)
+        if isinstance(v, dict):
+            _collect_nested_keys(v, key, out)
+
+
 # ---------------------------------------------------------------------------
 # VaultIndex — SQLite + FTS5
 # ---------------------------------------------------------------------------
@@ -595,7 +610,12 @@ class VaultIndex:
             return [{"folder": r["folder"], "count": r["count"]} for r in rows]
 
     def list_frontmatter_keys(self) -> list[str]:
-        """Vault 内 frontmatter のトップレベルキーをソート済みで返す.
+        """Vault 内 frontmatter のキーをソート済みで返す.
+
+        トップレベルキーに加え、ネスト dict 値は dotted key (``meta.author``)
+        としても含まれる (Issue #136)。validate_identifier / SQL が dotted 形式を
+        受理するので、known_keys 側も一貫して dotted を公開し
+        ``metadata_filter={"meta.author": ...}`` の false positive UNKNOWN を防ぐ。
 
         初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
         invalidate されるまでキャッシュを返す (Issue #118 / #10)。
@@ -605,13 +625,17 @@ class VaultIndex:
         return list(self._frontmatter_keys_cache)
 
     def _query_frontmatter_keys_from_db(self) -> list[str]:
-        """Frontmatter のトップレベルキー集合を DB から取得する (キャッシュ無視)."""
+        """Frontmatter のキー集合 (トップレベル + nested dotted) を DB から取得する."""
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT key FROM notes, json_each(notes.frontmatter) "
-                "WHERE json_valid(notes.frontmatter) ORDER BY key"
+                "SELECT frontmatter FROM notes WHERE json_valid(frontmatter)"
             ).fetchall()
-            return [r["key"] for r in rows]
+        keys: set[str] = set()
+        for row in rows:
+            fm = json.loads(row["frontmatter"])
+            if isinstance(fm, dict):
+                _collect_nested_keys(fm, "", keys)
+        return sorted(keys)
 
     def stats(self) -> dict[str, Any]:
         """インデックスの統計情報."""
