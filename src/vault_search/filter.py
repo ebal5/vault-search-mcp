@@ -19,12 +19,16 @@ frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
 
 from __future__ import annotations
 
-import difflib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-from .validation import ValidationError, validate_identifier, validate_value
+from .validation import (
+    ValidationError,
+    validate_identifier,
+    validate_known_key,
+    validate_value,
+)
 
 __all__ = ["MetadataCondition", "Operator", "build_sql_fragment", "parse_metadata_filter"]
 
@@ -119,29 +123,8 @@ def parse_metadata_filter(
             raise ValidationError(f"metadata_filter key must be a string, got {type(key).__name__}")
         validate_identifier(key, kind="frontmatter key")
 
-        if known_keys is not None and key not in known_keys:
-            suggestions = difflib.get_close_matches(key, known_keys, n=3, cutoff=0.6)
-            if suggestions:
-                suggestion_str = ", ".join(suggestions)
-                msg = (
-                    f"Unknown frontmatter key {key!r}; "
-                    f"did you mean: {suggestion_str}? "
-                    f"See schema://tools for the frontmatter_keys list"
-                )
-            else:
-                preview = ", ".join(sorted(known_keys)[:5])
-                suffix = ", ..." if len(known_keys) > 5 else ""
-                msg = (
-                    f"Unknown frontmatter key {key!r}; "
-                    f"valid keys include: {preview}{suffix}. "
-                    f"See schema://tools for the full list"
-                )
-            raise ValidationError(
-                msg,
-                error_code="UNKNOWN_FRONTMATTER_KEY",
-                did_you_mean=suggestions,
-                allowed=sorted(known_keys),
-            )
+        if known_keys is not None:
+            validate_known_key(key, known_keys, kind="frontmatter key")
 
         conditions.append(_parse_entry(key, value))
 

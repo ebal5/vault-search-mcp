@@ -22,6 +22,7 @@ Design notes
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Sequence
 
@@ -33,6 +34,7 @@ __all__ = [
     "LIMIT_MAX",
     "ValidationError",
     "validate_identifier",
+    "validate_known_key",
     "validate_pagination",
     "validate_value",
 ]
@@ -173,6 +175,59 @@ def validate_identifier(
             f"{kind} contains disallowed characters (allowed: {_IDENTIFIER_ALLOWED_DESC}): {name!r}"
         )
     return name
+
+
+def validate_known_key(
+    name: str,
+    known_keys: Sequence[str],
+    *,
+    kind: str,
+) -> str:
+    """Validate that ``name`` appears in ``known_keys`` and return it unchanged.
+
+    Intended for frontmatter keys (and, later, known tags / folders) where the
+    index contains an authoritative allow-list and an agent may hallucinate a
+    near-miss. Unknown keys raise :class:`ValidationError` with
+    ``error_code="UNKNOWN_FRONTMATTER_KEY"`` and the full ``known_keys`` sorted
+    list in ``allowed``; close matches (``difflib.get_close_matches``,
+    ``cutoff=0.6``) appear in ``did_you_mean``.
+
+    Parameters
+    ----------
+    name:
+        Candidate key. Callers should pass the value through
+        :func:`validate_identifier` first so SQL / path-traversal shapes are
+        rejected before similarity matching.
+    known_keys:
+        Authoritative allow-list (from the index). Empty sequence is
+        permitted; every ``name`` is unknown in that case.
+    kind:
+        Human-readable label (e.g. ``"frontmatter key"``) interpolated into
+        the error message so the agent knows which input to fix.
+    """
+    if name in known_keys:
+        return name
+    suggestions = difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6)
+    if suggestions:
+        msg = (
+            f"Unknown {kind} {name!r}; "
+            f"did you mean: {', '.join(suggestions)}? "
+            f"See schema://tools for the frontmatter_keys list"
+        )
+    else:
+        preview = ", ".join(sorted(known_keys)[:5])
+        suffix = ", ..." if len(known_keys) > 5 else ""
+        msg = (
+            f"Unknown {kind} {name!r}; "
+            f"valid keys include: {preview}{suffix}. "
+            f"See schema://tools for the full list"
+        )
+    raise ValidationError(
+        msg,
+        error_code="UNKNOWN_FRONTMATTER_KEY",
+        did_you_mean=suggestions,
+        allowed=sorted(known_keys),
+    )
 
 
 def _validate_strict_int(value: object, name: str) -> None:
