@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from .exceptions import ErrorCode, VaultSearchError
 
@@ -34,8 +34,10 @@ __all__ = [
     "LIMIT_MAX",
     "ValidationError",
     "format_unknown_key_message",
+    "format_unknown_keys_message",
     "validate_identifier",
     "validate_known_key",
+    "validate_known_keys",
     "validate_pagination",
     "validate_value",
 ]
@@ -191,36 +193,140 @@ def validate_identifier(
     return name
 
 
+def format_unknown_keys_message(
+    unknowns: Mapping[str, Sequence[str]],
+    kind: str,
+    known_keys: Sequence[str],
+    *,
+    schema_ref: str = "schema://tools",
+    registry_label: str = "frontmatter_keys list",
+) -> str:
+    """Build a unified unknown-key error message covering 1 and N unknown keys.
+
+    Consolidates the single-key (``validate_known_key``) and multi-key
+    (``filter._raise_unknown_keys``) paths into one builder so preview length
+    and schema-reference wording live in one place (#140).
+
+    MCP / frontmatter-specific wording is injected via ``schema_ref`` and
+    ``registry_label`` instead of hardcoded strings; defaults match the
+    legacy callsites so existing messages remain bit-identical (#138).
+
+    ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
+    を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
+    リスクを低減する (Round 1 review D4)。
+    """
+    allowed_sorted = sorted(known_keys)
+
+    if len(unknowns) == 1:
+        ((name, suggestions),) = unknowns.items()
+        if suggestions:
+            return (
+                f"Unknown {kind} {name!r}; "
+                f"did you mean: {', '.join(suggestions)}? "
+                f"See {schema_ref} for the {registry_label}"
+            )
+        preview = ", ".join(allowed_sorted[:5])
+        suffix = ", ..." if len(allowed_sorted) > 5 else ""
+        # Single-key no-match keeps the legacy "full list" wording (kind-agnostic)
+        # for bit-identicalness with pre-#138 messages. registry_label is reserved
+        # for did-you-mean / multi-key branches where agents need a navigation
+        # target inside schema://tools.
+        return (
+            f"Unknown {kind} {name!r}; "
+            f"valid keys include: {preview}{suffix}. "
+            f"See {schema_ref} for the full list"
+        )
+
+    # Multi-key path. Sort by unknown key name so the message is deterministic
+    # under input reordering (R2-3) and matches ``err.unknown_keys`` iteration
+    # order (R3 D-1).
+    sorted_unknowns = dict(sorted(unknowns.items()))
+    parts = [
+        f"{k!r} (did you mean: {', '.join(s)})" if s else f"{k!r} (no close match)"
+        for k, s in sorted_unknowns.items()
+    ]
+    keys_str = ", ".join(parts)
+    if any(not s for s in sorted_unknowns.values()):
+        preview = ", ".join(allowed_sorted[:5])
+        suffix = ", ..." if len(allowed_sorted) > 5 else ""
+        return (
+            f"Unknown {kind}s: {keys_str}. "
+            f"Valid keys include: {preview}{suffix}. "
+            f"See {schema_ref} for the {registry_label}"
+        )
+    return f"Unknown {kind}s: {keys_str}. See {schema_ref} for the {registry_label}"
+
+
 def format_unknown_key_message(
     name: str,
     kind: str,
     suggestions: Sequence[str],
     known_keys: Sequence[str],
 ) -> str:
-    """Build the single-unknown-key error message shared across validators.
+    """Deprecated: single-key message builder. Delegates to :func:`format_unknown_keys_message`.
 
-    Used by :func:`validate_known_key` (single-key path) and
-    :func:`~vault_search.filter.parse_metadata_filter` (single-unknown batch
-    path) so both produce identical text for the 1-key case and agents can
-    rely on one canonical error shape (#123).
-
-    ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
-    を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
-    リスクを低減する (Round 1 review D4)。
+    Retained temporarily to keep ``filter.py`` imports working; call sites
+    should migrate to :func:`format_unknown_keys_message` directly.
     """
-    if suggestions:
-        return (
-            f"Unknown {kind} {name!r}; "
-            f"did you mean: {', '.join(suggestions)}? "
-            f"See schema://tools for the frontmatter_keys list"
-        )
-    allowed_sorted = sorted(known_keys)
-    preview = ", ".join(allowed_sorted[:5])
-    suffix = ", ..." if len(allowed_sorted) > 5 else ""
-    return (
-        f"Unknown {kind} {name!r}; "
-        f"valid keys include: {preview}{suffix}. "
-        f"See schema://tools for the full list"
+    return format_unknown_keys_message({name: tuple(suggestions)}, kind, known_keys)
+
+
+def validate_known_keys(
+    names: Iterable[str],
+    known_keys: Sequence[str],
+    *,
+    kind: str,
+    schema_ref: str = "schema://tools",
+    registry_label: str = "frontmatter_keys list",
+) -> None:
+    """Validate that every name in ``names`` appears in ``known_keys`` (batch).
+
+    Supersedes :func:`validate_known_key` for callers that need to check
+    multiple names at once (filter.py's ``parse_metadata_filter``). Single-
+    and multi-unknown cases produce the same :class:`ValidationError` shape
+    (``error_code="UNKNOWN_FRONTMATTER_KEY"``) so agents can self-correct
+    uniformly (#141 Option A).
+
+    Parameters
+    ----------
+    names:
+        Candidate names, iterated once. Callers should pass each name through
+        :func:`validate_identifier` first.
+    known_keys:
+        Authoritative allow-list (from the index). Empty is permitted; every
+        name is then unknown.
+    kind:
+        Human-readable singular label (e.g. ``"frontmatter key"``) used in the
+        error message. Multi-key messages append ``"s"`` to pluralize.
+    schema_ref, registry_label:
+        Inject the resource reference and registry label so validation stays
+        kind-agnostic (#138). Defaults match the frontmatter_keys use case.
+    """
+    unknowns: dict[str, tuple[str, ...]] = {}
+    for name in names:
+        if name in known_keys:
+            continue
+        if name in unknowns:  # dedupe repeated hits in the iterable
+            continue
+        unknowns[name] = tuple(difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6))
+
+    if not unknowns:
+        return
+
+    sorted_unknowns = dict(sorted(unknowns.items()))
+    all_candidates = tuple(dict.fromkeys(c for s in sorted_unknowns.values() for c in s))
+    raise ValidationError(
+        format_unknown_keys_message(
+            sorted_unknowns,
+            kind,
+            known_keys,
+            schema_ref=schema_ref,
+            registry_label=registry_label,
+        ),
+        error_code="UNKNOWN_FRONTMATTER_KEY",
+        did_you_mean=all_candidates,
+        allowed=sorted(known_keys),
+        unknown_keys=sorted_unknowns,
     )
 
 
@@ -232,36 +338,11 @@ def validate_known_key(
 ) -> str:
     """Validate that ``name`` appears in ``known_keys`` and return it unchanged.
 
-    Intended for frontmatter keys (and, later, known tags / folders) where the
-    index contains an authoritative allow-list and an agent may hallucinate a
-    near-miss. Unknown keys raise :class:`ValidationError` with
-    ``error_code="UNKNOWN_FRONTMATTER_KEY"`` and the full ``known_keys`` sorted
-    list in ``allowed``; close matches (``difflib.get_close_matches``,
-    ``cutoff=0.6``) appear in ``did_you_mean``.
-
-    Parameters
-    ----------
-    name:
-        Candidate key. Callers should pass the value through
-        :func:`validate_identifier` first so SQL / path-traversal shapes are
-        rejected before similarity matching.
-    known_keys:
-        Authoritative allow-list (from the index). Empty sequence is
-        permitted; every ``name`` is unknown in that case.
-    kind:
-        Human-readable label (e.g. ``"frontmatter key"``) interpolated into
-        the error message so the agent knows which input to fix.
+    Thin wrapper over :func:`validate_known_keys`; kept for callers that
+    handle a single name at a time. New code should prefer the batch API.
     """
-    if name in known_keys:
-        return name
-    suggestions = tuple(difflib.get_close_matches(name, known_keys, n=3, cutoff=0.6))
-    raise ValidationError(
-        format_unknown_key_message(name, kind, suggestions, known_keys),
-        error_code="UNKNOWN_FRONTMATTER_KEY",
-        did_you_mean=suggestions,
-        allowed=sorted(known_keys),
-        unknown_keys={name: suggestions},
-    )
+    validate_known_keys([name], known_keys, kind=kind)
+    return name
 
 
 def _validate_strict_int(value: object, name: str) -> None:

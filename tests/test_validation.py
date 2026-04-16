@@ -478,19 +478,23 @@ class TestValidateKnownKeysBatch:
         assert err.did_you_mean == ()
 
     def test_schema_ref_and_registry_label_injected_into_message(self) -> None:
-        """MCP/frontmatter 固有文言が引数で注入される (#138)."""
+        """MCP/frontmatter 固有文言が引数で注入される (#138).
+
+        近似マッチがある入力 (did-you-mean 経路) を使うのは、候補なし経路だと
+        "for the full list" という kind-agnostic fallback 文言が挟まり
+        ``registry_label`` が使われないため (bit-identical 維持の副作用)。
+        """
         from vault_search.validation import validate_known_keys
 
         with pytest.raises(ValidationError) as exc:
             validate_known_keys(
-                ["foo"],
-                ["bar"],
+                ["priorty"],
+                ["priority"],
                 kind="custom kind",
                 schema_ref="config://alt",
                 registry_label="custom_list",
             )
         msg = str(exc.value)
-        # param が message に到達する
         assert "config://alt" in msg, f"schema_ref must be injected; got {msg!r}"
         assert "custom_list" in msg, f"registry_label must be injected; got {msg!r}"
         # デフォルト値がリークしない
