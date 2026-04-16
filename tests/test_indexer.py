@@ -576,24 +576,34 @@ def test_metadata_filter_missing_key_excludes(vault_index: VaultIndex) -> None:
     assert res["total"] == 2
 
 
-def test_metadata_filter_nonexistent_key_returns_empty(
+def test_metadata_filter_nonexistent_key_raises(
     vault_index: VaultIndex,
 ) -> None:
-    """存在しないキー (どのノートも持っていない) で eq すると total=0.
+    """存在しないキーは ValidationError (Issue #119).
 
-    Control group: 同じ空クエリで filter なし相当 (status=active) は 2 件
-    返るのに対し、bogus_key での filter では 0 件に絞られることを確認。
-    これにより「実装が filter 値を無視して全件返す」regression を検知する。
+    indexer が自身で ``list_frontmatter_keys()`` を呼んで known_keys を自己解決
+    する設計変更に伴い、未知キーは silent に 0 件を返すのではなく
+    ``UNKNOWN_FRONTMATTER_KEY`` で即座に拒否する。
+
+    Control: 存在するキーでの filter は引き続き >=1 件返る
+    (filter 値が無視されていない regression guard)。
     """
-    # Control: 存在するキーでの filter は >=1 件返る
     control = vault_index.search("", metadata_filter={"status": "active"})
     assert control["total"] >= 1
 
-    res = vault_index.search("", metadata_filter={"bogus_key_xyzzy": "x"})
-    assert res["total"] == 0, (
-        f"expected 0 hits for nonexistent frontmatter key, got total={res['total']}"
-    )
-    assert res["results"] == []
+    with pytest.raises(ValidationError) as exc:
+        vault_index.search("", metadata_filter={"bogus_key_xyzzy": "x"})
+    assert exc.value.error_code == "UNKNOWN_FRONTMATTER_KEY"
+
+
+def test_search_rejects_known_keys_kwarg(vault_index: VaultIndex) -> None:
+    """Issue #119: known_keys パラメータは削除された (leaky abstraction 解消)."""
+    with pytest.raises(TypeError):
+        vault_index.search(  # type: ignore[call-arg]
+            "",
+            metadata_filter={"status": "active"},
+            known_keys=["status"],
+        )
 
 
 def test_metadata_filter_invalid_operator_raises(vault_index: VaultIndex) -> None:
