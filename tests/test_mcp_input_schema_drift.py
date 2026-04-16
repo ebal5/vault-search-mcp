@@ -63,6 +63,4 @@ def test_folder_description_matches_tool_specs() -> None:
             f"  FastMCP (tools/list): {fastmcp_desc!r}\n"
             f"  TOOL_SPECS (schema://tools): {contract_desc!r}"
         )
-        assert contract_desc, (
-            f"{tool_name}: TOOL_SPECS folder description must be non-empty"
-        )
+        assert contract_desc, f"{tool_name}: TOOL_SPECS folder description must be non-empty"

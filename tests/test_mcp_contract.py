@@ -58,9 +58,7 @@ def test_property_names_pattern_matches_validation() -> None:
     from vault_search.validation import IDENTIFIER_JSON_PATTERN
 
     mf = TOOL_SPECS["vault_search"].input_schema["properties"]
-    assert mf["metadata_filter"]["propertyNames"]["pattern"] == (
-        IDENTIFIER_JSON_PATTERN
-    )
+    assert mf["metadata_filter"]["propertyNames"]["pattern"] == (IDENTIFIER_JSON_PATTERN)
 
 
 def test_property_names_max_length_matches_validation() -> None:
@@ -69,9 +67,7 @@ def test_property_names_max_length_matches_validation() -> None:
     from vault_search.validation import IDENTIFIER_MAX_LEN
 
     mf = TOOL_SPECS["vault_search"].input_schema["properties"]
-    assert mf["metadata_filter"]["propertyNames"]["maxLength"] == (
-        IDENTIFIER_MAX_LEN
-    )
+    assert mf["metadata_filter"]["propertyNames"]["maxLength"] == (IDENTIFIER_MAX_LEN)
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +84,5 @@ def test_metadata_filter_description_mentions_single_operator() -> None:
     # "1 operator", "one operator", "exactly one" のいずれかを含む
     desc_lower = desc.lower()
     assert (
-        "1 operator" in desc_lower
-        or "one operator" in desc_lower
-        or "exactly one" in desc_lower
-    ), (
-        "metadata_filter description does not mention "
-        f"single-operator-per-key constraint: {desc!r}"
-    )
+        "1 operator" in desc_lower or "one operator" in desc_lower or "exactly one" in desc_lower
+    ), f"metadata_filter description does not mention single-operator-per-key constraint: {desc!r}"
