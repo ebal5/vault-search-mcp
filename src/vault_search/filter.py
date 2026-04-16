@@ -157,7 +157,9 @@ def _raise_unknown_keys(
     単一 key 時は既存の ``validate_known_key`` と同形式のメッセージを返し、
     ``did_you_mean`` / ``allowed`` 属性も populated (backward compat)。
     複数 key 時は ``Unknown frontmatter keys: ...`` 形式で各 key ごとの候補を
-    列挙し、構造化情報は ``unknown_keys`` 属性に格納する。
+    列挙し、候補なしキーは明示的に ``(no close match)`` と注釈する。
+    構造化情報は ``unknown_keys`` 属性に格納し、``did_you_mean`` にも全候補を
+    flatten populate することで agent の旧分岐ロジックと対称性を保つ。
     """
     allowed_sorted = sorted(known_keys)
 
@@ -171,8 +173,11 @@ def _raise_unknown_keys(
             unknown_keys=unknowns,
         )
 
-    # Multi-key path
-    parts = [f"{k!r} (did you mean: {', '.join(s)})" if s else repr(k) for k, s in unknowns.items()]
+    # Multi-key path: 各キーに候補/なしを明示注釈して混在ケースの曖昧さを解消。
+    parts = [
+        f"{k!r} (did you mean: {', '.join(s)})" if s else f"{k!r} (no close match)"
+        for k, s in unknowns.items()
+    ]
     keys_str = ", ".join(parts)
     if any(not s for s in unknowns.values()):
         # 少なくとも 1 キーに候補なし → 全 allowed preview を message に添える
@@ -181,13 +186,20 @@ def _raise_unknown_keys(
         msg = (
             f"Unknown frontmatter keys: {keys_str}. "
             f"Valid keys include: {preview}{suffix}. "
-            f"See schema://tools for the full list"
+            f"See schema://tools for the frontmatter_keys list"
         )
     else:
-        msg = f"Unknown frontmatter keys: {keys_str}. See schema://tools for the full list"
+        msg = (
+            f"Unknown frontmatter keys: {keys_str}. "
+            f"See schema://tools for the frontmatter_keys list"
+        )
+    # did_you_mean は単一/複数で非対称にならないよう全候補を flatten populate。
+    # 旧 agent が ``if err.did_you_mean:`` で分岐した場合でも候補ゼロ扱いにならない。
+    all_candidates = tuple(c for s in unknowns.values() for c in s)
     raise ValidationError(
         msg,
         error_code="UNKNOWN_FRONTMATTER_KEY",
+        did_you_mean=all_candidates,
         allowed=allowed_sorted,
         unknown_keys=unknowns,
     )
