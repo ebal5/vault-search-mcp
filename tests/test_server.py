@@ -488,7 +488,12 @@ def test_mcp_tool_vault_search_unknown_key_raises_validation_error(
 def test_mcp_tool_vault_search_unknown_key_did_you_mean_is_sequence(
     vault_index: VaultIndex,
 ) -> None:
-    """ValidationError.did_you_mean が tuple/list であることの基本 guard."""
+    """完全に無関係なキーで did_you_mean が空 tuple、allowed が非空であることを検証する.
+
+    completely_bogus_key_xyzzy は SAMPLE_NOTES のどのキーとも類似しないため
+    difflib は候補を返さない → did_you_mean == ()。
+    一方 allowed には vault の known_keys が入るため len > 0 になる。
+    """
     from vault_search.validation import ValidationError
 
     fn = _fn(server_mod.vault_search)
@@ -497,7 +502,8 @@ def test_mcp_tool_vault_search_unknown_key_did_you_mean_is_sequence(
 
     err = exc_info.value
     assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
-    assert isinstance(err.did_you_mean, (list, tuple))
+    assert err.did_you_mean == ()  # 候補なし: 完全に無関係なキーなので空
+    assert len(err.allowed) > 0  # known_keys (SAMPLE_NOTES のキー群) が返る
 
 
 def test_mcp_tool_vault_search_no_metadata_filter_does_not_raise(
