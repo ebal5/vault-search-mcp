@@ -174,12 +174,15 @@ def _raise_unknown_keys(
         )
 
     # Multi-key path: 各キーに候補/なしを明示注釈して混在ケースの曖昧さを解消。
+    # unknown key 名でソートして、入力挿入順に依存しない決定的 message / did_you_mean
+    # を生成する (R2-3)。log 検索性と snapshot 再現性のため。
+    sorted_unknowns = dict(sorted(unknowns.items()))
     parts = [
         f"{k!r} (did you mean: {', '.join(s)})" if s else f"{k!r} (no close match)"
-        for k, s in unknowns.items()
+        for k, s in sorted_unknowns.items()
     ]
     keys_str = ", ".join(parts)
-    if any(not s for s in unknowns.values()):
+    if any(not s for s in sorted_unknowns.values()):
         # 少なくとも 1 キーに候補なし → 全 allowed preview を message に添える
         preview = ", ".join(allowed_sorted[:5])
         suffix = ", ..." if len(allowed_sorted) > 5 else ""
@@ -195,13 +198,15 @@ def _raise_unknown_keys(
         )
     # did_you_mean は単一/複数で非対称にならないよう全候補を flatten populate。
     # 旧 agent が ``if err.did_you_mean:`` で分岐した場合でも候補ゼロ扱いにならない。
-    all_candidates = tuple(c for s in unknowns.values() for c in s)
+    # ``dict.fromkeys`` で挿入順を保持しつつ重複候補を排除 (R2-2)。
+    # 2 つの unknown key が同じ candidate を提示した場合の二重提示を回避する。
+    all_candidates = tuple(dict.fromkeys(c for s in sorted_unknowns.values() for c in s))
     raise ValidationError(
         msg,
         error_code="UNKNOWN_FRONTMATTER_KEY",
         did_you_mean=all_candidates,
         allowed=allowed_sorted,
-        unknown_keys=unknowns,
+        unknown_keys=sorted_unknowns,
     )
 
 
@@ -218,7 +223,7 @@ def _parse_entry(key: str, value: Any) -> MetadataCondition:
         f"metadata_filter[{key!r}] must be a string (implicit eq) or a dict "
         f"(explicit operator), got {type(value).__name__}. "
         f"Frontmatter scalars are normalized to strings at index time; "
-        f'pass the stringified form (e.g. {{{key!r}: "{value}"}}).'
+        f'pass the stringified form (e.g. {{{key!r}: "{_format_scalar_for_error(value)}"}}).'
     )
 
 

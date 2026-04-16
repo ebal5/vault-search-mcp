@@ -104,8 +104,9 @@ def vault_search(
             (did_you_mean 付き) を返す (Issue #19)。複数 unknown key を同時に
             指定した場合は 1 回の ValidationError にまとめて報告され、各キーの
             did_you_mean 候補は ``err.unknown_keys[key]`` を参照する (Issue #123)。
-            unknown key と unsupported operator が混在する場合、unknown key が
-            優先して報告される (3-pass 検証順)。
+            検証優先順位は: 識別子構造エラー (malformed dot 等) → unknown key
+            (batch) → operator/value エラー (fail-first)。identifier エラーと
+            unknown key が混在する場合、identifier エラーが先に報告される。
 
     Returns:
         常に plain dict を返す ({"tier", "total", "results": [dict]})。
