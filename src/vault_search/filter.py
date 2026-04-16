@@ -26,6 +26,7 @@ from typing import Any, Literal, NoReturn, get_args
 
 from .validation import (
     ValidationError,
+    format_unknown_key_message,
     validate_identifier,
     validate_value,
 )
@@ -162,9 +163,8 @@ def _raise_unknown_keys(
 
     if len(unknowns) == 1:
         ((key, suggestions),) = unknowns.items()
-        msg = _format_single_unknown(key, suggestions, allowed_sorted)
         raise ValidationError(
-            msg,
+            format_unknown_key_message(key, "frontmatter key", suggestions, allowed_sorted),
             error_code="UNKNOWN_FRONTMATTER_KEY",
             did_you_mean=suggestions,
             allowed=allowed_sorted,
@@ -190,27 +190,6 @@ def _raise_unknown_keys(
         error_code="UNKNOWN_FRONTMATTER_KEY",
         allowed=allowed_sorted,
         unknown_keys=unknowns,
-    )
-
-
-def _format_single_unknown(
-    key: str,
-    suggestions: tuple[str, ...],
-    allowed_sorted: list[str],
-) -> str:
-    """単一 unknown key の message を構築 (validate_known_key と同形式)."""
-    if suggestions:
-        return (
-            f"Unknown frontmatter key {key!r}; "
-            f"did you mean: {', '.join(suggestions)}? "
-            f"See schema://tools for the frontmatter_keys list"
-        )
-    preview = ", ".join(allowed_sorted[:5])
-    suffix = ", ..." if len(allowed_sorted) > 5 else ""
-    return (
-        f"Unknown frontmatter key {key!r}; "
-        f"valid keys include: {preview}{suffix}. "
-        f"See schema://tools for the full list"
     )
 
 
