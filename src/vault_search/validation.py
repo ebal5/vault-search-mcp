@@ -28,6 +28,8 @@ from collections.abc import Sequence
 from .exceptions import VaultSearchError
 
 __all__ = [
+    "IDENTIFIER_JSON_PATTERN",
+    "IDENTIFIER_MAX_LEN",
     "LIMIT_MAX",
     "ValidationError",
     "validate_identifier",
@@ -64,6 +66,12 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # targets may be free-form human text.
 _DEFAULT_IDENTIFIER_MAX_LEN = 128
 _DEFAULT_VALUE_MAX_LEN = 1024
+
+# Public constants derived from the private definitions above.
+# Single source of truth for JSON Schema constraints that must match the
+# runtime validation logic (used in mcp_contract.py for ``propertyNames``).
+IDENTIFIER_JSON_PATTERN = _IDENTIFIER_RE.pattern
+IDENTIFIER_MAX_LEN = _DEFAULT_IDENTIFIER_MAX_LEN
 
 
 class ValidationError(VaultSearchError, ValueError):
