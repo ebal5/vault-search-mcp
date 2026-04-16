@@ -807,6 +807,24 @@ class TestMultiKeyMessageRefinements:
             f"keys must appear in alphabetical order; got {msg!r}"
         )
 
+    def test_multi_key_unknown_keys_iteration_order_alphabetical(self) -> None:
+        """``err.unknown_keys`` の iteration 順も alphabetical で固定 (R3 D-1 coverage).
+
+        message の順序と attribute iteration 順は一致すべき (agent が dict
+        iteration で UI を組む場合の一貫性)。既存テストは ``set()`` 比較のみで
+        順序を固定していなかった coverage gap を補強。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"zapple": "a", "aapple": "b", "mango": "c"},
+                known_keys=["banana"],
+            )
+        err = exc.value
+        assert list(err.unknown_keys.keys()) == ["aapple", "mango", "zapple"], (
+            f"unknown_keys must iterate in alphabetical order; "
+            f"got {list(err.unknown_keys.keys())!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Range operator alias detection (Issue #87)
