@@ -487,6 +487,109 @@ class TestParseMetadataFilterUnknownKey:
 
 
 # ---------------------------------------------------------------------------
+# Multiple unknown key collection (Issue #123)
+#
+# 複数 unknown key が 1 回の ValidationError にまとめて報告されることを pin する。
+# 旧挙動は「最初の 1 件で raise」で、agent が typo を 2 つ同時に hallucinate
+# した場合 2 round-trip が必要だった。LLM agent は複数キーを同時に間違えやすい
+# ため、全 unknown key を collect してから一括報告することで self-correction
+# 効率を改善する。
+# ---------------------------------------------------------------------------
+
+
+class TestParseMetadataFilterMultipleUnknownKeys:
+    """parse_metadata_filter が複数 unknown key を batch 収集する (Issue #123).
+
+    ValidationError に新規属性 ``unknown_keys: dict[str, tuple[str, ...]]`` を
+    追加し、各 unknown key に対する did_you_mean 候補を構造化保持する。
+    単一 key 時は従来の ``did_you_mean`` / ``allowed`` 属性も populated のまま
+    (backward compat)。
+    """
+
+    def test_multiple_unknown_keys_reported_together(self) -> None:
+        """2 つ以上の unknown key が 1 回の ValidationError で報告される."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"priorty": "5", "statu": "active"},
+                known_keys=["priority", "status"],
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        msg = str(err)
+        # 両方の unknown key 名がメッセージに含まれる (first-fail-only なら片方欠落)
+        assert "priorty" in msg, f"first unknown key missing from message: {msg!r}"
+        assert "statu" in msg, f"second unknown key missing from message: {msg!r}"
+        # 各キーの did_you_mean 候補もメッセージに含まれる (agent の 1-shot 修正用)
+        assert "priority" in msg, f"suggestion for 'priorty' missing: {msg!r}"
+        assert "status" in msg, f"suggestion for 'statu' missing: {msg!r}"
+
+    def test_unknown_keys_attribute_structured_per_key(self) -> None:
+        """unknown_keys 属性が各 key ごとの did_you_mean 候補を dict で保持する."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"priorty": "5", "statu": "active"},
+                known_keys=["priority", "status", "tags"],
+            )
+        err = exc.value
+        assert hasattr(err, "unknown_keys"), (
+            "ValidationError must expose unknown_keys dict for multi-key DX"
+        )
+        # dict[str, tuple[str, ...]] — キーは unknown key、値は候補 tuple
+        assert set(err.unknown_keys.keys()) == {"priorty", "statu"}
+        assert "priority" in err.unknown_keys["priorty"]
+        assert "status" in err.unknown_keys["statu"]
+
+    def test_three_unknown_keys_all_collected(self) -> None:
+        """3 つの unknown key すべてが報告され、first-fail-only が再発しないことを pin."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"foo": "a", "bar": "b", "baz": "c"},
+                known_keys=["priority"],
+            )
+        err = exc.value
+        assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
+        assert set(err.unknown_keys.keys()) == {"foo", "bar", "baz"}, (
+            "all 3 unknown keys must be collected (regression guard against "
+            f"first-fail-only); got {err.unknown_keys!r}"
+        )
+
+    def test_mixed_known_and_unknown_only_reports_unknown(self) -> None:
+        """known key と unknown key が混在する場合、unknown のみ報告される."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"priority": "5", "typo1": "a", "typo2": "b"},
+                known_keys=["priority", "status"],
+            )
+        err = exc.value
+        assert set(err.unknown_keys.keys()) == {"typo1", "typo2"}
+        assert "priority" not in err.unknown_keys, (
+            f"known keys must not appear in unknown_keys; got {err.unknown_keys!r}"
+        )
+
+    def test_single_unknown_key_backward_compat(self) -> None:
+        """unknown key が 1 つの場合、従来の did_you_mean 属性も populated."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter({"priorty": "5"}, known_keys=["priority", "status"])
+        err = exc.value
+        # 新属性にも 1 エントリある
+        assert set(err.unknown_keys.keys()) == {"priorty"}
+        assert "priority" in err.unknown_keys["priorty"]
+        # 従来の did_you_mean / allowed 属性は単一 key 時の backward compat で維持
+        assert "priority" in err.did_you_mean
+        assert set(err.allowed) == {"priority", "status"}
+
+    def test_multiple_unknown_keys_allowed_full_sorted(self) -> None:
+        """multi-unknown 時も allowed は known_keys のソート済み全集合を含む."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"typo1": "a", "typo2": "b"},
+                known_keys=["priority", "status", "tags"],
+            )
+        err = exc.value
+        assert set(err.allowed) == {"priority", "status", "tags"}
+
+
+# ---------------------------------------------------------------------------
 # Range operator alias detection (Issue #87)
 #
 # gt / lt / gte / lte / > / < / >= / <= / greater_than / less_than 等の
