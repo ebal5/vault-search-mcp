@@ -337,7 +337,9 @@ def test_unsupported_operator_raises_validation_error(filter_input: dict) -> Non
         {"tags": {"$ne": "x"}},
         {"tags": {"eq": "x"}},
         {"tags": {"==": "x"}},
-        {"tags": {"lt": 1}},
+        # Note: range aliases (lt/gt/after/between/…) are excluded here because
+        # they route to UNSUPPORTED_RANGE_OPERATOR with a different message.
+        # They are fully covered by TestRangeOperatorAliasDetection.
     ],
 )
 def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> None:
@@ -345,6 +347,7 @@ def test_invalid_operator_hint_mentions_supported_forms(filter_input: dict) -> N
 
     エージェントがエラーメッセージを読んで自己修正できるよう、
     サポートされている構文 (ne / in / bare string) がヒントに明示されること。
+    range alias は TestRangeOperatorAliasDetection で別途検証する。
     """
     with pytest.raises(ValidationError) as exc:
         parse_metadata_filter(filter_input)
@@ -423,7 +426,8 @@ class TestParseMetadataFilterUnknownKey:
         err = exc.value
         assert err.error_code == "UNKNOWN_FRONTMATTER_KEY"
         assert "priority" in err.did_you_mean
-        assert "schema://tools" in (err.hint or "")
+        assert "schema://tools" in str(err)  # message に含まれる (hint は削除済み)
+        assert err.hint is None
 
     def test_known_key_passes(self) -> None:
         """known_keys に含まれるキーは ValidationError を送出しない."""
@@ -463,7 +467,8 @@ class TestParseMetadataFilterUnknownKey:
             parse_metadata_filter({"priorty": "5"}, known_keys=["priority", "status"])
         msg = str(exc.value)
         assert "priority" in msg, (
-            f"did_you_mean candidate 'priority' must appear in error message for agent DX; got: {msg!r}"
+            "did_you_mean candidate 'priority' must appear in error message "
+            f"for agent DX; got: {msg!r}"
         )
 
     def test_no_close_match_message_includes_allowed_keys(self) -> None:
@@ -476,7 +481,8 @@ class TestParseMetadataFilterUnknownKey:
         msg = str(exc.value)
         # At least one known key should appear in the message for agent self-correction
         assert any(k in msg for k in ["status", "priority", "tags"]), (
-            f"At least one known key must appear in error message when no close match exists; got: {msg!r}"
+            "At least one known key must appear in error message when no close "
+            f"match exists; got: {msg!r}"
         )
 
 
@@ -505,6 +511,13 @@ _RANGE_ALIASES = [
     "less_than",
     "greater_than_or_equal",
     "less_than_or_equal",
+    # Issue #121: natural-language aliases LLMs tend to generate
+    "after",
+    "before",
+    "between",
+    "range",
+    "from",
+    "to",
 ]
 
 
@@ -512,7 +525,7 @@ class TestRangeOperatorAliasDetection:
     """range 比較 alias に対する ValidationError の構造的属性を検証する (Issue #87).
 
     Red フェーズ: 以下の未実装振る舞いが FAIL することを確認する。
-    - 12 alias すべてで error_code="UNSUPPORTED_RANGE_OPERATOR" が送出される
+    - 18 alias すべてで error_code="UNSUPPORTED_RANGE_OPERATOR" が送出される
     - hint が non-None で "post-filter" または "client" を含む
     - str(err) に問題のキー名と alias 名が含まれる
     """
