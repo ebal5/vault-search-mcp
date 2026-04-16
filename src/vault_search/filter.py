@@ -30,7 +30,13 @@ from .validation import (
     validate_value,
 )
 
-__all__ = ["MetadataCondition", "Operator", "build_sql_fragment", "parse_metadata_filter"]
+__all__ = [
+    "MetadataCondition",
+    "Operator",
+    "build_folder_filter_clause",
+    "build_sql_fragment",
+    "parse_metadata_filter",
+]
 
 # 演算子の単一 source of truth。``eq`` / ``ne`` / ``in`` の 3 演算子。
 # ``MetadataCondition.op`` と ``_EXPLICIT_OPS`` はここから派生させる。
@@ -258,12 +264,25 @@ def _parse_ne(key: str, op_value: Any) -> MetadataCondition:
 # ---------------------------------------------------------------------------
 
 
-def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
+def build_sql_fragment(
+    cond: MetadataCondition,
+    *,
+    table_alias: str = "n",
+    frontmatter_column: str = "frontmatter",
+) -> tuple[str, list[Any]]:
     """単一 :class:`MetadataCondition` を SQLite WHERE 断片とパラメータに変換.
 
     返り値は ``(sql_fragment, params)``。``sql_fragment`` は先頭に ``AND`` を
     含む文字列で、indexer 側の既存 SQL (``WHERE ...``) に連結する前提。
-    参照するテーブル別名は ``n`` (``notes`` テーブル) を仮定する。
+
+    Parameters
+    ----------
+    cond:
+        検証済みの単一 frontmatter 条件。
+    table_alias:
+        生成 SQL 内で参照する ``notes`` テーブル別名。default は ``"n"``。
+    frontmatter_column:
+        JSON1 が走査する frontmatter カラム名。default は ``"frontmatter"``。
 
     ``cond.key`` は :func:`validate_identifier` 済みの安全な識別子
     (各セグメント ``A-Za-z0-9_-``、空セグメント不可) なので、JSON パス
@@ -292,16 +311,17 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
       配列でリスト要素のいずれかを含む場合。
     """
     json_path = f"$.{cond.key}"
+    fm_col = f"{table_alias}.{frontmatter_column}"
 
     if cond.op == "eq":
         assert isinstance(cond.value, str)
         fragment = (
             "AND ("
-            "json_extract(n.frontmatter, ?) = ? "
+            f"json_extract({fm_col}, ?) = ? "
             "OR ("
-            "  json_type(n.frontmatter, ?) = 'array' "
+            f"  json_type({fm_col}, ?) = 'array' "
             "  AND EXISTS ("
-            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+            f"    SELECT 1 FROM json_each(json_extract({fm_col}, ?)) "
             "    WHERE value = ?"
             "  )"
             ")"
@@ -313,14 +333,14 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     if cond.op == "ne":
         assert isinstance(cond.value, str)
         fragment = (
-            "AND json_extract(n.frontmatter, ?) IS NOT NULL "
+            f"AND json_extract({fm_col}, ?) IS NOT NULL "
             "AND ("
-            "(json_type(n.frontmatter, ?) != 'array' "
-            " AND json_extract(n.frontmatter, ?) != ?) "
+            f"(json_type({fm_col}, ?) != 'array' "
+            f" AND json_extract({fm_col}, ?) != ?) "
             "OR ("
-            "  json_type(n.frontmatter, ?) = 'array' "
+            f"  json_type({fm_col}, ?) = 'array' "
             "  AND NOT EXISTS ("
-            "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+            f"    SELECT 1 FROM json_each(json_extract({fm_col}, ?)) "
             "    WHERE value = ?"
             "  )"
             ")"
@@ -343,11 +363,11 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     placeholders = ",".join("?" * len(values))
     fragment = (
         "AND ("
-        f"json_extract(n.frontmatter, ?) IN ({placeholders}) "
+        f"json_extract({fm_col}, ?) IN ({placeholders}) "
         "OR ("
-        "  json_type(n.frontmatter, ?) = 'array' "
+        f"  json_type({fm_col}, ?) = 'array' "
         "  AND EXISTS ("
-        "    SELECT 1 FROM json_each(json_extract(n.frontmatter, ?)) "
+        f"    SELECT 1 FROM json_each(json_extract({fm_col}, ?)) "
         f"    WHERE value IN ({placeholders})"
         "  )"
         ")"
@@ -355,3 +375,35 @@ def build_sql_fragment(cond: MetadataCondition) -> tuple[str, list[Any]]:
     )
     params = [json_path, *values, json_path, json_path, *values]
     return fragment, params
+
+
+# ---------------------------------------------------------------------------
+# Folder filter clause (moved from indexer.py — #46)
+# ---------------------------------------------------------------------------
+
+
+def build_folder_filter_clause(folder: str, column: str = "folder") -> tuple[str, list[Any]]:
+    """folder プレフィックスフィルタを「folder 自身 OR その配下」に厳密化する.
+
+    ``folder == 'Projects'`` が ``'Projects Hermes'`` 等の兄弟を拾わないよう、
+    LIKE パターンを ``escaped + '/%'`` にし、等号比較と OR で結合する。
+
+    Parameters
+    ----------
+    folder:
+        canonical 形式の非空フォルダパス。呼び出し側 (``server.py``) が
+        :func:`~vault_search.validation.normalize_folder` で正規化済みであること
+        を前提とする。先頭 ``/`` や連続 ``/`` は含まない。
+    column:
+        SQL 上のカラム名。``n.folder`` のようにテーブルエイリアス付きも可。
+
+    Returns
+    -------
+    tuple[str, list[Any]]
+        ``(clause, params)``。clause は前置詞を含まない WHERE 断片
+        ``"(col = ? OR col LIKE ? ESCAPE '\\')"``、params は
+        ``[folder, folder/%]``。
+    """
+    escaped = folder.replace("%", "\\%").replace("_", "\\_")
+    clause = f"({column} = ? OR {column} LIKE ? ESCAPE '\\')"
+    return clause, [folder, escaped + "/%"]
