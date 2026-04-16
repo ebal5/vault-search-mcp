@@ -940,3 +940,104 @@ class TestRangeOperatorAliasDetection:
         result = parse_metadata_filter({"priority": {"ne": "a"}})
         assert len(result) == 1
         assert result[0].op == "ne"
+
+
+# ---------------------------------------------------------------------------
+# Table alias / frontmatter column parameterization (#29)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSqlFragmentAliasArgs:
+    """``build_sql_fragment`` のテーブル別名・JSON カラム名引数化 (#29).
+
+    従来は ``n.frontmatter`` alias がハードコードされており、filter モジュールが
+    indexer 側のテーブル別名を前提にしていた (layering 違反)。
+    caller が明示的に ``table_alias`` / ``frontmatter_column`` を渡せることを
+    pin する。default 値は後方互換のため ``"n"`` / ``"frontmatter"``。
+    """
+
+    @pytest.mark.parametrize("op,value", [("eq", "5"), ("ne", "5"), ("in", ("5",))])
+    def test_custom_table_alias_appears_in_sql(self, op: str, value: object) -> None:
+        cond = MetadataCondition(key="priority", op=op, value=value)  # type: ignore[arg-type]
+        fragment, _ = build_sql_fragment(cond, table_alias="notes")
+        assert "notes.frontmatter" in fragment, (
+            f"custom table_alias must appear in generated SQL: {fragment!r}"
+        )
+        assert "n.frontmatter" not in fragment, (
+            f"default alias must not leak when custom provided: {fragment!r}"
+        )
+
+    @pytest.mark.parametrize("op,value", [("eq", "5"), ("ne", "5"), ("in", ("5",))])
+    def test_custom_frontmatter_column_appears_in_sql(self, op: str, value: object) -> None:
+        cond = MetadataCondition(key="priority", op=op, value=value)  # type: ignore[arg-type]
+        fragment, _ = build_sql_fragment(cond, frontmatter_column="fm")
+        assert "n.fm" in fragment, f"custom column must appear in SQL: {fragment!r}"
+        assert "n.frontmatter" not in fragment, (
+            f"default column must not leak when custom provided: {fragment!r}"
+        )
+
+    @pytest.mark.parametrize("op,value", [("eq", "5"), ("ne", "5"), ("in", ("5",))])
+    def test_default_args_match_previous_contract(self, op: str, value: object) -> None:
+        """default 引数なし呼出は従来通り ``n.frontmatter`` を生成 (後方互換)."""
+        cond = MetadataCondition(key="priority", op=op, value=value)  # type: ignore[arg-type]
+        fragment, _ = build_sql_fragment(cond)
+        assert "n.frontmatter" in fragment, (
+            f"default behavior must remain n.frontmatter: {fragment!r}"
+        )
+
+    def test_both_args_combined(self) -> None:
+        """table_alias と frontmatter_column の両方を同時に変更できる."""
+        cond = MetadataCondition(key="priority", op="eq", value="5")
+        fragment, _ = build_sql_fragment(cond, table_alias="notes", frontmatter_column="fm")
+        assert "notes.fm" in fragment, f"combined alias/column must appear: {fragment!r}"
+        assert "n.frontmatter" not in fragment
+        assert "n.fm" not in fragment
+        assert "notes.frontmatter" not in fragment
+
+
+# ---------------------------------------------------------------------------
+# build_folder_filter_clause (moved from indexer.py — #46)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFolderFilterClause:
+    """``build_folder_filter_clause`` が filter.py の public API であること (#46).
+
+    PR #151 で folder 正規化が ``validation.normalize_folder`` に抽出された結果、
+    indexer.py の ``_folder_filter_clause`` は「正規化済み folder → WHERE 断片」の
+    純粋 SQL builder に縮退した。metadata_filter の builder と責務が揃ったので、
+    filter モジュールに移動して SQL fragment builder を集約する。
+    """
+
+    def test_importable_from_filter_module(self) -> None:
+        """filter モジュール直下から import できる (public API)."""
+        from vault_search.filter import build_folder_filter_clause
+
+        assert callable(build_folder_filter_clause)
+
+    def test_basic_folder_clause(self) -> None:
+        from vault_search.filter import build_folder_filter_clause
+
+        clause, params = build_folder_filter_clause("Projects")
+        assert "folder = ?" in clause
+        assert "folder LIKE ?" in clause
+        assert "ESCAPE '\\'" in clause
+        assert params == ["Projects", "Projects/%"]
+
+    def test_custom_column_with_table_alias(self) -> None:
+        """column 引数でテーブル別名付き column (``n.folder`` 等) を指定可能."""
+        from vault_search.filter import build_folder_filter_clause
+
+        clause, params = build_folder_filter_clause("Projects", column="n.folder")
+        assert "n.folder = ?" in clause
+        assert "n.folder LIKE ?" in clause
+        assert params == ["Projects", "Projects/%"]
+
+    def test_wildcard_chars_escaped_in_like_param(self) -> None:
+        """folder 名に含まれる '%' '_' は LIKE param で ESCAPE される."""
+        from vault_search.filter import build_folder_filter_clause
+
+        _, params = build_folder_filter_clause("10%OFF_notes")
+        # 等号比較は生 folder、LIKE param 側だけエスケープされる
+        assert params[0] == "10%OFF_notes"
+        assert params[1] == r"10\%OFF\_notes/%"
