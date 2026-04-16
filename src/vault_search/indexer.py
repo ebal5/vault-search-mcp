@@ -135,6 +135,7 @@ class VaultIndex:
 
         self._cache = TieredCache()
         self._lock = threading.Lock()
+        self._frontmatter_keys_cache: list[str] | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -258,6 +259,7 @@ class VaultIndex:
 
             # キャッシュ無効化
             self._cache.invalidate()
+            self._frontmatter_keys_cache = None
 
             logger.info(
                 "Index built: added=%d updated=%d deleted=%d skipped=%d errors=%d",
@@ -310,6 +312,7 @@ class VaultIndex:
                 conn.execute("DELETE FROM notes WHERE path = ?", (rel_path,))
                 conn.commit()
                 self._cache.invalidate()
+                self._frontmatter_keys_cache = None
                 return True
 
             note = parse_note(full_path, self.vault_root)
@@ -320,6 +323,7 @@ class VaultIndex:
             self._upsert_note(conn, note, mtime)
             conn.commit()
             self._cache.invalidate()
+            self._frontmatter_keys_cache = None
             return True
 
     # ------------------------------------------------------------------
@@ -590,7 +594,17 @@ class VaultIndex:
             return [{"folder": r["folder"], "count": r["count"]} for r in rows]
 
     def list_frontmatter_keys(self) -> list[str]:
-        """Vault 内 frontmatter のトップレベルキーをソート済みで返す."""
+        """Vault 内 frontmatter のトップレベルキーをソート済みで返す.
+
+        初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
+        invalidate されるまでキャッシュを返す (Issue #118 / #10)。
+        """
+        if self._frontmatter_keys_cache is None:
+            self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
+        return list(self._frontmatter_keys_cache)
+
+    def _query_frontmatter_keys_from_db(self) -> list[str]:
+        """Frontmatter のトップレベルキー集合を DB から取得する (キャッシュ無視)."""
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT key FROM notes, json_each(notes.frontmatter) "
