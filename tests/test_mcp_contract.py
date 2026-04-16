@@ -53,21 +53,25 @@ def test_metadata_filter_has_property_names() -> None:
 
 
 def test_property_names_pattern_matches_validation() -> None:
-    """propertyNames["pattern"] が validation.IDENTIFIER_JSON_PATTERN と同値であること (単一ソース真実性)."""
+    """propertyNames.pattern が IDENTIFIER_JSON_PATTERN と同値."""
     from vault_search.mcp_contract import TOOL_SPECS
-    from vault_search.validation import IDENTIFIER_JSON_PATTERN  # type: ignore[attr-defined]
+    from vault_search.validation import IDENTIFIER_JSON_PATTERN
 
-    mf_schema = TOOL_SPECS["vault_search"].input_schema["properties"]["metadata_filter"]
-    assert mf_schema["propertyNames"]["pattern"] == IDENTIFIER_JSON_PATTERN
+    mf = TOOL_SPECS["vault_search"].input_schema["properties"]
+    assert mf["metadata_filter"]["propertyNames"]["pattern"] == (
+        IDENTIFIER_JSON_PATTERN
+    )
 
 
 def test_property_names_max_length_matches_validation() -> None:
-    """propertyNames["maxLength"] が validation.IDENTIFIER_MAX_LEN と同値であること (単一ソース真実性)."""
+    """propertyNames.maxLength が IDENTIFIER_MAX_LEN と同値."""
     from vault_search.mcp_contract import TOOL_SPECS
-    from vault_search.validation import IDENTIFIER_MAX_LEN  # type: ignore[attr-defined]
+    from vault_search.validation import IDENTIFIER_MAX_LEN
 
-    mf_schema = TOOL_SPECS["vault_search"].input_schema["properties"]["metadata_filter"]
-    assert mf_schema["propertyNames"]["maxLength"] == IDENTIFIER_MAX_LEN
+    mf = TOOL_SPECS["vault_search"].input_schema["properties"]
+    assert mf["metadata_filter"]["propertyNames"]["maxLength"] == (
+        IDENTIFIER_MAX_LEN
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -76,14 +80,18 @@ def test_property_names_max_length_matches_validation() -> None:
 
 
 def test_metadata_filter_description_mentions_single_operator() -> None:
-    """metadata_filter の description に「キーごとに演算子は 1 つ」の制約が明記されていること (Issue #36)."""
+    """metadata_filter description に 1-operator-per-key 制約が明記."""
     from vault_search.mcp_contract import TOOL_SPECS
 
-    desc: str = TOOL_SPECS["vault_search"].input_schema["properties"]["metadata_filter"]["description"]
+    props = TOOL_SPECS["vault_search"].input_schema["properties"]
+    desc: str = props["metadata_filter"]["description"]
     # "1 operator", "one operator", "exactly one" のいずれかを含む
     desc_lower = desc.lower()
     assert (
         "1 operator" in desc_lower
         or "one operator" in desc_lower
         or "exactly one" in desc_lower
-    ), f"metadata_filter description does not mention single-operator-per-key constraint: {desc!r}"
+    ), (
+        "metadata_filter description does not mention "
+        f"single-operator-per-key constraint: {desc!r}"
+    )

@@ -158,7 +158,8 @@ TOOL_SPECS: dict[str, _ToolSchemaSpec] = {
                         "frontmatter の各キーに対する AND フィルタ条件。"
                         "キーは frontmatter プロパティ名。値は str (暗黙 eq) または "
                         '{"in": list[str]} / {"ne": str}。'
-                        "各キーにつき exactly one operator (str / in / ne のいずれか 1 つ) を指定すること。"
+                        "各キーにつき exactly one operator "
+                        "(str / in / ne のいずれか 1 つ) を指定すること。"
                         '例: {"status": "active", "priority": {"in": ["high"]}}。'
                         "比較値は常に文字列。frontmatter のスカラーは index 時に正規化される: "
                         'int 5→"5" / float 4.5→"4.5" / bool true→"true" false→"false" / '
