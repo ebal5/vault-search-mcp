@@ -19,6 +19,8 @@ frontmatter の任意プロパティを AND 条件で絞り込む dict 構文を
 
 from __future__ import annotations
 
+import difflib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -32,6 +34,27 @@ Operator = Literal["eq", "ne", "in"]
 
 # 明示的に dict 値で指定できる演算子。``eq`` は str 値による暗黙指定のみ。
 _EXPLICIT_OPS: tuple[str, ...] = tuple(op for op in get_args(Operator) if op != "eq")
+
+# Numeric / date range comparison aliases. These are not supported in
+# metadata_filter (index-time string normalization makes ordered comparison
+# semantically undefined); detecting them lets agents self-correct to a
+# client-side post-filter instead of retrying aliases like gt/gte/>=. (#87)
+_RANGE_OP_ALIASES: frozenset[str] = frozenset(
+    {
+        "gt",
+        "lt",
+        "gte",
+        "lte",
+        ">",
+        "<",
+        ">=",
+        "<=",
+        "greater_than",
+        "less_than",
+        "greater_than_or_equal",
+        "less_than_or_equal",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -62,11 +85,15 @@ class MetadataCondition:
 
 def parse_metadata_filter(
     raw: dict[str, Any] | None,
+    known_keys: Sequence[str] | None = None,
 ) -> list[MetadataCondition]:
     """``metadata_filter`` dict を :class:`MetadataCondition` リストへ変換する.
 
     - ``None`` または空 dict → 空 list
     - 各キーは :func:`validate_identifier` (kind="frontmatter key") で検証
+    - ``known_keys`` が ``None`` 以外の場合、各キーが ``known_keys`` に含まれるか検証
+      (識別子形式チェックの**後**に実施)。含まれない場合は
+      ``ValidationError(error_code="UNKNOWN_FRONTMATTER_KEY")`` を送出する。
     - str 値 → ``op="eq"``、値は :func:`validate_value` で検証
     - dict 値 → ``{"in": list[str]}`` / ``{"ne": str}`` のみ許可
         - ``in``: 値は非空 list[str]、各要素を :func:`validate_value` で検証
@@ -83,6 +110,31 @@ def parse_metadata_filter(
         if not isinstance(key, str):
             raise ValidationError(f"metadata_filter key must be a string, got {type(key).__name__}")
         validate_identifier(key, kind="frontmatter key")
+
+        if known_keys is not None and key not in known_keys:
+            suggestions = difflib.get_close_matches(key, known_keys, n=3, cutoff=0.6)
+            if suggestions:
+                suggestion_str = ", ".join(suggestions)
+                msg = (
+                    f"Unknown frontmatter key {key!r}; "
+                    f"did you mean: {suggestion_str}? "
+                    f"See schema://tools for the frontmatter_keys list"
+                )
+            else:
+                preview = ", ".join(sorted(known_keys)[:5])
+                suffix = ", ..." if len(known_keys) > 5 else ""
+                msg = (
+                    f"Unknown frontmatter key {key!r}; "
+                    f"valid keys include: {preview}{suffix}. "
+                    f"See schema://tools for the full list"
+                )
+            raise ValidationError(
+                msg,
+                error_code="UNKNOWN_FRONTMATTER_KEY",
+                hint="see schema://tools for the frontmatter_keys list",
+                did_you_mean=suggestions,
+                allowed=sorted(known_keys),
+            )
 
         conditions.append(_parse_entry(key, value))
 
@@ -121,6 +173,19 @@ def _parse_operator_dict(key: str, op_dict: dict[Any, Any]) -> MetadataCondition
             f"Unsupported operator 'eq' for key {key!r}; "
             f'use a bare string value for equality (e.g. {{{key!r}: "..."}}) '
             f"or one of: {', '.join(_EXPLICIT_OPS)}"
+        )
+    if op in _RANGE_OP_ALIASES:
+        raise ValidationError(
+            f"Unsupported operator {op!r} for key {key!r}: "
+            f"numeric/date range comparison is not supported in metadata_filter. "
+            f"Retrieve the notes first and apply post-filter on the client side. "
+            f"For equality checks use a bare string (implicit eq), ne, or in.",
+            error_code="UNSUPPORTED_RANGE_OPERATOR",
+            hint=(
+                "metadata_filter values are stored as strings (index-time "
+                "normalization). Use in/ne/eq for equality, and perform "
+                "numeric/date comparison on the client side after retrieval."
+            ),
         )
     if op not in _EXPLICIT_OPS:
         raise ValidationError(

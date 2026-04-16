@@ -23,6 +23,10 @@ Design notes
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from typing import ClassVar
+
+from .exceptions import VaultSearchError
 
 __all__ = [
     "LIMIT_MAX",
@@ -63,13 +67,46 @@ _DEFAULT_IDENTIFIER_MAX_LEN = 128
 _DEFAULT_VALUE_MAX_LEN = 1024
 
 
-class ValidationError(ValueError):
+class ValidationError(VaultSearchError, ValueError):
     """Raised when an agent-supplied input fails validation.
 
-    Inherits from :class:`ValueError` so code that catches ``ValueError``
-    keeps working. Catch ``ValidationError`` explicitly to distinguish
-    input-validation failures from other value errors.
+    Inherits from both :class:`VaultSearchError` and :class:`ValueError` so
+    code that catches ``ValueError`` keeps working. Catch ``ValidationError``
+    explicitly to distinguish input-validation failures from other value errors.
+
+    Parameters
+    ----------
+    message:
+        Human-readable description of the validation failure.
+    error_code:
+        Optional override for the class-level ``error_code`` attribute.
+        When provided, the instance shadows the class attribute.
+    hint:
+        Optional short guidance for self-correction (e.g. "see schema://tools").
+    did_you_mean:
+        Optional list of close-match candidates (from difflib).
+    allowed:
+        Optional sorted list of all allowed values / keys.
     """
+
+    error_code: ClassVar[str] = "VALIDATION_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        hint: str | None = None,
+        did_you_mean: Sequence[str] | None = None,
+        allowed: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        if error_code is not None:
+            # instance attribute shadows the class-level ClassVar
+            self.error_code = error_code
+        self.hint = hint
+        self.did_you_mean: tuple[str, ...] = tuple(did_you_mean) if did_you_mean else ()
+        self.allowed: tuple[str, ...] = tuple(allowed) if allowed else ()
 
 
 def validate_identifier(

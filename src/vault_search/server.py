@@ -100,6 +100,8 @@ def vault_search(
             例: ``{"status": "active", "priority": {"in": ["high", "low"]}}``。
             対応演算子: 暗黙 eq (str 値) / ``{"ne": str}`` / ``{"in": list[str]}``。
             リスト型 frontmatter 値は「含む」判定 (tags と同様)。
+            unknown frontmatter key を指定すると ValidationError
+            (did_you_mean 付き) を返す (Issue #19)。
 
     Returns:
         常に plain dict を返す ({"tier", "total", "results": [dict]})。
@@ -114,6 +116,7 @@ def vault_search(
         tags=tags,
         folder=folder,
         metadata_filter=metadata_filter,
+        known_keys=_get_index().list_frontmatter_keys() if metadata_filter else None,
         limit=limit,
         offset=offset,
     )
