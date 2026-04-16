@@ -590,6 +590,90 @@ class TestParseMetadataFilterMultipleUnknownKeys:
 
 
 # ---------------------------------------------------------------------------
+# Round 1 review findings — multi-key UX refinements (Issue #123 follow-ups)
+#
+# #123 PR #135 round 1 レビューで指摘された以下を固定化:
+# - A2/B2: multi-key 時も did_you_mean に全候補 flatten (agent が旧 API で分岐
+#   しても候補ゼロにならない)
+# - B3: 混在 suggestion 時に「候補なし」が明示される ("no close match")
+# - B5: schema reference 文言を single/multi で統一 ("frontmatter_keys list")
+# ---------------------------------------------------------------------------
+
+
+class TestMultiKeyMessageRefinements:
+    """Round 1 review の multi-key message / 属性対称性を pin する."""
+
+    def test_multi_key_did_you_mean_flattened_for_backward_compat(self) -> None:
+        """multi-key 時も did_you_mean に全候補が flatten で入る (A2/B2).
+
+        旧 agent コードが ``if err.did_you_mean:`` で候補提示を分岐している場合、
+        multi-key 時に空 tuple になると「候補ゼロ」扱いで分岐が崩れる。
+        単一/複数で非対称にならないよう全候補を flatten populate する。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"priorty": "5", "statu": "active"},
+                known_keys=["priority", "status"],
+            )
+        err = exc.value
+        # 各 unknown key の候補が全て did_you_mean に含まれる (順不同)
+        assert "priority" in err.did_you_mean, (
+            f"did_you_mean must include 'priority' for 'priorty'; got {err.did_you_mean!r}"
+        )
+        assert "status" in err.did_you_mean, (
+            f"did_you_mean must include 'status' for 'statu'; got {err.did_you_mean!r}"
+        )
+
+    def test_multi_key_did_you_mean_empty_when_no_candidates(self) -> None:
+        """multi-key で全 key に候補なしの場合、did_you_mean は空のまま."""
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"foo": "a", "bar": "b"},
+                known_keys=["priority"],
+            )
+        err = exc.value
+        # 候補なしキーのみ → did_you_mean は空
+        assert err.did_you_mean == (), (
+            f"did_you_mean must be empty when no candidates; got {err.did_you_mean!r}"
+        )
+
+    def test_multi_key_no_close_match_annotated_explicitly(self) -> None:
+        """候補なしキーは message で明示的に "no close match" と示される (B3).
+
+        混在ケース (``'foo'`` 候補なし、``'priorty'`` 候補 ``priority``) で
+        括弧が前キーにかかって見えて agent が誤読する懸念を解消。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"xyzqqq": "a", "priorty": "5"},
+                known_keys=["priority", "status"],
+            )
+        msg = str(exc.value)
+        assert "no close match" in msg, (
+            f"no-close-match key must be annotated explicitly; got {msg!r}"
+        )
+        # priorty の候補は従来通り括弧付きで示される
+        assert "did you mean: priority" in msg, f"candidate must remain visible; got {msg!r}"
+
+    def test_multi_key_schema_reference_mentions_frontmatter_keys(self) -> None:
+        """multi-key message でも ``frontmatter_keys`` リソース名を明示する (B5).
+
+        単一 key は "for the frontmatter_keys list" で具体的だが、multi-key が
+        "for the full list" だと agent が schema://tools のどこを見るべきか
+        判断しづらい。文言を統一して navigation 先を明示する。
+        """
+        with pytest.raises(ValidationError) as exc:
+            parse_metadata_filter(
+                {"typo1": "a", "typo2": "b"},
+                known_keys=["priority", "status"],
+            )
+        msg = str(exc.value)
+        assert "frontmatter_keys" in msg, (
+            f"multi-key message must reference 'frontmatter_keys' for navigation; got {msg!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Range operator alias detection (Issue #87)
 #
 # gt / lt / gte / lte / > / < / >= / <= / greater_than / less_than 等の
