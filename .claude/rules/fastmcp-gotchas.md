@@ -59,6 +59,31 @@
 - 撤去候補: MCP 2.0 / FastMCP 上流で `ToolError` が structured payload を
   サポートした時点で本 Gotcha は解消
 
+## Tool annotations
+
+- **付与経路**: `mcp_contract.py` の `_TOOL_SPECS[name].annotations` に
+  `ToolAnnotations` を設定し、`server.py` の `@mcp.tool(annotations=...)` で
+  FastMCP へ wire する
+- **公開経路**: MCP `tools/list` と `schema://tools` リソースの両方に出る。
+  両経路の drift を防ぐため `_build_tool_entry` が `entry["annotations"]` を
+  `exclude_none=True` でシリアライズして `TOOL_ENTRIES` に含める
+- **MCP spec 準拠点**: `readOnlyHint=true` のツールでは
+  `destructiveHint` / `idempotentHint` を `None` (未設定) にする。
+  spec は "meaningful only when readOnlyHint=false" と定義しており、
+  FastMCP は `None` フィールドを wire 上から落とす
+- **`vault_reindex` の `destructiveHint=false`**: user-facing vault (`.md`)
+  を touch せず派生 DB のみを再構築するため。auto-approve クライアントへの
+  過剰な警告を避ける意図的設定
+- **regression guard**: `tests/test_tool_annotations.py` が annotations
+  欠落・MCP spec 違反・wire serialize regression を検知する universal test。
+  新規 tool を追加したらこのテストが失敗するため、annotations の付け忘れを
+  構造的に防止できる
+- **FastMCP upgrade 時のリスク**: `@mcp.tool(annotations=...)` の
+  `annotations` 引数が silent に drop または rename されても現状テストで
+  検知できる。ただし FastMCP 内部の `ToolAnnotations` デフォルト値が変わった
+  場合 (例: `None` → `False`) は
+  `test_tool_annotations_exclude_none_wire_omits_null_hints` が catch する
+
 ## 将来の解消候補
 
 - FastMCP 上流で `@tool(output_schema=...)` 公式対応が入れば

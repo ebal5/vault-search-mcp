@@ -53,6 +53,10 @@ src/vault_search/
 - ログは `logging` モジュール、出力先は stderr
 - DB はデフォルトで vault_root/.vault-search.db
 - 隠しフォルダ (`.`) と `_` プレフィックスフォルダは除外
+- 新規 tool 追加時は `_TOOL_SPECS` (`src/vault_search/mcp_contract.py`) に `annotations`
+  (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`) を必ず設定する
+- `tests/test_tool_annotations.py` の universal regression test が annotations 欠落と
+  MCP spec 違反 (readOnly tool の destructive/idempotent 混在等) を検知する
 
 ## 追加方針 (別ファイル委譲)
 
