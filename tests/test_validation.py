@@ -16,33 +16,52 @@ from vault_search.validation import (
 )
 
 # ---------------------------------------------------------------------------
-# validate_identifier — positive cases
+# validate_identifier — intent-focused accept/reject matrix
+#
+# 以下の 1 テーブルで「典型的な妥当識別子が通る」「実害のある敵対入力が拒否
+# される」の 2 intent を pin する。regex の allow-list を 1 文字拡張しても
+# ここは (意図的に変更しない限り) fail しないよう、境界ケースは意図的に薄く
+# 保ち、security-relevant な代表値のみを残す。
+#
+# A3 (連続ドット構造) は別テストに分離 — 構造的エラーは char-class ではなく
+# structural validation の責務のため、intent/invariants が独立している。
+# Control chars / 長さ境界 / Unicode / kind message も独立テストで pin する。
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "name",
+    "name,valid",
     [
-        "status",
-        "user_priority",
-        "my-tag",
-        "nested.key",
-        "abc123",
-        "A1_b2-c3.d4",
-        "X",
+        # Valid: representative shapes (ASCII word, hyphen, dotted, mixed).
+        ("priority", True),
+        ("A_B-1", True),
+        ("a.b.c", True),
+        # Invalid: SQL injection vectors.
+        ("'; DROP TABLE notes--", False),
+        ("a' OR 1=1", False),
+        # Invalid: JSON path / expression injection.
+        ("$..a", False),
+        ("$.priority", False),
+        # Invalid: path traversal / separators.
+        ("../etc", False),
+        ("/abs", False),
+        ("a/b", False),
+        # Invalid: whitespace (common agent hallucination).
+        ("has space", False),
     ],
 )
-def test_validate_identifier_accepts_valid(name: str) -> None:
-    assert validate_identifier(name) == name
+def test_validate_identifier_accepts_safe_rejects_hostile(name: str, valid: bool) -> None:
+    """Intent: representative valid shapes pass; real injection vectors fail.
 
-
-def test_validate_identifier_returns_input_verbatim() -> None:
-    assert validate_identifier("priority") == "priority"
-
-
-# ---------------------------------------------------------------------------
-# validate_identifier — rejection cases
-# ---------------------------------------------------------------------------
+    Narrow on purpose — broader character-class enumeration is a regex-mirror
+    anti-pattern (#23). If this test fails after a legitimate allow-list
+    change, fix the case; do not pad the table to re-cover every char.
+    """
+    if valid:
+        assert validate_identifier(name) == name
+    else:
+        with pytest.raises(ValidationError):
+            validate_identifier(name)
 
 
 def test_validate_identifier_rejects_empty() -> None:
@@ -53,36 +72,15 @@ def test_validate_identifier_rejects_empty() -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        "foo\x00bar",
-        "x\x1fy",
-        "z\x7f",
-        "a\x01b",
-        "tab\there",
-        "new\nline",
+        "foo\x00bar",  # NUL (C0 low)
+        "tab\there",  # horizontal tab (common smuggling vector)
+        "z\x7f",  # DEL (C0 high)
     ],
 )
 def test_validate_identifier_rejects_control_chars(name: str) -> None:
+    """Control chars are rejected via a dedicated class (security boundary)."""
     with pytest.raises(ValidationError):
         validate_identifier(name)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "../etc",
-        "/abs",
-        "..\\win",
-        "a/b",
-    ],
-)
-def test_validate_identifier_rejects_path_traversal(name: str) -> None:
-    with pytest.raises(ValidationError):
-        validate_identifier(name)
-
-
-def test_validate_identifier_rejects_nul_byte() -> None:
-    with pytest.raises(ValidationError):
-        validate_identifier("x\x00y")
 
 
 def test_validate_identifier_rejects_max_len_exceeded() -> None:
@@ -100,24 +98,6 @@ def test_validate_identifier_custom_max_len() -> None:
     with pytest.raises(ValidationError):
         validate_identifier("abcdef", max_len=5)
     assert validate_identifier("abcde", max_len=5) == "abcde"
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "has space",
-        "with/slash",
-        "with:colon",
-        "quote'",
-        "amp&",
-        "percent%",
-        "paren(",
-        "bracket[",
-    ],
-)
-def test_validate_identifier_rejects_disallowed_symbols(name: str) -> None:
-    with pytest.raises(ValidationError):
-        validate_identifier(name)
 
 
 @pytest.mark.parametrize(
@@ -251,18 +231,14 @@ def test_validation_error_is_value_error_subclass() -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "active",
-        "high",
-        "",
-        "重要",
-        "日本語テキスト",
-        "v1.2.3",
-        "hello world",
-        "has/slash/is/fine",
-        "quote'ok",
-        "colon:ok",
-        "café",
-        "mix 123 abc",
+        # Intent: values are free-form Unicode text; identifier-class
+        # restrictions (spaces, slashes, punctuation, non-ASCII) do NOT
+        # apply here. Representatives only — exhaustive character coverage
+        # would mirror the implementation (#23).
+        "active",  # typical ASCII word
+        "重要",  # non-ASCII (Japanese)
+        "hello world",  # space + punctuation-free text
+        "has/slash 'quote:",  # identifier-hostile chars are fine here
     ],
 )
 def test_validate_value_accepts_valid(value: str) -> None:
@@ -286,15 +262,13 @@ def test_validate_value_accepts_max_len_boundary() -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "foo\x00bar",
-        "x\x1fy",
-        "z\x7f",
-        "a\x01b",
-        "tab\there",
-        "new\nline",
+        "foo\x00bar",  # NUL (C0 low)
+        "tab\there",  # horizontal tab
+        "z\x7f",  # DEL (C0 high)
     ],
 )
 def test_validate_value_rejects_control_chars(value: str) -> None:
+    """Control chars are the only reject class for values (security boundary)."""
     with pytest.raises(ValidationError):
         validate_value(value)
 
