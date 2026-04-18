@@ -11,7 +11,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from .indexer import VaultIndex
@@ -21,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 try:
     from watchdog.events import (
-        FileMovedEvent,
         FileSystemEvent,
         FileSystemEventHandler,
     )
@@ -35,43 +33,61 @@ except ImportError:  # pragma: no cover - watchdog is a hard dep but keep guard 
 class VaultEventHandler(FileSystemEventHandler):  # type: ignore[misc]
     """watchdog FileSystemEventHandler を vault 専用フィルタ + callback に閉じ込める.
 
-    Observer / filesystem を介さず、テストから直接 ``on_any_event`` に合成
+    Observer / filesystem を介さず、テストから直接各 handler メソッドに合成
     イベントを流せるよう module-level に切り出している (#79)。
+
+    Dispatch 構造 (#77): watchdog 慣例に合わせて ``on_created`` / ``on_modified``
+    / ``on_deleted`` / ``on_moved`` を個別 override する。汎用 ``on_any_event``
+    フォールバックは使わないことで:
+
+    - ``isinstance(event, FileMovedEvent)`` 分岐を排除
+    - 将来 watchdog に追加される ``FileClosedEvent`` 等による意図しない
+      再インデックスを避ける
+    - ``on_moved`` を他所から差し替えた際の src/dest 二重 schedule を構造的に防ぐ
+
+    パス判定は ``VaultIndex.is_indexable_path`` に委譲する (#76)。``.md`` 拡張子
+    / ``vault_root`` 配下 / 除外プレフィックスの判定が walker (`_iter_markdown_files`)
+    と単一ソース化される。
     """
 
-    def __init__(self, vault_root: Path, schedule_callback: Callable[[str], None]) -> None:
-        self._vault_root = vault_root
+    def __init__(self, index: VaultIndex, schedule_callback: Callable[[str], None]) -> None:
+        self._index = index
         self._schedule = schedule_callback
 
     def _schedule_if_valid(self, raw_path: str) -> None:
-        if not raw_path.endswith(".md"):
-            logger.debug("skipped non-.md path: %s", raw_path)
-            return
-        try:
-            rel = str(Path(raw_path).relative_to(self._vault_root)).replace("\\", "/")
-        except ValueError:
-            logger.debug("skipped path outside vault: %s", raw_path)
-            return
-        if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
-            logger.debug("skipped excluded path: %s", rel)
+        rel = self._index.is_indexable_path(raw_path)
+        if rel is None:
+            logger.debug("skipped non-indexable path: %s", raw_path)
             return
         self._schedule(rel)
 
-    def on_any_event(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+    def on_created(self, event: FileSystemEvent) -> None:  # type: ignore[override]
         if event.is_directory:
             return
-        # FileMovedEvent はリネーム/移動。src_path (旧) と
-        # dest_path (新) の両方をインデックス更新対象にする (#58)。
-        if isinstance(event, FileMovedEvent):
-            logger.info(
-                "rename detected: %s -> %s",
-                event.src_path,
-                event.dest_path,
-            )
-            self._schedule_if_valid(event.src_path)
-            self._schedule_if_valid(event.dest_path)
+        self._schedule_if_valid(event.src_path)
+
+    def on_modified(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        if event.is_directory:
             return
         self._schedule_if_valid(event.src_path)
+
+    def on_deleted(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        self._schedule_if_valid(event.src_path)
+
+    def on_moved(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        # FileMovedEvent はリネーム/移動。src_path (旧) と dest_path (新)
+        # の両方をインデックス更新対象にする (#58)。
+        logger.info(
+            "rename detected: %s -> %s",
+            event.src_path,
+            event.dest_path,
+        )
+        self._schedule_if_valid(event.src_path)
+        self._schedule_if_valid(event.dest_path)
 
 
 class VaultWatcher:
@@ -96,7 +112,7 @@ class VaultWatcher:
 
         from watchdog.observers import Observer
 
-        handler = VaultEventHandler(self._index.vault_root, self._schedule_update)
+        handler = VaultEventHandler(self._index, self._schedule_update)
         self._observer = Observer()
         self._observer.schedule(handler, str(self._index.vault_root), recursive=True)
         self._observer.daemon = True

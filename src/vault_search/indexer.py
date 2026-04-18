@@ -155,10 +155,35 @@ class VaultIndex:
     # 除外するフォルダ名（先頭一致）
     _EXCLUDED_PREFIXES = (".", "_")
 
+    def is_indexable_path(self, raw_path: str | Path) -> str | None:
+        """Vault 内のインデックス対象パスかを判定し、該当すれば rel path を返す.
+
+        フィルタ条件:
+
+        - ``.md`` 拡張子
+        - ``vault_root`` 配下
+        - パス構成要素に ``.`` / ``_`` プレフィックスを含まない
+
+        walker (``_iter_markdown_files``) と watcher Handler
+        (``VaultEventHandler``) 双方の単一ソースとし、将来の除外ルール拡張で
+        drift しないようにする (#76)。
+        """
+        s = str(raw_path)
+        if not s.endswith(".md"):
+            return None
+        try:
+            rel = str(Path(s).relative_to(self.vault_root)).replace("\\", "/")
+        except ValueError:
+            return None
+        if any(p.startswith(self._EXCLUDED_PREFIXES) for p in Path(rel).parts):
+            return None
+        return rel
+
     def _iter_markdown_files(self) -> list[Path]:
         """Vault 内の .md ファイルを安全にイテレーション.
 
         隠しフォルダ・システムフォルダをスキップし、I/O エラーを吸収する。
+        leaf 判定は ``is_indexable_path`` に委譲して Handler 側とロジックを共有する。
         """
         results: list[Path] = []
 
@@ -170,14 +195,14 @@ class VaultIndex:
 
             for entry in entries:
                 name = entry.name
-                # 隠しフォルダ / _ プレフィックスをスキップ
+                # 隠しフォルダ / _ プレフィックスをスキップ (traversal 最適化)
                 if any(name.startswith(p) for p in self._EXCLUDED_PREFIXES):
                     continue
 
                 try:
                     if entry.is_dir():
                         _walk(entry)
-                    elif entry.is_file() and name.endswith(".md"):
+                    elif entry.is_file() and self.is_indexable_path(entry) is not None:
                         results.append(entry)
                 except OSError:
                     continue
