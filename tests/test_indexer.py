@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -105,11 +106,21 @@ class TestTieredCache:
 # ---------------------------------------------------------------------------
 
 
-def test_build_index_counts(vault_index: VaultIndex) -> None:
-    stats = vault_index.stats()
-    # `_archive/` と `.trash/` は除外。他 6 件が indexed
-    # (Welcome, Projects/日本語ノート, Projects/plain, Projects/marker, malformed, Research/alpha)
-    assert stats["total_notes"] == 6
+def test_build_index_counts(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """indexable note は正確にカウントされ、`_` / `.` 始まりフォルダは除外される."""
+    _root, idx = vault_builder(
+        {
+            "a.md": "# a\n",
+            "b.md": "# b\n",
+            "sub/c.md": "# c\n",
+            "_archive/old.md": "# excluded (underscore prefix)\n",
+            ".trash/del.md": "# excluded (dot prefix)\n",
+        }
+    )
+    stats = idx.stats()
+    assert stats["total_notes"] == 3
 
 
 def test_excluded_prefix_folders(vault_index: VaultIndex) -> None:
@@ -432,47 +443,82 @@ def test_stats_shape(vault_index: VaultIndex) -> None:
 
 # ---------------------------------------------------------------------------
 # VaultIndex — metadata_filter (Issue #5)
-# Red フェーズ: VaultIndex.search に metadata_filter 引数を追加する仕様。
 # frontmatter 任意プロパティの AND フィルタ。eq (暗黙) / ne / in をサポート。
+#
+# Issue #26: SAMPLE_NOTES (Welcome.md / Research/alpha.md 等の共有 fixture) に
+# 依存せず、各テストが ``vault_builder`` で最小 vault を組む。これによって
+# SAMPLE_NOTES に無関係なキー (例えば将来の別テストで追加される tag) が
+# 紛れ込んでも filter の total が変わらない独立性を得る。
 # ---------------------------------------------------------------------------
 
+# metadata_filter の AND / eq / ne / in 検証用の共通ノート集合。
+# 全 filter テストで使い回せるよう、status / priority / categories の 3 キーに
+# 多様性 (active/draft/no-key; high/low/medium; work/urgent/research) を持たせる。
+_META_FILTER_NOTES: dict[str, str] = {
+    "alpha.md": (
+        "---\n"
+        "status: active\n"
+        "priority: high\n"
+        "categories:\n"
+        "  - work\n"
+        "  - urgent\n"
+        "---\n"
+        "alpha body with obsidian token.\n"
+    ),
+    "beta.md": (
+        "---\n"
+        "status: active\n"
+        "priority: low\n"
+        "categories:\n"
+        "  - research\n"
+        "---\n"
+        "beta body with obsidian token.\n"
+    ),
+    "gamma.md": ("---\nstatus: draft\npriority: medium\n---\ngamma body (no categories).\n"),
+    "plain.md": "# Plain\n\nno frontmatter at all.\n",
+}
 
-def test_metadata_filter_eq_implicit(vault_index: VaultIndex) -> None:
-    """暗黙 eq: status=active で Welcome.md と Research/alpha.md のみ.
+
+def test_metadata_filter_eq_implicit(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """暗黙 eq: status=active で該当 2 件のみ.
 
     total を厳密に検証することで、filter が無視されて全件返る regression を検知。
     """
-    res = vault_index.search("obsidian", metadata_filter={"status": "active"})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("obsidian", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md + Research/alpha.md の 2 件
+    # alpha.md + beta.md の 2 件 (いずれも status=active かつ "obsidian" を含む)
     assert res["total"] == 2, (
         f"expected exactly 2 hits for status=active, got total={res['total']} "
         f"(paths={sorted(paths)})"
     )
-    assert paths == {"Welcome.md", "Research/alpha.md"}
+    assert paths == {"alpha.md", "beta.md"}
 
 
-def test_metadata_filter_list_value_eq_contains(vault_index: VaultIndex) -> None:
+def test_metadata_filter_list_value_eq_contains(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """リスト型 frontmatter の eq は「含む」判定 (tags と同様).
 
     Control group: filter なし (baseline) より厳密に件数が減ることを確認。
-    baseline の "obsidian" は Welcome + Research/alpha の 2 件ヒットするが、
-    categories=work のフィルタでは Welcome の 1 件のみに絞られるべき。
     """
-    baseline = vault_index.search("obsidian")
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    baseline = idx.search("obsidian")
     baseline_paths = {r["path"] for r in baseline["results"]}
     assert baseline["total"] >= 2, (
         f"baseline must have >=2 hits for control group, "
         f"got {baseline['total']} (paths={sorted(baseline_paths)})"
     )
 
-    res = vault_index.search("obsidian", metadata_filter={"categories": "work"})
+    res = idx.search("obsidian", metadata_filter={"categories": "work"})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md のみ (categories=[work, urgent] → work 含む)
+    # alpha.md のみ (categories=[work, urgent] → work 含む)
     assert res["total"] == 1, (
         f"expected exactly 1 hit for categories=work, got total={res['total']}"
     )
-    assert paths == {"Welcome.md"}
+    assert paths == {"alpha.md"}
     # Control group: filter 適用後は baseline より厳密に少ない
     assert res["total"] < baseline["total"], (
         f"metadata_filter must reduce hits vs baseline: "
@@ -480,67 +526,76 @@ def test_metadata_filter_list_value_eq_contains(vault_index: VaultIndex) -> None
     )
 
 
-def test_metadata_filter_in_operator(vault_index: VaultIndex) -> None:
-    """in 演算: priority in [high, low] で Welcome.md と Research/alpha.md."""
-    res = vault_index.search("obsidian", metadata_filter={"priority": {"in": ["high", "low"]}})
+def test_metadata_filter_in_operator(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """in 演算: priority in [high, low] で該当 2 件."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("obsidian", metadata_filter={"priority": {"in": ["high", "low"]}})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md (high) + Research/alpha.md (low) の 2 件
+    # alpha.md (high) + beta.md (low) の 2 件
     assert res["total"] == 2, (
         f"expected exactly 2 hits for priority in [high, low], got total={res['total']}"
     )
-    assert paths == {"Welcome.md", "Research/alpha.md"}
+    assert paths == {"alpha.md", "beta.md"}
 
 
-def test_metadata_filter_ne_operator(vault_index: VaultIndex) -> None:
+def test_metadata_filter_ne_operator(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """ne 演算: status != draft で draft 以外がヒット.
 
-    Control group: filter 無し (空クエリ + dummy filter で全件取得の代替) では
-    "Projects/日本語ノート.md" (status=draft) も含まれるが、ne フィルタで
-    除外されることを総件数で検証。
+    Control group: filter 無しでは gamma.md (status=draft) も含まれるが、
+    ne フィルタで除外されることを総件数で検証。
     """
-    res = vault_index.search("", metadata_filter={"status": {"ne": "draft"}})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"status": {"ne": "draft"}})
     paths = {r["path"] for r in res["results"]}
-    # Welcome.md + Research/alpha.md は status=active → ヒット
-    # 日本語ノート (draft) と plain.md / malformed.md (status キー無し) は除外
+    # alpha.md + beta.md は status=active → ヒット
+    # gamma.md (draft) と plain.md (status キー無し) は除外
     assert res["total"] == 2, (
         f"expected exactly 2 hits for status ne draft, got total={res['total']} "
         f"(paths={sorted(paths)})"
     )
-    assert paths == {"Welcome.md", "Research/alpha.md"}
+    assert paths == {"alpha.md", "beta.md"}
 
 
 def test_metadata_filter_ne_excludes_array_containing_value(
-    vault_index: VaultIndex,
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """配列型 frontmatter に対する ne は「含まない」判定であること.
 
-    Welcome.md は ``categories: [work, urgent]`` を持つので
+    alpha.md は ``categories: [work, urgent]`` を持つので
     ``categories != work`` では除外されるべき (配列内に work を含むため)。
-    Research/alpha.md は ``categories: [research]`` なので含まれるべき。
+    beta.md は ``categories: [research]`` なので含まれるべき。
     """
-    res = vault_index.search("", metadata_filter={"categories": {"ne": "work"}})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"categories": {"ne": "work"}})
     paths = {r["path"] for r in res["results"]}
-    # categories キーを持つノートは Welcome / Research/alpha のみ。
-    # Welcome は 'work' を含むので ne 'work' で除外 → Research/alpha 1 件
+    # categories キーを持つノートは alpha / beta のみ。
+    # alpha は 'work' を含むので ne 'work' で除外 → beta 1 件
     assert res["total"] == 1, (
         f"expected exactly 1 hit for categories ne work, got total={res['total']} "
         f"(paths={sorted(paths)})"
     )
-    assert paths == {"Research/alpha.md"}
+    assert paths == {"beta.md"}
 
 
-def test_metadata_filter_multiple_keys_and(vault_index: VaultIndex) -> None:
-    """複数キーは AND 結合: status=active AND priority=high → Welcome.md のみ.
+def test_metadata_filter_multiple_keys_and(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """複数キーは AND 結合: status=active AND priority=high → alpha.md のみ.
 
-    Control group: status=active 単独なら 2 件 (Welcome + Research/alpha)。
-    priority=high を AND で追加することで Welcome の 1 件に絞られる。
+    Control group: status=active 単独なら 2 件 (alpha + beta)。
+    priority=high を AND で追加することで alpha の 1 件に絞られる。
     """
-    single = vault_index.search("", metadata_filter={"status": "active"})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    single = idx.search("", metadata_filter={"status": "active"})
     assert single["total"] == 2, (
         f"control: status=active alone expected 2 hits, got {single['total']}"
     )
 
-    res = vault_index.search(
+    res = idx.search(
         "",
         metadata_filter={"status": "active", "priority": "high"},
     )
@@ -549,35 +604,41 @@ def test_metadata_filter_multiple_keys_and(vault_index: VaultIndex) -> None:
         f"expected exactly 1 hit for status=active AND priority=high, "
         f"got total={res['total']} (paths={sorted(paths)})"
     )
-    assert paths == {"Welcome.md"}
+    assert paths == {"alpha.md"}
     # Control group: AND は単独条件より厳密に件数が減る
     assert res["total"] < single["total"]
 
 
-def test_metadata_filter_only_empty_query(vault_index: VaultIndex) -> None:
+def test_metadata_filter_only_empty_query(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """空クエリ + metadata_filter のみでも全件にフィルタ適用できる (新仕様)."""
-    res = vault_index.search("", metadata_filter={"status": "active"})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
-    # 全件から status=active を抽出 → Welcome.md + Research/alpha.md の 2 件
+    # 全件から status=active を抽出 → alpha.md + beta.md の 2 件
     assert res["total"] == 2, (
         f"expected exactly 2 hits for status=active (empty query), "
         f"got total={res['total']} (paths={sorted(paths)})"
     )
-    assert paths == {"Welcome.md", "Research/alpha.md"}
+    assert paths == {"alpha.md", "beta.md"}
 
 
-def test_metadata_filter_missing_key_excludes(vault_index: VaultIndex) -> None:
+def test_metadata_filter_missing_key_excludes(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """frontmatter にキー自体が無いノートは eq フィルタで除外される."""
-    res = vault_index.search("", metadata_filter={"status": "active"})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"status": "active"})
     paths = {r["path"] for r in res["results"]}
     # plain.md は frontmatter 無し → status キーも無し → "active" と不一致
-    assert "Projects/plain.md" not in paths
+    assert "plain.md" not in paths
     # total でも確認: status=active は 2 件のみ (frontmatter 欠損ノートは除外)
     assert res["total"] == 2
 
 
 def test_metadata_filter_nonexistent_key_raises(
-    vault_index: VaultIndex,
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """存在しないキーは ValidationError (Issue #119).
 
@@ -588,40 +649,53 @@ def test_metadata_filter_nonexistent_key_raises(
     Control: 存在するキーでの filter は引き続き >=1 件返る
     (filter 値が無視されていない regression guard)。
     """
-    control = vault_index.search("", metadata_filter={"status": "active"})
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    control = idx.search("", metadata_filter={"status": "active"})
     assert control["total"] >= 1
 
     with pytest.raises(ValidationError) as exc:
-        vault_index.search("", metadata_filter={"bogus_key_xyzzy": "x"})
+        idx.search("", metadata_filter={"bogus_key_xyzzy": "x"})
     assert exc.value.error_code == "UNKNOWN_FRONTMATTER_KEY"
 
 
-def test_search_rejects_known_keys_kwarg(vault_index: VaultIndex) -> None:
+def test_search_rejects_known_keys_kwarg(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """Issue #119: known_keys パラメータは削除された (leaky abstraction 解消)."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
     with pytest.raises(TypeError):
-        vault_index.search(  # type: ignore[call-arg]
+        idx.search(  # type: ignore[call-arg]
             "",
             metadata_filter={"status": "active"},
             known_keys=["status"],
         )
 
 
-def test_metadata_filter_invalid_operator_raises(vault_index: VaultIndex) -> None:
+def test_metadata_filter_invalid_operator_raises(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """未サポート演算子 (regex) は ValidationError / ValueError."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
     with pytest.raises((ValueError, ValidationError)):
-        vault_index.search("obsidian", metadata_filter={"x": {"regex": "foo"}})
+        idx.search("obsidian", metadata_filter={"x": {"regex": "foo"}})
 
 
-def test_metadata_filter_invalid_key_raises(vault_index: VaultIndex) -> None:
+def test_metadata_filter_invalid_key_raises(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """識別子ルール違反のキー名は ValidationError / ValueError."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
     with pytest.raises((ValueError, ValidationError)):
-        vault_index.search("obsidian", metadata_filter={"../etc": "x"})
+        idx.search("obsidian", metadata_filter={"../etc": "x"})
 
 
-def test_metadata_filter_invalid_value_raises(vault_index: VaultIndex) -> None:
+def test_metadata_filter_invalid_value_raises(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """制御文字を含む値は ValidationError / ValueError."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
     with pytest.raises((ValueError, ValidationError)):
-        vault_index.search("obsidian", metadata_filter={"status": "a\x00b"})
+        idx.search("obsidian", metadata_filter={"status": "a\x00b"})
 
 
 # ---------------------------------------------------------------------------
@@ -676,22 +750,11 @@ def test_search_like_percent_not_wildcard(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_vault(tmp_path: Path, notes: dict[str, str]) -> VaultIndex:
-    root = tmp_path / "vault"
-    root.mkdir()
-    for rel, body in notes.items():
-        p = root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body, encoding="utf-8")
-    idx = VaultIndex(root, db_path=tmp_path / "test.db")
-    idx.build_index()
-    return idx
-
-
-def test_metadata_filter_matches_int_frontmatter(tmp_path: Path) -> None:
+def test_metadata_filter_matches_int_frontmatter(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """YAML int ``priority: 5`` が metadata_filter `{"priority": "5"}` でヒット."""
-    idx = _build_vault(
-        tmp_path,
+    _root, idx = vault_builder(
         {
             "hi.md": "---\npriority: 5\n---\nbody\n",
             "lo.md": "---\npriority: 3\n---\nbody\n",
@@ -702,13 +765,14 @@ def test_metadata_filter_matches_int_frontmatter(tmp_path: Path) -> None:
     assert paths == {"hi.md"}, f"int priority=5 did not match: got {paths}"
 
 
-def test_metadata_filter_matches_bool_frontmatter(tmp_path: Path) -> None:
+def test_metadata_filter_matches_bool_frontmatter(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """YAML bool ``archived: true`` が metadata_filter `{"archived": "true"}` でヒット.
 
     ``"1"``/``"0"`` UX ワートが解消されていることを確認するガード。
     """
-    idx = _build_vault(
-        tmp_path,
+    _root, idx = vault_builder(
         {
             "a.md": "---\narchived: true\n---\nbody\n",
             "b.md": "---\narchived: false\n---\nbody\n",
@@ -719,10 +783,11 @@ def test_metadata_filter_matches_bool_frontmatter(tmp_path: Path) -> None:
     assert paths == {"a.md"}, f"bool archived=true did not match: got {paths}"
 
 
-def test_metadata_filter_ne_bool_frontmatter(tmp_path: Path) -> None:
+def test_metadata_filter_ne_bool_frontmatter(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """bool の ne も "true"/"false" 文字列で正しく除外される (#49 対称)."""
-    idx = _build_vault(
-        tmp_path,
+    _root, idx = vault_builder(
         {
             "a.md": "---\narchived: true\n---\nbody\n",
             "b.md": "---\narchived: false\n---\nbody\n",
@@ -733,7 +798,9 @@ def test_metadata_filter_ne_bool_frontmatter(tmp_path: Path) -> None:
     assert paths == {"b.md"}, f"bool ne 'true' mismatch: got {paths}"
 
 
-def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
+def test_metadata_filter_mixed_scalar_types_end_to_end(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
     """全スカラー型 (int/bool/float/date) の正規化 → filter 経路を 1 テストで検証.
 
     個別型テスト (``matches_int_frontmatter`` / ``matches_bool_frontmatter``) は
@@ -741,8 +808,7 @@ def test_metadata_filter_mixed_scalar_types_end_to_end(tmp_path: Path) -> None:
     silent regression となりうる (Round 3 Reviewer C finding 1)。本テストは
     parse → index → filter の full pipeline を全スカラー型で一括検証する。
     """
-    idx = _build_vault(
-        tmp_path,
+    _root, idx = vault_builder(
         {
             "target.md": (
                 "---\npriority: 5\narchived: true\nscore: 3.7\ndue: 2024-01-15\n---\nbody\n"
