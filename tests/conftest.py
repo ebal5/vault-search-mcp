@@ -1,7 +1,15 @@
-"""共通フィクスチャ: tmp_vault / vault_index."""
+"""共通フィクスチャ: tmp_vault / vault_index / vault_builder.
+
+Issue #26: 新規テストでは ``vault_builder`` ファクトリを使ってテスト専用の
+最小ノート集合で独立した vault を構築すること。``tmp_vault`` / ``vault_index``
+の共有サンプル (SAMPLE_NOTES) は広範なテストで再利用されているため、
+内容を変更すると連鎖的に失敗する。目的別の最小 vault を組む方が影響範囲を
+局所化できる。
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -97,3 +105,41 @@ def vault_index(tmp_vault: Path, tmp_path: Path) -> VaultIndex:
     idx = VaultIndex(tmp_vault, db_path=db_path)
     idx.build_index()
     return idx
+
+
+@pytest.fixture
+def vault_builder(tmp_path: Path) -> Callable[[dict[str, str]], tuple[Path, VaultIndex]]:
+    """独立した最小 vault を build するファクトリ (Issue #26).
+
+    各テストが必要最小限のノートだけを含む vault を作れるようにし、
+    SAMPLE_NOTES 共有による coupling を断つ。DB は tmp_path 下で自動採番するので
+    同じテスト内で複数の vault を独立に build できる。
+
+    戻り値は ``(vault_root, built_index)`` のタプル。
+
+    例::
+
+        def test_my_filter(vault_builder):
+            _root, idx = vault_builder({
+                "a.md": "---\\nstatus: active\\n---\\nbody\\n",
+                "b.md": "---\\nstatus: draft\\n---\\nbody\\n",
+            })
+            res = idx.search("", metadata_filter={"status": "active"})
+            assert {r["path"] for r in res["results"]} == {"a.md"}
+    """
+    counter = 0
+
+    def _build(notes: dict[str, str]) -> tuple[Path, VaultIndex]:
+        nonlocal counter
+        counter += 1
+        root = tmp_path / f"vault_{counter}"
+        root.mkdir()
+        for rel, body in notes.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+        idx = VaultIndex(root, db_path=tmp_path / f"vault_{counter}.db")
+        idx.build_index()
+        return root, idx
+
+    return _build
