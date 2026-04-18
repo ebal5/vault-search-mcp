@@ -113,10 +113,13 @@ def vault_search(
     副作用: 読み取り専用。内部的に query cache を更新するが vault / DB への書き込みは無し。
 
     Returns:
-        常に plain dict を返す ({"tier", "total", "results": [dict]})。
-        構造の詳細 (SearchResponse の rich JSON Schema) は ``schema://tools``
-        リソースの ``tools.vault_search.output_schema`` を参照。
-        ツール戻り型を Union にすると FastMCP が structured content を
+        常に plain dict を返す ({"tier", "total", "truncated", "results": [dict]})。
+        ``truncated`` は結果配列が内部上限 (現在 500 件) で打ち切られた状態を
+        true で示す。true のとき offset>=500 は空配列を返すため、クエリを絞るか
+        tags / folder / metadata_filter を追加して 500 件以下に収めてから
+        ページングを続けること。構造の詳細 (SearchResponse の rich JSON Schema)
+        は ``schema://tools`` リソースの ``tools.vault_search.output_schema``
+        を参照。ツール戻り型を Union にすると FastMCP が structured content を
         ``{"result": ...}`` でラップしてしまうため、dict 統一で回避している。
     """
     validate_pagination(limit, offset)

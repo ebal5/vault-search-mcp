@@ -349,36 +349,70 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
 # Issue #17: total が _MAX_RESULTS=500 で truncate される問題。
 # 巨大 vault で agent がページング終端を誤認しないよう accurate な total と
 # truncated フラグを返すことを検証する。
+# cap 値変更への耐性のため VaultIndex._MAX_RESULTS を参照する (ハードコード回避)。
 # ---------------------------------------------------------------------------
 
 
-def test_search_total_accurate_beyond_max_results(
+@pytest.fixture
+def bulk_vault_over_cap(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
-) -> None:
-    """Issue #17: total は _MAX_RESULTS=500 で truncate されず accurate な件数を返す.
+) -> tuple[Path, VaultIndex, int]:
+    """cap+1 件の tag + FTS 可能トークンを持つ vault を 1 度だけ構築する."""
+    cap = VaultIndex._MAX_RESULTS
+    # "obsidian-bulk" は FTS5 trigram (3 文字以上) を通るマーカー
+    notes = {
+        f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nobsidian-bulk body\n"
+        for i in range(cap + 1)
+    }
+    root, idx = vault_builder(notes)
+    return root, idx, cap
 
-    filter-only パス (空クエリ + tags) で 501 件を構築し、total が 500 に
-    頭打ちせず 501 を返すことを確認する。
-    """
-    notes = {f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nbody\n" for i in range(501)}
-    _root, idx = vault_builder(notes)
+
+def test_search_total_accurate_beyond_max_results_filter_only(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: filter-only パスで total が cap で truncate されない."""
+    _root, idx, cap = bulk_vault_over_cap
     res = idx.search("", tags=["bulk-tag"], limit=50, offset=0)
-    assert res["total"] == 501, (
-        f"total は accurate な件数 (501) を返すこと; got {res['total']} "
-        "(_MAX_RESULTS でサイレントに truncate されない)"
+    assert res["total"] == cap + 1, (
+        f"total は accurate な件数 ({cap + 1}) を返すこと; got {res['total']}"
     )
+    assert res["truncated"] is True
     assert len(res["results"]) == 50
 
 
-def test_search_truncated_flag_true_when_total_exceeds_cap(
+def test_search_total_accurate_beyond_max_results_fts_path(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: FTS5 パスでも COUNT(*) が正しく発行され total が accurate.
+
+    filter-only パスとは別の SQL (notes_fts JOIN notes + MATCH) を通るため、
+    独立に regression guard する。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    # "obsidian-bulk" は fts_terms に入り FTS5 MATCH 経由でヒットする
+    res = idx.search("obsidian-bulk", limit=10, offset=0)
+    assert res["total"] == cap + 1, (
+        f"FTS5 パスでも total が accurate に ({cap + 1}) 返ること; got {res['total']}"
+    )
+    assert res["truncated"] is True
+    assert len(res["results"]) == 10
+
+
+def test_search_truncated_flag_false_exactly_at_cap(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
-    """Issue #17: total > _MAX_RESULTS のとき truncated=True を返す."""
-    notes = {f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nbody\n" for i in range(501)}
+    """Issue #17: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
+
+    境界判定が `>=` に劣化すると false positive の truncated になる regression。
+    """
+    cap = VaultIndex._MAX_RESULTS
+    notes = {f"edge/note_{i:04d}.md": "---\ntags: [edge]\n---\nbody\n" for i in range(cap)}
     _root, idx = vault_builder(notes)
-    res = idx.search("", tags=["bulk-tag"], limit=10)
-    assert res.get("truncated") is True, (
-        f"total={res['total']} > _MAX_RESULTS=500 のとき truncated=True; got {res.get('truncated')}"
+    res = idx.search("", tags=["edge"])
+    assert res["total"] == cap
+    assert res["truncated"] is False, (
+        f"total=={cap} は cap 以内なので truncated=False; got {res['truncated']}"
     )
 
 
@@ -389,9 +423,24 @@ def test_search_truncated_flag_false_below_cap(
     notes = {f"a_{i}.md": "---\ntags: [few]\n---\nbody\n" for i in range(3)}
     _root, idx = vault_builder(notes)
     res = idx.search("", tags=["few"])
-    assert res.get("truncated") is False, (
-        f"total=3 <= _MAX_RESULTS=500 のとき truncated=False; got {res.get('truncated')}"
-    )
+    assert res["truncated"] is False
+
+
+def test_search_cache_hit_preserves_truncated_and_total(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: Tier 0 cache hit 時も total と truncated が正しく返る.
+
+    同一クエリを 2 回実行し、2 回目が Tier 0 で total/truncated を entry.total から
+    正しく再構成していることを確認する (cache API の total 伝達 regression guard)。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    first = idx.search("", tags=["bulk-tag"], limit=5)
+    assert first["tier"] == 2
+    second = idx.search("", tags=["bulk-tag"], limit=5)
+    assert second["tier"] == 0, "同一クエリは Tier 0 に乗る"
+    assert second["total"] == cap + 1, "cache hit でも total は accurate"
+    assert second["truncated"] is True, "cache hit でも truncated が伝達される"
 
 
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:

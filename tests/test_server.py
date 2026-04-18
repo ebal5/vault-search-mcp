@@ -121,11 +121,37 @@ def test_mcp_tool_vault_search(vault_index: VaultIndex) -> None:
 
 
 def test_mcp_tool_vault_search_response_includes_truncated(vault_index: VaultIndex) -> None:
-    """Issue #17: MCP tool の戻り dict が truncated: bool を含む."""
+    """Issue #17: MCP tool の戻り dict が truncated: bool を含む (小 vault は False)."""
     fn = _fn(server_mod.vault_search)
     res = fn("obsidian")
     assert "truncated" in res, "SearchResponse に truncated フィールドが必要"
-    assert isinstance(res["truncated"], bool)
+    assert res["truncated"] is False, "小 vault では truncated=False"
+
+
+def test_mcp_tool_vault_search_truncated_true_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #17: cap を超える vault で MCP tool が truncated=True + accurate total を返す.
+
+    server.py の ``raw.get("truncated", False)`` による default 補完を
+    vacuous pass で隠さないため、実際に truncated=True になるケースを通す。
+    """
+    cap = VaultIndex._MAX_RESULTS
+    vault = tmp_path / "bulk_vault"
+    vault.mkdir()
+    for i in range(cap + 1):
+        (vault / f"n_{i:04d}.md").write_text("---\ntags: [bulk]\n---\nbody\n", encoding="utf-8")
+    idx = VaultIndex(vault, db_path=tmp_path / "bulk.db")
+    idx.build_index()
+    monkeypatch.setattr(server_mod, "_index", idx)
+
+    fn = _fn(server_mod.vault_search)
+    res = fn("", tags=["bulk"], limit=10)
+    assert res["total"] == cap + 1, f"accurate total 期待: {cap + 1}, got {res['total']}"
+    assert res["truncated"] is True
+    assert len(res["results"]) == 10
+    # SearchResponse の rich 型として再構成可能
+    SearchResponse.model_validate(res)
 
 
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:

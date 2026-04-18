@@ -405,20 +405,25 @@ class VaultIndex:
                 "results": sliced,
             }
 
-        # Tier 2: FTS5 — キャッシュ用に上限付きで取得
-        results = self._fts5_search(
-            query,
-            tags=tags,
-            folder=folder,
-            metadata_conditions=conditions,
-            limit=self._MAX_RESULTS,
-        )
-        total = self._count_matches(
-            query,
-            tags=tags,
-            folder=folder,
-            metadata_conditions=conditions,
-        )
+        # Tier 2: FTS5 — 同一接続で FETCH と COUNT を実行する。
+        # 別接続に分けると WAL の snapshot が食い違い、削除競合で
+        # `total < len(results)` のような非整合が発生しうる (PR #165 review A1)。
+        with self.connection() as conn:
+            results = self._fts5_search(
+                query,
+                tags=tags,
+                folder=folder,
+                metadata_conditions=conditions,
+                limit=self._MAX_RESULTS,
+                conn=conn,
+            )
+            total = self._count_matches(
+                query,
+                tags=tags,
+                folder=folder,
+                metadata_conditions=conditions,
+                conn=conn,
+            )
         self._cache.put(query, filters, results, total=total)
 
         sliced = results[offset : offset + limit]
@@ -500,6 +505,7 @@ class VaultIndex:
         folder: str | None = None,
         metadata_conditions: list[MetadataCondition] | None = None,
         limit: int = 50,
+        conn: sqlite3.Connection | None = None,
     ) -> list[dict[str, Any]]:
         """FTS5 trigram 検索 + 構造化メタデータフィルタ.
 
@@ -507,6 +513,10 @@ class VaultIndex:
         SQL WHERE 断片に展開される。クエリが空でも ``tags`` / ``folder`` /
         ``metadata_conditions`` のいずれかがあれば、FTS5 を経由せず
         フィルタ専用パスで DB 全体を走査する。
+
+        ``conn`` が与えられたらその接続で実行し、caller が同じ接続で
+        COUNT(*) を続発できるようにする (snapshot 整合性のため)。
+        ``None`` なら新規接続を開く。
         """
         built = self._build_match_clause(
             query,
@@ -536,8 +546,11 @@ class VaultIndex:
         sql = "\n".join([select, *from_where, order, "LIMIT ?"])
         exec_params = [*params, limit]
 
-        with self.connection() as conn:
+        if conn is not None:
             rows = conn.execute(sql, exec_params).fetchall()
+        else:
+            with self.connection() as c:
+                rows = c.execute(sql, exec_params).fetchall()
 
         return [
             {
@@ -560,11 +573,15 @@ class VaultIndex:
         tags: list[str] | None = None,
         folder: str | None = None,
         metadata_conditions: list[MetadataCondition] | None = None,
+        conn: sqlite3.Connection | None = None,
     ) -> int:
         """``_fts5_search`` と同じ WHERE でマッチ件数を数える (Issue #17).
 
         ``_MAX_RESULTS`` での truncation を避け、ページング終端をエージェントに
         正しく伝えるために別クエリで発行する。
+
+        ``conn`` を渡せば caller と同一接続 (= 同一 WAL snapshot) で実行される。
+        ``_fts5_search`` と pair で呼ぶときは必ず同じ接続を使うこと。
         """
         built = self._build_match_clause(
             query,
@@ -577,8 +594,11 @@ class VaultIndex:
         from_where, params, _is_fts = built
 
         sql = "\n".join(["SELECT COUNT(*) AS c", *from_where])
-        with self.connection() as conn:
+        if conn is not None:
             row = conn.execute(sql, params).fetchone()
+        else:
+            with self.connection() as c:
+                row = c.execute(sql, params).fetchone()
         return int(row["c"]) if row is not None else 0
 
     # ------------------------------------------------------------------
