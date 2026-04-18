@@ -59,11 +59,27 @@ class SearchResponse(BaseModel):
 
     tier: Literal[0, 1, 2] = Field(
         description=(
-            "ヒットしたキャッシュ段。0=完全一致キャッシュ, 1=ファジーキャッシュ, 2=FTS5 検索"
+            "ヒットしたキャッシュ段。0=完全一致キャッシュ, 1=ファジーキャッシュ, 2=FTS5 検索。"
+            "tier=1 の total は類似クエリのキャッシュ値を再利用した近似値で、"
+            "現クエリの正確な件数ではない"
         ),
     )
     total: int = Field(
-        description="フィルタ後の総件数 (limit/offset 適用前)",
+        description=(
+            "フィルタ後の総件数 (limit/offset 適用前)。"
+            "tier=0 (完全一致) / tier=2 (FTS5) では内部結果上限での truncate なしに正確な件数。"
+            "tier=1 (fuzzy cache hit) のみ類似クエリの件数を近似値として返す点に注意"
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "総件数が内部結果上限を超え、results 配列に全件が収まっていない状態 (Issue #17)。"
+            "true のとき、上限 (現在 500) 以上の offset でページングを継続しても "
+            "空配列しか返らない — 到達不能な領域がある。"
+            "リカバリ: query をより具体的にするか tags/folder/metadata_filter で絞り込み、"
+            "結果を上限以下に収めてからページングすること。"
+        ),
     )
     results: list[SearchHit] = Field(
         default_factory=list,

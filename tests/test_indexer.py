@@ -21,84 +21,101 @@ class TestTieredCache:
     def test_tier0_exact_hit(self) -> None:
         cache = TieredCache()
         result = [{"path": "a.md"}]
-        cache.put("foo bar", None, result)
-        tier, got = cache.get("foo bar", None)
+        cache.put("foo bar", None, result, total=1)
+        tier, entry = cache.get("foo bar", None)
         assert tier == 0
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
+        assert entry.total == 1
 
     def test_tier1_fuzzy_hit(self) -> None:
         """threshold を明確に上回る Jaccard (9/10=0.9) でヒットする."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
         # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
-        cache.put("a b c d e f g h i", None, result)
+        cache.put("a b c d e f g h i", None, result, total=1)
         # tokens: {"a","b","c","d","e","f","g","h","i","j"} — 10 tokens
         # intersection=9, union=10 → Jaccard=9/10=0.9 > 0.8
-        tier, got = cache.get("a b c d e f g h i j", None)
+        tier, entry = cache.get("a b c d e f g h i j", None)
         assert tier == 1
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
 
     def test_tier1_fuzzy_hit_at_threshold(self) -> None:
         """Jaccard が threshold 丁度 (4/5=0.8) でもヒットする — >= semantics を pin."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
-        cache.put("alpha beta gamma delta", None, result)
+        cache.put("alpha beta gamma delta", None, result, total=1)
         # intersection=4, union=5 → Jaccard=4/5=0.8 (= threshold)
-        tier, got = cache.get("alpha beta gamma delta epsilon", None)
+        tier, entry = cache.get("alpha beta gamma delta epsilon", None)
         assert tier == 1
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
 
     def test_tier1_fuzzy_miss_just_below_threshold(self) -> None:
         """Jaccard が threshold 未満 (7/9≈0.778) でミスになる."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
         # tokens: {"a","b","c","d","e","f","g"} — 7 tokens
-        cache.put("a b c d e f g", None, result)
+        cache.put("a b c d e f g", None, result, total=1)
         # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
         # intersection=7, union=9 → Jaccard=7/9≈0.778 < 0.8
-        tier, got = cache.get("a b c d e f g h i", None)
+        tier, entry = cache.get("a b c d e f g h i", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_tier2_miss_low_similarity(self) -> None:
         cache = TieredCache(fuzzy_threshold=0.8)
-        cache.put("alpha beta", None, [{"path": "a"}])
-        tier, got = cache.get("totally different query here", None)
+        cache.put("alpha beta", None, [{"path": "a"}], total=1)
+        tier, entry = cache.get("totally different query here", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_fuzzy_disabled_when_filters(self) -> None:
         """フィルタ付きは Tier 1 スキップ (完全一致のみ)."""
         cache = TieredCache()
-        cache.put("alpha beta", {"tag": "x"}, [{"path": "a"}])
+        cache.put("alpha beta", {"tag": "x"}, [{"path": "a"}], total=1)
         # 別フィルタ・類似クエリ → ミス
-        tier, got = cache.get("alpha beta gamma", {"tag": "y"})
+        tier, entry = cache.get("alpha beta gamma", {"tag": "y"})
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_invalidate_clears_all(self) -> None:
         cache = TieredCache()
-        cache.put("q", None, [{"path": "a"}])
+        cache.put("q", None, [{"path": "a"}], total=1)
         cache.invalidate()
-        tier, got = cache.get("q", None)
+        tier, entry = cache.get("q", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_lru_eviction(self) -> None:
         cache = TieredCache(max_size=2)
-        cache.put("a", None, [{"n": 1}])
-        cache.put("b", None, [{"n": 2}])
-        cache.put("c", None, [{"n": 3}])
+        cache.put("a", None, [{"n": 1}], total=1)
+        cache.put("b", None, [{"n": 2}], total=1)
+        cache.put("c", None, [{"n": 3}], total=1)
         # "a" は押し出された
-        tier, got = cache.get("a", None)
+        tier, entry = cache.get("a", None)
         assert tier == -1
+        assert entry is None
 
     def test_ttl_expiry(self) -> None:
         cache = TieredCache(ttl=0.01)
-        cache.put("q", None, [{"n": 1}])
+        cache.put("q", None, [{"n": 1}], total=1)
         time.sleep(0.05)
-        tier, got = cache.get("q", None)
+        tier, entry = cache.get("q", None)
         assert tier == -1
+        assert entry is None
+
+    def test_entry_preserves_total_above_result_len(self) -> None:
+        """Issue #17: result が cap で truncate されたとき entry.total は
+        accurate な件数を保持する."""
+        cache = TieredCache()
+        cache.put("q", None, [{"n": 1}, {"n": 2}], total=1234)
+        tier, entry = cache.get("q", None)
+        assert tier == 0
+        assert entry is not None
+        assert len(entry.result) == 2
+        assert entry.total == 1234
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +395,132 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
     # conftest の Welcome.md / malformed.md が root 直下にあるので "" が存在
     assert "" in names
     assert "(root)" not in names
+
+
+# ---------------------------------------------------------------------------
+# Issue #17: total が _MAX_RESULTS=500 で truncate される問題。
+# 巨大 vault で agent がページング終端を誤認しないよう accurate な total と
+# truncated フラグを返すことを検証する。
+# cap 値変更への耐性のため VaultIndex._MAX_RESULTS を参照する (ハードコード回避)。
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bulk_vault_over_cap(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> tuple[Path, VaultIndex, int]:
+    """cap+1 件の tag + FTS 可能トークンを持つ vault を 1 度だけ構築する.
+
+    本文に 5 語の共通トークンを入れてあるのは、tier=1 fuzzy cache hit
+    (Jaccard >= 0.8) を成立させる類似クエリを組めるようにするため。
+    """
+    cap = VaultIndex._MAX_RESULTS
+    # "obsidian-bulk" は FTS5 trigram (3 文字以上) を通るマーカー。
+    # alpha/beta/gamma/delta は tier=1 テストで Jaccard 閾値を跨ぐために追加。
+    body = "alpha beta gamma delta obsidian-bulk\n"
+    notes = {f"bulk/note_{i:04d}.md": f"---\ntags: [bulk-tag]\n---\n{body}" for i in range(cap + 1)}
+    root, idx = vault_builder(notes)
+    return root, idx, cap
+
+
+def test_search_total_accurate_beyond_max_results_filter_only(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: filter-only パスで total が cap で truncate されない."""
+    _root, idx, cap = bulk_vault_over_cap
+    res = idx.search("", tags=["bulk-tag"], limit=50, offset=0)
+    assert res["total"] == cap + 1, (
+        f"total は accurate な件数 ({cap + 1}) を返すこと; got {res['total']}"
+    )
+    assert res["truncated"] is True
+    assert len(res["results"]) == 50
+
+
+def test_search_total_accurate_beyond_max_results_fts_path(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: FTS5 パスでも COUNT(*) が正しく発行され total が accurate.
+
+    filter-only パスとは別の SQL (notes_fts JOIN notes + MATCH) を通るため、
+    独立に regression guard する。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    # "obsidian-bulk" は 13 文字 (>=3) で hyphen 単一語なので fts_terms に入る。
+    # 全 501 件がこのトークンを本文に含むため、FTS5 MATCH で cap+1 件ヒット。
+    # LIKE フォールバック経路 (3 文字未満) とは別の SQL を通る点が本 test の要。
+    res = idx.search("obsidian-bulk", limit=10, offset=0)
+    assert res["total"] == cap + 1, (
+        f"FTS5 パスでも total が accurate に ({cap + 1}) 返ること; got {res['total']}"
+    )
+    assert res["truncated"] is True
+    # FTS5 が実際にマッチしたことを results 数で担保 (空なら LIKE fallback か FTS 失敗)
+    assert len(res["results"]) == 10
+
+
+def test_search_truncated_flag_false_exactly_at_cap(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #17: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
+
+    境界判定が `>=` に劣化すると false positive の truncated になる regression。
+    """
+    cap = VaultIndex._MAX_RESULTS
+    notes = {f"edge/note_{i:04d}.md": "---\ntags: [edge]\n---\nbody\n" for i in range(cap)}
+    _root, idx = vault_builder(notes)
+    res = idx.search("", tags=["edge"])
+    assert res["total"] == cap
+    assert res["truncated"] is False, (
+        f"total=={cap} は cap 以内なので truncated=False; got {res['truncated']}"
+    )
+
+
+def test_search_truncated_flag_false_below_cap(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #17: total <= _MAX_RESULTS のとき truncated=False."""
+    notes = {f"a_{i}.md": "---\ntags: [few]\n---\nbody\n" for i in range(3)}
+    _root, idx = vault_builder(notes)
+    res = idx.search("", tags=["few"])
+    assert res["truncated"] is False
+
+
+def test_search_cache_hit_preserves_truncated_and_total(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: Tier 0 cache hit 時も total と truncated が正しく返る.
+
+    同一クエリを 2 回実行し、2 回目が Tier 0 で total/truncated を entry.total から
+    正しく再構成していることを確認する (cache API の total 伝達 regression guard)。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    first = idx.search("", tags=["bulk-tag"], limit=5)
+    assert first["tier"] == 2
+    second = idx.search("", tags=["bulk-tag"], limit=5)
+    assert second["tier"] == 0, "同一クエリは Tier 0 に乗る"
+    assert second["total"] == cap + 1, "cache hit でも total は accurate"
+    assert second["truncated"] is True, "cache hit でも truncated が伝達される"
+
+
+def test_search_tier1_fuzzy_preserves_truncated(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: Tier 1 fuzzy cache hit でも truncated フラグが保持される.
+
+    tier=1 は filters 無しで Jaccard >= 0.8 の類似クエリで発動する。
+    キャッシュされた entry.total (cap+1) と truncated 判定が再利用されることを
+    確認する (cache.get が entry を返す契約 regression guard)。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)
+    first = idx.search("alpha beta gamma delta obsidian-bulk", limit=5)
+    assert first["tier"] == 2
+    assert first["truncated"] is True
+    # Jaccard = 5 / 6 ≈ 0.833 > 0.8 → tier=1 hit。
+    # "epsilon" は本文に無いため FTS 再実行なら 0 件だが、cache reuse で prime の結果が返る。
+    second = idx.search("alpha beta gamma delta obsidian-bulk epsilon", limit=5)
+    assert second["tier"] == 1, f"fuzzy hit しなかった: tier={second['tier']}"
+    assert second["total"] == cap + 1, "tier=1 は prime クエリの total を再利用"
+    assert second["truncated"] is True, "tier=1 でも truncated が保持される"
 
 
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:

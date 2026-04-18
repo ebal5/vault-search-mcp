@@ -112,8 +112,9 @@ def test_schema_resource_output_schema_remains_rich(vault_index: VaultIndex) -> 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     output_schema = payload["tools"]["vault_search"]["output_schema"]
     props = output_schema.get("properties", {})
-    # 最低でも tier / total / results を直接キーとして持つこと
-    assert {"tier", "total", "results"}.issubset(props.keys()), (
+    # 最低でも tier / total / truncated / results を直接キーとして持つこと
+    # (truncated は Issue #17 で追加、regression guard)
+    assert {"tier", "total", "truncated", "results"}.issubset(props.keys()), (
         f"schema resource output_schema lost rich SearchResponse shape: {props.keys()}"
     )
 
