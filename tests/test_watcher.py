@@ -1,4 +1,15 @@
-"""VaultWatcher: watchdog イベントハンドリングのテスト."""
+"""VaultWatcher: watchdog イベントハンドリングのテスト.
+
+設計方針 (#79):
+
+- **deterministic 経路**: ``VaultEventHandler`` を直接構築し、合成 watchdog
+  イベントを ``on_any_event`` に流す。Observer/filesystem を経由しないため
+  inotify 登録 race / SQLite busy / FSEvents 遅延の影響を受けない。RENAME
+  のシナリオ網羅はこちらで担う。
+- **integration 経路**: 実 Observer + 実 rename を経由する path も最小限残し、
+  end-to-end の wire (Observer → Handler → debounce → update_single → DB) と
+  logging 副作用を実環境で確認する。
+"""
 
 from __future__ import annotations
 
@@ -11,19 +22,18 @@ import pytest
 
 pytest.importorskip("watchdog")
 
+from watchdog.events import (  # noqa: E402
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileMovedEvent,
+)
+
 from vault_search.indexer import VaultIndex  # noqa: E402
-from vault_search.watcher import VaultWatcher  # noqa: E402
-
-
-def _indexed(index: VaultIndex, rel_path: str) -> bool:
-    """rel_path が index に入っているかを DB 直叩きで確認."""
-    with index.connection() as conn:
-        row = conn.execute("SELECT 1 FROM notes WHERE path = ?", (rel_path,)).fetchone()
-    return row is not None
+from vault_search.watcher import VaultEventHandler, VaultWatcher  # noqa: E402
 
 
 def _wait_until(pred, timeout: float = 3.0) -> bool:
-    """pred() が True になるまで最大 timeout 秒ポーリング."""
+    """pred() が True になるまで最大 timeout 秒ポーリング (integration 経路用)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if pred():
@@ -59,164 +69,162 @@ def index(vault: Path, tmp_path: Path) -> VaultIndex:
 
 
 # ---------------------------------------------------------------------------
-# Rename — FileMovedEvent の dest_path が index に反映されること (#58)
+# Deterministic Handler tests — Observer/filesystem を介さず合成イベントを流す
 # ---------------------------------------------------------------------------
 
 
-RENAME_CASES = [
-    # flat: src/dest 共に md、vault 直下
-    pytest.param("A.md", "B.md", "B.md", id="flat_rename"),
-    # cross-subdir: サブディレクトリを跨ぐ移動
-    pytest.param("sub/A.md", "sub2/A.md", "sub2/A.md", id="cross_subdir"),
-    # hidden -> normal: 除外フォルダから出てきた md が index に入る
-    # (src は元々 index されていない想定)
-    pytest.param(".archive/A.md", "A.md", "A.md", id="hidden_to_normal"),
-    # cross-extension: 非 md → md で dest 側だけ index される
-    pytest.param("A.txt", "A.md", "A.md", id="cross_extension_txt_to_md"),
+def _make_handler(vault: Path) -> tuple[VaultEventHandler, list[str]]:
+    """``VaultEventHandler`` と schedule された rel_path を記録する list を返す."""
+    scheduled: list[str] = []
+    handler = VaultEventHandler(vault.resolve(), scheduled.append)
+    return handler, scheduled
+
+
+# (src_rel, dest_rel, expected_scheduled_rels)
+RENAME_HANDLER_CASES = [
+    pytest.param("A.md", "B.md", ["A.md", "B.md"], id="flat_rename"),
+    pytest.param("sub/A.md", "sub2/A.md", ["sub/A.md", "sub2/A.md"], id="cross_subdir"),
+    # hidden -> normal: src は除外、dest のみ schedule
+    pytest.param(".archive/A.md", "A.md", ["A.md"], id="hidden_to_normal"),
+    # cross-extension: src は非 .md で除外、dest のみ schedule
+    pytest.param("A.txt", "A.md", ["A.md"], id="cross_extension_txt_to_md"),
+    # normal -> hidden: src のみ schedule、dest は除外
+    pytest.param("note.md", ".archive/note.md", ["note.md"], id="normal_to_hidden"),
+    # normal -> _underscore: src のみ schedule、dest は除外
+    pytest.param("note.md", "_drafts/note.md", ["note.md"], id="normal_to_underscore"),
+    # md -> txt: src のみ schedule、dest は非 .md で除外
+    pytest.param("A.md", "A.txt", ["A.md"], id="md_to_txt"),
 ]
 
 
-@pytest.mark.parametrize("src_rel,dest_rel,expect_indexed", RENAME_CASES)
-def test_watcher_indexes_rename_dest_path(
-    vault: Path, index: VaultIndex, src_rel: str, dest_rel: str, expect_indexed: str
+@pytest.mark.parametrize("src_rel,dest_rel,expected", RENAME_HANDLER_CASES)
+def test_handler_schedules_rename_paths(
+    vault: Path, src_rel: str, dest_rel: str, expected: list[str]
 ) -> None:
-    """FileMovedEvent の dest_path が `_schedule_update` に流れること (#58).
+    """合成 ``FileMovedEvent`` で src/dest が期待通り schedule されること.
 
-    旧実装は ``event.src_path`` しか見ておらず、以下のケースで dest が
-    未インデックス化されていた:
-
-    - ``flat_rename`` / ``cross_subdir``: src が削除されるだけで
-      新パスが次の modify event まで index に入らない
-    - ``hidden_to_normal``: src が隠しフォルダで早期 return し、
-      dest が処理されない
-    - ``cross_extension_txt_to_md``: src が非 md で早期 return し、
-      dest が処理されない
+    filesystem を経由しないため Observer 登録 race / inotify レイテンシに
+    依存しない。RENAME のシナリオ網羅はこの経路で担保する (#79)。
     """
-    src = vault / src_rel
-    src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text("# Note\nhello unique_marker_xyz\n", encoding="utf-8")
-    index.build_index()
+    handler, scheduled = _make_handler(vault)
+    src_full = str(vault / src_rel)
+    dest_full = str(vault / dest_rel)
+    handler.on_any_event(FileMovedEvent(src_full, dest_full))
+    assert scheduled == expected
 
-    dest = vault / dest_rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
 
-    with _running_watcher(index):
-        src.rename(dest)
-        assert _wait_until(lambda: _indexed(index, expect_indexed)), (
-            f"{expect_indexed} should be indexed after rename {src_rel} -> {dest_rel}"
+def test_handler_schedules_on_create(vault: Path) -> None:
+    """``FileCreatedEvent`` で対象 .md が schedule される."""
+    handler, scheduled = _make_handler(vault)
+    handler.on_any_event(FileCreatedEvent(str(vault / "fresh.md")))
+    assert scheduled == ["fresh.md"]
+
+
+def test_handler_schedules_on_delete(vault: Path) -> None:
+    """``FileDeletedEvent`` で対象 .md が schedule される."""
+    handler, scheduled = _make_handler(vault)
+    handler.on_any_event(FileDeletedEvent(str(vault / "gone.md")))
+    assert scheduled == ["gone.md"]
+
+
+def test_handler_skips_non_md(vault: Path) -> None:
+    """非 .md ファイルは schedule されない (拡張子フィルタ)."""
+    handler, scheduled = _make_handler(vault)
+    handler.on_any_event(FileCreatedEvent(str(vault / "notes.txt")))
+    handler.on_any_event(FileCreatedEvent(str(vault / "image.png")))
+    assert scheduled == []
+
+
+def test_handler_skips_path_outside_vault(vault: Path, tmp_path: Path) -> None:
+    """vault_root 外の .md は schedule されない (relative_to 失敗)."""
+    handler, scheduled = _make_handler(vault)
+    outside = tmp_path / "elsewhere" / "x.md"
+    handler.on_any_event(FileCreatedEvent(str(outside)))
+    assert scheduled == []
+
+
+def test_handler_skips_directory_events(vault: Path) -> None:
+    """ディレクトリイベントは schedule されない (is_directory=True)."""
+    handler, scheduled = _make_handler(vault)
+    event = FileCreatedEvent(str(vault / "sub"))
+    event.is_directory = True
+    handler.on_any_event(event)
+    assert scheduled == []
+
+
+def test_handler_logs_rename_at_info(vault: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """``FileMovedEvent`` で ``rename detected`` の INFO log が出る (#78)."""
+    handler, _ = _make_handler(vault)
+    with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
+        handler.on_any_event(FileMovedEvent(str(vault / "A.md"), str(vault / "B.md")))
+    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert any("rename detected" in m for m in info_msgs), info_msgs
+
+
+def test_handler_logs_debug_on_hidden_dest_exclusion(
+    vault: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """隠しフォルダ宛 rename で dest 除外時に DEBUG log が出る (#78)."""
+    handler, _ = _make_handler(vault)
+    with caplog.at_level(logging.DEBUG, logger="vault_search.watcher"):
+        handler.on_any_event(
+            FileMovedEvent(str(vault / "note.md"), str(vault / ".archive" / "note.md"))
         )
+    debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any(".archive" in m or "excluded" in m or "skip" in m for m in debug_msgs), debug_msgs
 
 
-def test_watcher_excludes_hidden_dest(vault: Path, index: VaultIndex) -> None:
-    """通常→隠しフォルダへの移動で dest は index されず src は index から消える.
+# ---------------------------------------------------------------------------
+# Integration smoke tests — 実 Observer + 実 filesystem の wire を担保
+# ---------------------------------------------------------------------------
 
-    隠しフォルダフィルタが src / dest 両方に適用されることの regression guard。
+
+def test_watcher_indexes_on_create_and_delete(vault: Path, index: VaultIndex) -> None:
+    """create/delete イベントが Observer → Handler → DB まで wire されること.
+
+    deterministic 経路で個別ロジックは網羅済 (test_handler_*)。ここでは
+    end-to-end で実 Observer + sqlite commit の整合性のみ確認する。
     """
-    src = vault / "note.md"
-    src.write_text("# N\nhello\n", encoding="utf-8")
     index.build_index()
-    assert _indexed(index, "note.md")
-
-    hidden_dir = vault / ".archive"
-    hidden_dir.mkdir()
-    dest = hidden_dir / "note.md"
+    note = vault / "note.md"
 
     with _running_watcher(index):
-        src.rename(dest)
-        # 旧パスは index から消える (src 側の _schedule_update 経由で DELETE)
-        assert _wait_until(lambda: not _indexed(index, "note.md"))
-        # 新パス (.archive/note.md) は隠しフォルダ除外で index されない
-        time.sleep(0.3)  # debounce + α を待っても入らないことを確認
-        assert not _indexed(index, ".archive/note.md")
-
-
-# ---------------------------------------------------------------------------
-# Create / Delete — Handler リファクタに伴う非-FileMovedEvent 経路の regression guard
-# ---------------------------------------------------------------------------
-
-
-def test_watcher_indexes_on_create(vault: Path, index: VaultIndex) -> None:
-    """新規 .md ファイル作成で index に入る (FileCreatedEvent 経路)."""
-    index.build_index()  # 空 vault を初期化
-    with _running_watcher(index):
-        note = vault / "fresh.md"
-        note.write_text("# Fresh\nbody\n", encoding="utf-8")
-        assert _wait_until(lambda: _indexed(index, "fresh.md"))
-
-
-def test_watcher_removes_on_delete(vault: Path, index: VaultIndex) -> None:
-    """既存 .md ファイル削除で index から消える (FileDeletedEvent 経路)."""
-    note = vault / "gone.md"
-    note.write_text("# Gone\nbody\n", encoding="utf-8")
-    index.build_index()
-    assert _indexed(index, "gone.md")
-
-    with _running_watcher(index):
+        note.write_text("# N\nbody\n", encoding="utf-8")
+        assert _wait_until(lambda: index.note_exists("note.md"))
         note.unlink()
-        assert _wait_until(lambda: not _indexed(index, "gone.md"))
+        assert _wait_until(lambda: not index.note_exists("note.md"))
 
 
-# ---------------------------------------------------------------------------
-# Logging observability — issue #78
-# ---------------------------------------------------------------------------
+def test_watcher_indexes_rename_end_to_end(vault: Path, index: VaultIndex) -> None:
+    """実 rename イベントが Observer → Handler → debounce → DB まで wire されること.
 
-
-def test_watcher_logs_rename_detected_at_info(
-    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
-) -> None:
-    """FileMovedEvent で logger.info('rename detected: ...') が出ること (#78)."""
+    deterministic 経路で 7 シナリオを網羅 (test_handler_schedules_rename_paths)
+    しているので、ここは smoke 1 件で wire 健全性のみ確認する。
+    """
     src = vault / "A.md"
     src.write_text("# A\nbody\n", encoding="utf-8")
     index.build_index()
     dest = vault / "B.md"
 
-    with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
-        with _running_watcher(index):
-            src.rename(dest)
-            _wait_until(lambda: _indexed(index, "B.md"))
-
-    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    assert any("rename detected" in m for m in info_msgs), (
-        f"Expected 'rename detected' in INFO logs, got: {info_msgs}"
-    )
+    with _running_watcher(index):
+        src.rename(dest)
+        assert _wait_until(lambda: index.note_exists("B.md"))
 
 
 def test_watcher_logs_indexed_at_info_on_flush(
     vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """_flush 成功後に logger.info('indexed: ...') が出ること (#78)."""
+    """``_flush`` 成功後に ``indexed:`` INFO log が出る (#78).
+
+    ``_flush`` は VaultWatcher 側のメソッドのため、deterministic 経路
+    (Handler 単体) では検証できない。実 Observer 経路で確認する。
+    """
     index.build_index()
 
     with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
         with _running_watcher(index):
-            note = vault / "new_note.md"
-            note.write_text("# New\nbody\n", encoding="utf-8")
-            _wait_until(lambda: _indexed(index, "new_note.md"))
+            (vault / "new_note.md").write_text("# New\nbody\n", encoding="utf-8")
+            _wait_until(lambda: index.note_exists("new_note.md"))
 
     info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    assert any("indexed:" in m for m in info_msgs), (
-        f"Expected 'indexed:' in INFO logs, got: {info_msgs}"
-    )
-
-
-def test_watcher_logs_debug_on_hidden_dest_exclusion(
-    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
-) -> None:
-    """隠しフォルダへの rename で dest_path 除外時に logger.debug が出ること (#78)."""
-    src = vault / "note.md"
-    src.write_text("# N\n", encoding="utf-8")
-    index.build_index()
-    hidden_dir = vault / ".archive"
-    hidden_dir.mkdir()
-
-    with caplog.at_level(logging.DEBUG, logger="vault_search.watcher"):
-        with _running_watcher(index):
-            src.rename(hidden_dir / "note.md")
-            # src 側の update_single が走るまで待つ
-            _wait_until(lambda: not _indexed(index, "note.md"))
-            time.sleep(0.2)  # dest 除外の debug log が出る余裕を持たせる
-
-    debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
-    assert any(".archive" in m or "excluded" in m or "skip" in m for m in debug_msgs), (
-        f"Expected exclusion debug log for hidden dest, got: {debug_msgs}"
-    )
+    assert any("indexed:" in m for m in info_msgs), info_msgs
