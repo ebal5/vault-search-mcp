@@ -357,13 +357,16 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
 def bulk_vault_over_cap(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> tuple[Path, VaultIndex, int]:
-    """cap+1 件の tag + FTS 可能トークンを持つ vault を 1 度だけ構築する."""
+    """cap+1 件の tag + FTS 可能トークンを持つ vault を 1 度だけ構築する.
+
+    本文に 5 語の共通トークンを入れてあるのは、tier=1 fuzzy cache hit
+    (Jaccard >= 0.8) を成立させる類似クエリを組めるようにするため。
+    """
     cap = VaultIndex._MAX_RESULTS
-    # "obsidian-bulk" は FTS5 trigram (3 文字以上) を通るマーカー
-    notes = {
-        f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nobsidian-bulk body\n"
-        for i in range(cap + 1)
-    }
+    # "obsidian-bulk" は FTS5 trigram (3 文字以上) を通るマーカー。
+    # alpha/beta/gamma/delta は tier=1 テストで Jaccard 閾値を跨ぐために追加。
+    body = "alpha beta gamma delta obsidian-bulk\n"
+    notes = {f"bulk/note_{i:04d}.md": f"---\ntags: [bulk-tag]\n---\n{body}" for i in range(cap + 1)}
     root, idx = vault_builder(notes)
     return root, idx, cap
 
@@ -390,12 +393,15 @@ def test_search_total_accurate_beyond_max_results_fts_path(
     独立に regression guard する。
     """
     _root, idx, cap = bulk_vault_over_cap
-    # "obsidian-bulk" は fts_terms に入り FTS5 MATCH 経由でヒットする
+    # "obsidian-bulk" は 13 文字 (>=3) で hyphen 単一語なので fts_terms に入る。
+    # 全 501 件がこのトークンを本文に含むため、FTS5 MATCH で cap+1 件ヒット。
+    # LIKE フォールバック経路 (3 文字未満) とは別の SQL を通る点が本 test の要。
     res = idx.search("obsidian-bulk", limit=10, offset=0)
     assert res["total"] == cap + 1, (
         f"FTS5 パスでも total が accurate に ({cap + 1}) 返ること; got {res['total']}"
     )
     assert res["truncated"] is True
+    # FTS5 が実際にマッチしたことを results 数で担保 (空なら LIKE fallback か FTS 失敗)
     assert len(res["results"]) == 10
 
 
@@ -441,6 +447,28 @@ def test_search_cache_hit_preserves_truncated_and_total(
     assert second["tier"] == 0, "同一クエリは Tier 0 に乗る"
     assert second["total"] == cap + 1, "cache hit でも total は accurate"
     assert second["truncated"] is True, "cache hit でも truncated が伝達される"
+
+
+def test_search_tier1_fuzzy_preserves_truncated(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+) -> None:
+    """Issue #17: Tier 1 fuzzy cache hit でも truncated フラグが保持される.
+
+    tier=1 は filters 無しで Jaccard >= 0.8 の類似クエリで発動する。
+    キャッシュされた entry.total (cap+1) と truncated 判定が再利用されることを
+    確認する (cache.get が entry を返す契約 regression guard)。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)
+    first = idx.search("alpha beta gamma delta obsidian-bulk", limit=5)
+    assert first["tier"] == 2
+    assert first["truncated"] is True
+    # Jaccard = 5 / 6 ≈ 0.833 > 0.8 → tier=1 hit。
+    # "epsilon" は本文に無いため FTS 再実行なら 0 件だが、cache reuse で prime の結果が返る。
+    second = idx.search("alpha beta gamma delta obsidian-bulk epsilon", limit=5)
+    assert second["tier"] == 1, f"fuzzy hit しなかった: tier={second['tier']}"
+    assert second["total"] == cap + 1, "tier=1 は prime クエリの total を再利用"
+    assert second["truncated"] is True, "tier=1 でも truncated が保持される"
 
 
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:
