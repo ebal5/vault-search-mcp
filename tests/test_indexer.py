@@ -131,6 +131,58 @@ def test_excluded_prefix_folders(vault_index: VaultIndex) -> None:
     assert not any(f.startswith(".") for f in folders)
 
 
+# ---------------------------------------------------------------------------
+# is_indexable_path — walker と watcher Handler の単一ソース (#76)
+# ---------------------------------------------------------------------------
+
+
+class TestIsIndexablePath:
+    """``VaultIndex.is_indexable_path`` の除外ルール (#76)."""
+
+    def test_accepts_flat_md(self, tmp_path: Path) -> None:
+        idx = VaultIndex(tmp_path, db_path=tmp_path / "x.db")
+        assert idx.is_indexable_path(tmp_path / "note.md") == "note.md"
+
+    def test_accepts_nested_md(self, tmp_path: Path) -> None:
+        idx = VaultIndex(tmp_path, db_path=tmp_path / "x.db")
+        assert idx.is_indexable_path(tmp_path / "sub" / "deep" / "n.md") == "sub/deep/n.md"
+
+    def test_rejects_non_md_extension(self, tmp_path: Path) -> None:
+        idx = VaultIndex(tmp_path, db_path=tmp_path / "x.db")
+        assert idx.is_indexable_path(tmp_path / "notes.txt") is None
+        assert idx.is_indexable_path(tmp_path / "image.png") is None
+        assert idx.is_indexable_path(tmp_path / "README.MD") is None  # case-sensitive
+
+    def test_rejects_outside_vault(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        idx = VaultIndex(vault, db_path=tmp_path / "x.db")
+        outside = tmp_path / "elsewhere" / "x.md"
+        assert idx.is_indexable_path(outside) is None
+
+    @pytest.mark.parametrize(
+        "rel,expect",
+        [
+            (".archive/n.md", None),
+            ("_drafts/n.md", None),
+            ("sub/.hidden/n.md", None),
+            ("sub/_internal/n.md", None),
+            (".archive.md", None),  # ファイル名自体も除外
+            ("_private.md", None),
+        ],
+    )
+    def test_rejects_excluded_prefix_segments(
+        self, tmp_path: Path, rel: str, expect: str | None
+    ) -> None:
+        idx = VaultIndex(tmp_path, db_path=tmp_path / "x.db")
+        assert idx.is_indexable_path(tmp_path / rel) is expect
+
+    def test_accepts_string_and_path_inputs(self, tmp_path: Path) -> None:
+        idx = VaultIndex(tmp_path, db_path=tmp_path / "x.db")
+        assert idx.is_indexable_path(str(tmp_path / "n.md")) == "n.md"
+        assert idx.is_indexable_path(tmp_path / "n.md") == "n.md"
+
+
 def test_get_note_roundtrip(vault_index: VaultIndex) -> None:
     note = vault_index.get_note("Welcome.md")
     assert note is not None

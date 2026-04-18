@@ -23,8 +23,10 @@ import pytest
 pytest.importorskip("watchdog")
 
 from watchdog.events import (  # noqa: E402
+    FileClosedEvent,
     FileCreatedEvent,
     FileDeletedEvent,
+    FileModifiedEvent,
     FileMovedEvent,
 )
 
@@ -73,10 +75,10 @@ def index(vault: Path, tmp_path: Path) -> VaultIndex:
 # ---------------------------------------------------------------------------
 
 
-def _make_handler(vault: Path) -> tuple[VaultEventHandler, list[str]]:
+def _make_handler(index: VaultIndex) -> tuple[VaultEventHandler, list[str]]:
     """``VaultEventHandler`` と schedule された rel_path を記録する list を返す."""
     scheduled: list[str] = []
-    handler = VaultEventHandler(vault.resolve(), scheduled.append)
+    handler = VaultEventHandler(index, scheduled.append)
     return handler, scheduled
 
 
@@ -99,75 +101,111 @@ RENAME_HANDLER_CASES = [
 
 @pytest.mark.parametrize("src_rel,dest_rel,expected", RENAME_HANDLER_CASES)
 def test_handler_schedules_rename_paths(
-    vault: Path, src_rel: str, dest_rel: str, expected: list[str]
+    vault: Path, index: VaultIndex, src_rel: str, dest_rel: str, expected: list[str]
 ) -> None:
     """合成 ``FileMovedEvent`` で src/dest が期待通り schedule されること.
 
     filesystem を経由しないため Observer 登録 race / inotify レイテンシに
     依存しない。RENAME のシナリオ網羅はこの経路で担保する (#79)。
     """
-    handler, scheduled = _make_handler(vault)
+    handler, scheduled = _make_handler(index)
     src_full = str(vault / src_rel)
     dest_full = str(vault / dest_rel)
-    handler.on_any_event(FileMovedEvent(src_full, dest_full))
+    handler.on_moved(FileMovedEvent(src_full, dest_full))
     assert scheduled == expected
 
 
-def test_handler_schedules_on_create(vault: Path) -> None:
+def test_handler_schedules_on_create(vault: Path, index: VaultIndex) -> None:
     """``FileCreatedEvent`` で対象 .md が schedule される."""
-    handler, scheduled = _make_handler(vault)
-    handler.on_any_event(FileCreatedEvent(str(vault / "fresh.md")))
+    handler, scheduled = _make_handler(index)
+    handler.on_created(FileCreatedEvent(str(vault / "fresh.md")))
     assert scheduled == ["fresh.md"]
 
 
-def test_handler_schedules_on_delete(vault: Path) -> None:
+def test_handler_schedules_on_modified(vault: Path, index: VaultIndex) -> None:
+    """``FileModifiedEvent`` で対象 .md が schedule される (#77 dispatch 分離)."""
+    handler, scheduled = _make_handler(index)
+    handler.on_modified(FileModifiedEvent(str(vault / "edit.md")))
+    assert scheduled == ["edit.md"]
+
+
+def test_handler_schedules_on_delete(vault: Path, index: VaultIndex) -> None:
     """``FileDeletedEvent`` で対象 .md が schedule される."""
-    handler, scheduled = _make_handler(vault)
-    handler.on_any_event(FileDeletedEvent(str(vault / "gone.md")))
+    handler, scheduled = _make_handler(index)
+    handler.on_deleted(FileDeletedEvent(str(vault / "gone.md")))
     assert scheduled == ["gone.md"]
 
 
-def test_handler_skips_non_md(vault: Path) -> None:
+def test_handler_ignores_unmapped_event_types(vault: Path, index: VaultIndex) -> None:
+    """``FileClosedEvent`` 等の未マップ event 型では schedule されない (#77).
+
+    旧 ``on_any_event`` 集約方式では FileClosedEvent でも再インデックスが走って
+    いたが、新方式は ``on_created`` / ``on_modified`` / ``on_deleted`` / ``on_moved``
+    のみ override するため、未マップ型は watchdog default の no-op になる。
+    """
+    handler, scheduled = _make_handler(index)
+    # dispatch() が watchdog の標準経路: on_any_event → type-specific 。
+    # 未 override の on_any_event と on_closed は no-op なので何も起こらない。
+    handler.dispatch(FileClosedEvent(str(vault / "note.md")))
+    assert scheduled == []
+
+
+def test_handler_skips_non_md(vault: Path, index: VaultIndex) -> None:
     """非 .md ファイルは schedule されない (拡張子フィルタ)."""
-    handler, scheduled = _make_handler(vault)
-    handler.on_any_event(FileCreatedEvent(str(vault / "notes.txt")))
-    handler.on_any_event(FileCreatedEvent(str(vault / "image.png")))
+    handler, scheduled = _make_handler(index)
+    handler.on_created(FileCreatedEvent(str(vault / "notes.txt")))
+    handler.on_created(FileCreatedEvent(str(vault / "image.png")))
     assert scheduled == []
 
 
-def test_handler_skips_path_outside_vault(vault: Path, tmp_path: Path) -> None:
+def test_handler_skips_path_outside_vault(vault: Path, index: VaultIndex, tmp_path: Path) -> None:
     """vault_root 外の .md は schedule されない (relative_to 失敗)."""
-    handler, scheduled = _make_handler(vault)
+    handler, scheduled = _make_handler(index)
     outside = tmp_path / "elsewhere" / "x.md"
-    handler.on_any_event(FileCreatedEvent(str(outside)))
+    handler.on_created(FileCreatedEvent(str(outside)))
     assert scheduled == []
 
 
-def test_handler_skips_directory_events(vault: Path) -> None:
+def test_handler_skips_directory_events(vault: Path, index: VaultIndex) -> None:
     """ディレクトリイベントは schedule されない (is_directory=True)."""
-    handler, scheduled = _make_handler(vault)
+    handler, scheduled = _make_handler(index)
     event = FileCreatedEvent(str(vault / "sub"))
     event.is_directory = True
-    handler.on_any_event(event)
+    handler.on_created(event)
     assert scheduled == []
 
 
-def test_handler_logs_rename_at_info(vault: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """``FileMovedEvent`` で ``rename detected`` の INFO log が出る (#78)."""
-    handler, _ = _make_handler(vault)
+def test_handler_on_moved_dispatches_once_via_watchdog(vault: Path, index: VaultIndex) -> None:
+    """``dispatch(FileMovedEvent)`` が on_moved のみ経由で src/dest 各 1 回 schedule (#77).
+
+    watchdog ``dispatch`` は ``on_any_event`` → type-specific の順で呼ぶ。旧実装は
+    ``on_any_event`` で moved を処理 + watchdog default ``on_moved`` が no-op という
+    暗黙の依存があった。新実装は ``on_moved`` のみが処理するため、将来別経路で
+    ``on_any_event`` を触っても二重 schedule が起きないことを構造的に保証する。
+    """
+    handler, scheduled = _make_handler(index)
+    handler.dispatch(FileMovedEvent(str(vault / "A.md"), str(vault / "B.md")))
+    assert scheduled == ["A.md", "B.md"]
+
+
+def test_handler_logs_rename_at_info(
+    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``on_moved`` で ``rename detected`` の INFO log が出る (#78)."""
+    handler, _ = _make_handler(index)
     with caplog.at_level(logging.INFO, logger="vault_search.watcher"):
-        handler.on_any_event(FileMovedEvent(str(vault / "A.md"), str(vault / "B.md")))
+        handler.on_moved(FileMovedEvent(str(vault / "A.md"), str(vault / "B.md")))
     info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert any("rename detected" in m for m in info_msgs), info_msgs
 
 
 def test_handler_logs_debug_on_hidden_dest_exclusion(
-    vault: Path, caplog: pytest.LogCaptureFixture
+    vault: Path, index: VaultIndex, caplog: pytest.LogCaptureFixture
 ) -> None:
     """隠しフォルダ宛 rename で dest 除外時に DEBUG log が出る (#78)."""
-    handler, _ = _make_handler(vault)
+    handler, _ = _make_handler(index)
     with caplog.at_level(logging.DEBUG, logger="vault_search.watcher"):
-        handler.on_any_event(
+        handler.on_moved(
             FileMovedEvent(str(vault / "note.md"), str(vault / ".archive" / "note.md"))
         )
     debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
