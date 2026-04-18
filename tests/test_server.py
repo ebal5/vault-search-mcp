@@ -120,6 +120,14 @@ def test_mcp_tool_vault_search(vault_index: VaultIndex) -> None:
     SearchResponse.model_validate(res)
 
 
+def test_mcp_tool_vault_search_response_includes_truncated(vault_index: VaultIndex) -> None:
+    """Issue #17: MCP tool の戻り dict が truncated: bool を含む."""
+    fn = _fn(server_mod.vault_search)
+    res = fn("obsidian")
+    assert "truncated" in res, "SearchResponse に truncated フィールドが必要"
+    assert isinstance(res["truncated"], bool)
+
+
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
     """存在しないパスでは NoteNotFoundError を送出する (旧 error dict から変更)."""
     fn = _fn(server_mod.vault_get_note)

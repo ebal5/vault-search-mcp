@@ -328,6 +328,55 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
     assert "(root)" not in names
 
 
+# ---------------------------------------------------------------------------
+# Issue #17: total が _MAX_RESULTS=500 で truncate される問題。
+# 巨大 vault で agent がページング終端を誤認しないよう accurate な total と
+# truncated フラグを返すことを検証する。
+# ---------------------------------------------------------------------------
+
+
+def test_search_total_accurate_beyond_max_results(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #17: total は _MAX_RESULTS=500 で truncate されず accurate な件数を返す.
+
+    filter-only パス (空クエリ + tags) で 501 件を構築し、total が 500 に
+    頭打ちせず 501 を返すことを確認する。
+    """
+    notes = {f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nbody\n" for i in range(501)}
+    _root, idx = vault_builder(notes)
+    res = idx.search("", tags=["bulk-tag"], limit=50, offset=0)
+    assert res["total"] == 501, (
+        f"total は accurate な件数 (501) を返すこと; got {res['total']} "
+        "(_MAX_RESULTS でサイレントに truncate されない)"
+    )
+    assert len(res["results"]) == 50
+
+
+def test_search_truncated_flag_true_when_total_exceeds_cap(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #17: total > _MAX_RESULTS のとき truncated=True を返す."""
+    notes = {f"bulk/note_{i:04d}.md": "---\ntags: [bulk-tag]\n---\nbody\n" for i in range(501)}
+    _root, idx = vault_builder(notes)
+    res = idx.search("", tags=["bulk-tag"], limit=10)
+    assert res.get("truncated") is True, (
+        f"total={res['total']} > _MAX_RESULTS=500 のとき truncated=True; got {res.get('truncated')}"
+    )
+
+
+def test_search_truncated_flag_false_below_cap(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #17: total <= _MAX_RESULTS のとき truncated=False."""
+    notes = {f"a_{i}.md": "---\ntags: [few]\n---\nbody\n" for i in range(3)}
+    _root, idx = vault_builder(notes)
+    res = idx.search("", tags=["few"])
+    assert res.get("truncated") is False, (
+        f"total=3 <= _MAX_RESULTS=500 のとき truncated=False; got {res.get('truncated')}"
+    )
+
+
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """folder='Projects' が 'Projects Hermes' のような兄弟を拾わないこと."""
     # 兄弟フォルダに同一トークンを含むノートを置く。
