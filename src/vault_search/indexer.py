@@ -283,6 +283,17 @@ class VaultIndex:
             ),
         )
 
+    def note_exists(self, rel_path: str) -> bool:
+        """``rel_path`` が ``notes`` テーブルに存在するかを返す.
+
+        テストや watcher 経路から index 状態を確認するための公開ヘルパ。
+        ``connection()`` を直接開く負担を集約し、private API への依存を防ぐ (#79)。
+        """
+        rel_path = rel_path.replace("\\", "/")
+        with self.connection() as conn:
+            row = conn.execute("SELECT 1 FROM notes WHERE path = ?", (rel_path,)).fetchone()
+        return row is not None
+
     def update_single(self, rel_path: str) -> bool:
         """単一ファイルのインデックスを更新."""
         rel_path = rel_path.replace("\\", "/")

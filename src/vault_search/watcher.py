@@ -10,12 +10,68 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from .indexer import VaultIndex
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    from watchdog.events import (
+        FileMovedEvent,
+        FileSystemEvent,
+        FileSystemEventHandler,
+    )
+
+    _WATCHDOG_AVAILABLE = True
+except ImportError:  # pragma: no cover - watchdog is a hard dep but keep guard for sdist installs
+    _WATCHDOG_AVAILABLE = False
+    FileSystemEventHandler = object  # type: ignore[assignment,misc]
+
+
+class VaultEventHandler(FileSystemEventHandler):  # type: ignore[misc]
+    """watchdog FileSystemEventHandler を vault 専用フィルタ + callback に閉じ込める.
+
+    Observer / filesystem を介さず、テストから直接 ``on_any_event`` に合成
+    イベントを流せるよう module-level に切り出している (#79)。
+    """
+
+    def __init__(self, vault_root: Path, schedule_callback: Callable[[str], None]) -> None:
+        self._vault_root = vault_root
+        self._schedule = schedule_callback
+
+    def _schedule_if_valid(self, raw_path: str) -> None:
+        if not raw_path.endswith(".md"):
+            logger.debug("skipped non-.md path: %s", raw_path)
+            return
+        try:
+            rel = str(Path(raw_path).relative_to(self._vault_root)).replace("\\", "/")
+        except ValueError:
+            logger.debug("skipped path outside vault: %s", raw_path)
+            return
+        if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
+            logger.debug("skipped excluded path: %s", rel)
+            return
+        self._schedule(rel)
+
+    def on_any_event(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        # FileMovedEvent はリネーム/移動。src_path (旧) と
+        # dest_path (新) の両方をインデックス更新対象にする (#58)。
+        if isinstance(event, FileMovedEvent):
+            logger.info(
+                "rename detected: %s -> %s",
+                event.src_path,
+                event.dest_path,
+            )
+            self._schedule_if_valid(event.src_path)
+            self._schedule_if_valid(event.dest_path)
+            return
+        self._schedule_if_valid(event.src_path)
 
 
 class VaultWatcher:
@@ -34,59 +90,19 @@ class VaultWatcher:
 
     def start(self) -> bool:
         """監視開始。watchdog が利用可能なら True."""
-        try:
-            from watchdog.events import (
-                FileMovedEvent,
-                FileSystemEvent,
-                FileSystemEventHandler,
-            )
-            from watchdog.observers import Observer
-
-            watcher = self
-
-            def _schedule_if_valid(raw_path: str) -> None:
-                if not raw_path.endswith(".md"):
-                    logger.debug("skipped non-.md path: %s", raw_path)
-                    return
-                try:
-                    rel = str(Path(raw_path).relative_to(watcher._index.vault_root)).replace(
-                        "\\", "/"
-                    )
-                except ValueError:
-                    logger.debug("skipped path outside vault: %s", raw_path)
-                    return
-                if any(p.startswith(".") or p.startswith("_") for p in Path(rel).parts):
-                    logger.debug("skipped excluded path: %s", rel)
-                    return
-                watcher._schedule_update(rel)
-
-            class Handler(FileSystemEventHandler):
-                def on_any_event(self, event: FileSystemEvent) -> None:
-                    if event.is_directory:
-                        return
-                    # FileMovedEvent はリネーム/移動。src_path (旧) と
-                    # dest_path (新) の両方をインデックス更新対象にする (#58)。
-                    if isinstance(event, FileMovedEvent):
-                        logger.info(
-                            "rename detected: %s -> %s",
-                            event.src_path,
-                            event.dest_path,
-                        )
-                        _schedule_if_valid(event.src_path)
-                        _schedule_if_valid(event.dest_path)
-                        return
-                    _schedule_if_valid(event.src_path)
-
-            self._observer = Observer()
-            self._observer.schedule(Handler(), str(self._index.vault_root), recursive=True)
-            self._observer.daemon = True
-            self._observer.start()
-            logger.info("File watcher started: %s", self._index.vault_root)
-            return True
-
-        except ImportError:
+        if not _WATCHDOG_AVAILABLE:
             logger.warning("watchdog not installed — file watching disabled")
             return False
+
+        from watchdog.observers import Observer
+
+        handler = VaultEventHandler(self._index.vault_root, self._schedule_update)
+        self._observer = Observer()
+        self._observer.schedule(handler, str(self._index.vault_root), recursive=True)
+        self._observer.daemon = True
+        self._observer.start()
+        logger.info("File watcher started: %s", self._index.vault_root)
+        return True
 
     def stop(self) -> None:
         if self._observer:
