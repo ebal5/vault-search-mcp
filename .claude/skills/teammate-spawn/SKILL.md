@@ -2,16 +2,21 @@
 name: teammate-spawn
 description: |
   `TeamCreate` + 複数 `Agent(isolation="worktree")` による parallel PDCA を
-  確立手順でセットアップする。3 回の試行 (2026-04) で判明した pitfall
-  (TaskList 不可視、worktree base 汚染、PR 作成 branch mismatch 等) を
-  prompt テンプレートに織り込み、再現率の低い人為ミスを構造的に防ぐ。
+  確立手順でセットアップする。**用途は「同一タスクの別側面」に限定**
+  (review-loop / 同一 issue の Red/Green 分離 / 機械的 broadcast 等)。
+  別 issue / 別 PR 前提の並列化は 2026-04-17 に運用方針で非推奨化済 (4 試行で
+  構造的破綻を確認、`.claude/rules/tdd-workflow.md` §「方針: 別タスク並列に
+  agent team を使わない」参照)。
 
   以下の依頼時に使用:
-  - 「teammate 並列で ...」「team で並行作業」
-  - 複数 issue (2-4 件) を同時に片付けたい、かつ互いに衝突しない見込み
-  - SMALL〜MEDIUM (1 PR 3〜5 ファイル、Red/Green/Refactor TDD) の scope
+  - 「teammate 並列で ...」「team で並行作業」かつ **同一タスクの別側面**
+  - 同一 issue の TDD 分離 (Red/Green/Refactor 評価)
+  - 同一 PR 内の parallel review (review-loop)
+  - 機械的 edit の broadcast (docstring 多数ファイル等、衝突マトリクス低)
 
-  以下では使用しない:
+  以下では使用しない (代案あり):
+  - 別 issue / 別 PR 前提の並列化 → **別 Claude Code セッション + 各セッション
+    内で `EnterWorktree`** (本 skill 冒頭の「⚠️ 警告」参照)
   - 1 issue だけの作業 → 親直接 + worktree 逐次切替 (Baseline) で十分
   - 広範囲 edit (>500 行、>1 ファイル横断) → 親直接 (§tdd-workflow.md
     既知の落とし穴参照)
@@ -27,6 +32,45 @@ model: sonnet
 
 > Note: 本リポジトリでは `.claude/skills/` が sandbox 保護で書込制限あり。
 > 書込が必要な場合 `dangerouslyDisableSandbox: true` で実行する。
+
+## ⚠️ 警告: 別タスク並列は非推奨 (2026-04-17 方針確立)
+
+**本 skill の適用範囲は「同一タスクの別側面」に限定**。別 issue / 別 PR を
+複数 teammate に割り振る運用は、4 試行 (2026-04-16〜17) で以下 4 種の
+構造的 pitfall が連鎖発生し、運用対効果が薄いと確認された:
+
+1. teammate `isolation="worktree"` が無視され主リポで作業するケース
+2. teammate 間で branch ref 空間が共有され、誤操作 1 回で他 teammate 全滅
+3. 親 worktree が PR merge `--delete-branch` で破壊 + local main 汚染
+4. 529 overloaded で teammate が PR 作成直前に停止
+
+詳細は `.claude/rules/tdd-workflow.md` の以下セクションを参照:
+
+- §「複数 issue の並列運用パターン」第 4 試行結果
+- §「方針: 別タスク並列に agent team を使わない」
+
+### 適合用途 (本 skill を使う)
+
+- 同一 PR 内の parallel review (`review-loop` skill から呼ばれる)
+- 同一 issue の TDD 分離 (Red delegate / Green delegate / Refactor 計画評価)
+- 調査 + 実装 + テストの役割分担 (同一 issue 内)
+- 機械的 edit の broadcast (docstring / annotation 付与等、衝突マトリクス低)
+
+### 非適合用途 (本 skill を使わない、代案あり)
+
+- 別 issue / 別 PR 前提の並列化
+  → **別 Claude Code セッションを人間側で複数起動**し、各セッションで親自身
+  が `EnterWorktree` する方式を推奨。サンドボックス cwd が worktree に固定
+  されるので主リポ汚染リスクなし、PR merge / local main 復旧が各セッション
+  内で完結
+- 広範囲 edit の分散 (>500 行、>1 ファイル横断)
+  → 親直接 + 単一 worktree
+- teammate 同士の依存が見えにくい複合タスク
+  → 設計分解して逐次化
+
+非適合用途で「どうしても agent team を使いたい」場合でも、本 skill は実行
+プロセスを保証するのみで、構造的 pitfall (#1〜#4) の発生確率は下げられない
+ことを認識した上で慎重に進めること。
 
 ## 前提
 

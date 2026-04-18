@@ -162,9 +162,17 @@ commit prefix は「振る舞いが変わるか」で選ぶ:
 ## 複数 issue の並列運用パターン
 
 Phase A/B のように「互いにほぼ独立した 2-4 issue を短時間でまとめて片付けたい」
-場合の運用指針。試行結果を蓄積しつつ更新していく (2026-04-16 時点)。
+場合の運用指針。試行結果を蓄積しつつ更新していく (2026-04-17 時点で 4 試行
+完了)。
 
-### Baseline: 親セッション worktree 逐次切替 (実績あり)
+> **2026-04-17 方針転換**: 4 試行目で「別 PR 前提の別タスクを agent team で
+> 並列化する運用」は構造的に破綻すると確認した (詳細は本節「第 4 試行結果」
+> および「方針: 別タスク並列に agent team を使わない」)。**第一選択は
+> Baseline (親 worktree 逐次切替) または別セッション並列**。agent team は
+> 「同一タスクの別側面」用途に限定する (review-loop / 同一 issue の Red/Green
+> 分離等)。
+
+### Baseline: 親セッション worktree 逐次切替 (実績あり、第一選択)
 
 親 Claude 自身が `EnterWorktree` → Red/Green/Refactor 直接 Edit → PR 作成 →
 `ExitWorktree(remove)` → 次 issue 用に新 worktree を作る、を逐次繰り返す。
@@ -354,6 +362,107 @@ annotations docs、`phase-c-docs-parallel`):
 - **teammate の自己申告は信用度階層で扱う**: 「〜と確認した」の report は
   事実ではなく「teammate がそう認識している」と解釈。ブランチ誤切替のような
   teammate 自身が追跡しきれない事象は、親の独立検証でしか検知できない
+
+**第 4 試行結果** (2026-04-16〜17、4 PR 並列、Phase E1 #46+#29 統合 +
+SMALL #33 / #47 / #42、`phase-e1-parallel`。**初の 4 並列・親も実装担当**):
+
+- ⚠️ **壁時計短縮 ~20 分 vs 復旧コスト ~15 分で収支が薄い**: 4 PR 並行で
+  teammate 実作業 ~10〜15 分 × 3 人で確かに壁時計は節約されたが、merge 後の
+  worktree reset / 主リポ branch 掃除 / local main 復旧で ~15 分を消費。
+  差し引き節約は微々たるもの
+- ❌ **teammate `isolation="worktree"` が無視され主リポで作業するケース**
+  (**新規 pitfall #1**): folderschema-teammate (#47) は
+  `Agent(isolation="worktree", ...)` で spawn されたが、
+  `git worktree list` に対応する独立 worktree が出現せず、主リポ
+  (`~/Projects/individual/vault-search-mcp`) で作業していた形跡あり。
+  作業終了後も主リポが `refactor/issue-47-...` branch のままで
+  switch 残骸として残った。`Agent` 側の `isolation` 実装が環境依存で不安定
+- ❌ **他 teammate の branch を force reset する事故** (**新規 pitfall #2**):
+  folderschema-teammate が誤って `refactor/issue-42-...` (testsplit-teammate
+  担当 branch) に commit、cherry-pick で自 branch に移動した後 `git branch -f
+  37df8f0` で issue-42 branch を戻した。testsplit が後続 commit したため
+  最終的に無被害だったが、teammate 間で branch ref 空間が共有されている
+  以上、誤操作 1 回で他 teammate 全滅リスクが構造的に存在
+- ❌ **親 worktree が PR merge `--delete-branch` で破壊される**
+  (**新規 pitfall #3**): `gh pr merge 155 --delete-branch` 実行後、親の
+  worktree HEAD が main へ自動 switch、local main が #33 の Refactor commit
+  まで進み、worktree 内の `filter.py` / `indexer.py` / `tests/test_filter.py`
+  が pre-E1 状態に revert されていた。`build_folder_filter_clause` が消え、
+  `_folder_filter_clause` が復活する実害発生。原因仮説は teammate の主リポ
+  作業 (pitfall #1) が shared `.git` 経由で親 worktree に波及 +
+  `--delete-branch` の自動 switch
+- ❌ **529 overloaded error で teammate が PR 作成直前に停止**
+  (**新規 pitfall #4**): noascii-teammate (#33) が Red/Green/Refactor 3
+  commit を push まで完了したが、`gh pr create` 直前で 529 overloaded。
+  idle notification も shutdown_response も受信不能状態。push 済 branch
+  から team-lead が代行 PR (#157) を作成して回収した
+- ✅ **teammate 作業の成果は push さえ完了すれば回収可能**: 529 停止でも
+  team-lead 代行 PR で救済できた。teammate prompt の「報告タイミング」を
+  push 完了時点に前倒しする改善余地あり
+
+**第 4 試行からの追加教訓**:
+
+- **PR merge の `--delete-branch` が親 worktree を巻き込む**: 親が worktree
+  内で作業中に `--delete-branch` 付きで merge すると、local branch ref 削除
+  時に worktree HEAD が main に自動 switch + local main 汚染が発生。**回避**:
+  親が worktree に居る間は `--delete-branch` を avoid、または先に
+  `ExitWorktree(keep)` してから merge する
+- **teammate `isolation="worktree"` は信用しない**: spawn 後に
+  `git worktree list` で独立 worktree が実際に出現したか親が確認する。
+  出現していなければ teammate 作業は主リポを直接触っており、他 teammate
+  との branch ref 共有事故リスクが高い
+- **teammate の報告タイミングは PR 作成前 (push 完了時点) に前倒しする**:
+  529 / overloaded で PR 作成段階で停止しても、push 完了報告が来ていれば
+  team-lead が `gh pr create` で回収できる
+
+### 方針: 別タスク並列に agent team を使わない (2026-04-17 確立)
+
+**4 試行を踏まえた結論**: 別 issue / 別 PR 前提の別タスクを agent team で
+並列化する運用は、以下の構造的問題でワークフロー破綻しやすく、第一選択
+から外す。
+
+#### 構造的問題 (再掲)
+
+- teammate `isolation="worktree"` が環境依存で不安定 (pitfall #1)
+- branch ref 空間が teammate 間で共有され、誤操作 1 回で他 teammate
+  全滅リスク (pitfall #2)
+- 親が同時 worktree 作業すると、PR merge 時に worktree state が破壊される
+  (pitfall #3)
+- merge 後の local main 復旧 / 主リポ残骸 branch 掃除が毎回発生
+- teammate parallel 数が増えるほど pitfall 発生確率が線形以上に増える
+
+#### Agent team の適合用途 (今後もこれに限定)
+
+- **同一 PR 内の parallel review** (`review-loop` skill) — 視点違いの
+  reviewer を同時起動し 0-10 スコアで triage
+- **同一 issue 内の TDD 分離** — Red delegate / Green delegate / Refactor
+  計画評価。commit depend グラフが線形なら衝突しにくい
+- **調査 + 実装 + テストの役割分担** (同一 issue 内)
+- **機械的 edit の broadcast** (docstring 多数ファイル、annotation 付与等) —
+  衝突マトリクスが低いブロードキャスト型
+
+特徴: 親-子の明確な委譲、共通の成果物 (1 PR)、進捗集約しやすい。
+
+#### Agent team の非適合用途 (今後使わない)
+
+- 別 issue / 別 PR 前提の並列化
+- 広範囲 edit の分散 (>500 行、>1 ファイル横断)
+- teammate 同士の依存が見えにくい複合タスク
+
+#### 推奨代案: 別セッション + 各セッション内で worktree 切替
+
+別タスク並列を行うなら、agent team の外側で **別 Claude Code セッションを
+人間側で複数起動**し、各セッションで親自身が `EnterWorktree` で独自
+worktree に入る方式を推奨:
+
+- セッション境界が teammate 間の強い isolation (OS プロセス + サンドボックス)
+- サンドボックスの cwd が worktree に固定されるので、誤って主リポを触る
+  事故が構造的に防がれる
+- 各セッションで PR 作成 / merge のタイミングが独立、干渉ゼロ
+- merge 後復旧は各セッション内で完結
+
+**制約**: 人間側の切替コスト (タブ / ウィンドウ / コンテキスト管理) が増える。
+ただし agent team の merge 後復旧コストを考えれば切替コストのほうが安い。
 
 ### Teammate prompt 標準テンプレート (3 試行の蓄積を集約)
 
