@@ -21,84 +21,101 @@ class TestTieredCache:
     def test_tier0_exact_hit(self) -> None:
         cache = TieredCache()
         result = [{"path": "a.md"}]
-        cache.put("foo bar", None, result)
-        tier, got = cache.get("foo bar", None)
+        cache.put("foo bar", None, result, total=1)
+        tier, entry = cache.get("foo bar", None)
         assert tier == 0
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
+        assert entry.total == 1
 
     def test_tier1_fuzzy_hit(self) -> None:
         """threshold を明確に上回る Jaccard (9/10=0.9) でヒットする."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
         # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
-        cache.put("a b c d e f g h i", None, result)
+        cache.put("a b c d e f g h i", None, result, total=1)
         # tokens: {"a","b","c","d","e","f","g","h","i","j"} — 10 tokens
         # intersection=9, union=10 → Jaccard=9/10=0.9 > 0.8
-        tier, got = cache.get("a b c d e f g h i j", None)
+        tier, entry = cache.get("a b c d e f g h i j", None)
         assert tier == 1
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
 
     def test_tier1_fuzzy_hit_at_threshold(self) -> None:
         """Jaccard が threshold 丁度 (4/5=0.8) でもヒットする — >= semantics を pin."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
-        cache.put("alpha beta gamma delta", None, result)
+        cache.put("alpha beta gamma delta", None, result, total=1)
         # intersection=4, union=5 → Jaccard=4/5=0.8 (= threshold)
-        tier, got = cache.get("alpha beta gamma delta epsilon", None)
+        tier, entry = cache.get("alpha beta gamma delta epsilon", None)
         assert tier == 1
-        assert got == result
+        assert entry is not None
+        assert entry.result == result
 
     def test_tier1_fuzzy_miss_just_below_threshold(self) -> None:
         """Jaccard が threshold 未満 (7/9≈0.778) でミスになる."""
         cache = TieredCache(fuzzy_threshold=0.8)
         result = [{"path": "a.md"}]
         # tokens: {"a","b","c","d","e","f","g"} — 7 tokens
-        cache.put("a b c d e f g", None, result)
+        cache.put("a b c d e f g", None, result, total=1)
         # tokens: {"a","b","c","d","e","f","g","h","i"} — 9 tokens
         # intersection=7, union=9 → Jaccard=7/9≈0.778 < 0.8
-        tier, got = cache.get("a b c d e f g h i", None)
+        tier, entry = cache.get("a b c d e f g h i", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_tier2_miss_low_similarity(self) -> None:
         cache = TieredCache(fuzzy_threshold=0.8)
-        cache.put("alpha beta", None, [{"path": "a"}])
-        tier, got = cache.get("totally different query here", None)
+        cache.put("alpha beta", None, [{"path": "a"}], total=1)
+        tier, entry = cache.get("totally different query here", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_fuzzy_disabled_when_filters(self) -> None:
         """フィルタ付きは Tier 1 スキップ (完全一致のみ)."""
         cache = TieredCache()
-        cache.put("alpha beta", {"tag": "x"}, [{"path": "a"}])
+        cache.put("alpha beta", {"tag": "x"}, [{"path": "a"}], total=1)
         # 別フィルタ・類似クエリ → ミス
-        tier, got = cache.get("alpha beta gamma", {"tag": "y"})
+        tier, entry = cache.get("alpha beta gamma", {"tag": "y"})
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_invalidate_clears_all(self) -> None:
         cache = TieredCache()
-        cache.put("q", None, [{"path": "a"}])
+        cache.put("q", None, [{"path": "a"}], total=1)
         cache.invalidate()
-        tier, got = cache.get("q", None)
+        tier, entry = cache.get("q", None)
         assert tier == -1
-        assert got is None
+        assert entry is None
 
     def test_lru_eviction(self) -> None:
         cache = TieredCache(max_size=2)
-        cache.put("a", None, [{"n": 1}])
-        cache.put("b", None, [{"n": 2}])
-        cache.put("c", None, [{"n": 3}])
+        cache.put("a", None, [{"n": 1}], total=1)
+        cache.put("b", None, [{"n": 2}], total=1)
+        cache.put("c", None, [{"n": 3}], total=1)
         # "a" は押し出された
-        tier, got = cache.get("a", None)
+        tier, entry = cache.get("a", None)
         assert tier == -1
+        assert entry is None
 
     def test_ttl_expiry(self) -> None:
         cache = TieredCache(ttl=0.01)
-        cache.put("q", None, [{"n": 1}])
+        cache.put("q", None, [{"n": 1}], total=1)
         time.sleep(0.05)
-        tier, got = cache.get("q", None)
+        tier, entry = cache.get("q", None)
         assert tier == -1
+        assert entry is None
+
+    def test_entry_preserves_total_above_result_len(self) -> None:
+        """Issue #17: result が cap で truncate されたとき entry.total は
+        accurate な件数を保持する."""
+        cache = TieredCache()
+        cache.put("q", None, [{"n": 1}, {"n": 2}], total=1234)
+        tier, entry = cache.get("q", None)
+        assert tier == 0
+        assert entry is not None
+        assert len(entry.result) == 2
+        assert entry.total == 1234
 
 
 # ---------------------------------------------------------------------------

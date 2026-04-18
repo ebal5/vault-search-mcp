@@ -23,6 +23,7 @@ from typing import Any
 @dataclass
 class CacheEntry:
     result: list[dict[str, Any]]
+    total: int
     tokens: frozenset[str]
     created_at: float = field(default_factory=time.monotonic)
 
@@ -55,11 +56,16 @@ class TieredCache:
 
     def get(
         self, query: str, filters: dict[str, Any] | None = None
-    ) -> tuple[int, list[dict[str, Any]] | None]:
-        """キャッシュ検索。返り値: (tier, results). tier=-1 はミス。
+    ) -> tuple[int, CacheEntry | None]:
+        """キャッシュ検索。返り値: (tier, entry). tier=-1 はミス。
 
         Tier 1 (fuzzy) は Jaccard 類似度 >= fuzzy_threshold のとき適用。
         境界値 (= threshold) はヒット扱い。フィルタ付きクエリは Tier 1 をスキップ。
+
+        ヒット時に ``CacheEntry`` 丸ごとを返すのは、``entry.total`` が
+        ``len(entry.result)`` より大きいケース (結果が内部 cap で truncate
+        されたが COUNT(*) 経由で accurate な総件数が取れている状態) を
+        呼び出し側に伝えるため (#17)。
         """
         now = time.monotonic()
         key = self._cache_key(query, filters)
@@ -70,7 +76,7 @@ class TieredCache:
                 entry = self._store[key]
                 if now - entry.created_at < self._ttl:
                     self._store.move_to_end(key)
-                    return (0, entry.result)
+                    return (0, entry)
                 else:
                     del self._store[key]
 
@@ -89,16 +95,30 @@ class TieredCache:
                         best_entry = entry
 
                 if best_score >= self._fuzzy_threshold and best_entry is not None:
-                    return (1, best_entry.result)
+                    return (1, best_entry)
 
         return (-1, None)
 
-    def put(self, query: str, filters: dict[str, Any] | None, result: list[dict[str, Any]]) -> None:
+    def put(
+        self,
+        query: str,
+        filters: dict[str, Any] | None,
+        result: list[dict[str, Any]],
+        *,
+        total: int,
+    ) -> None:
+        """(query, filters) に対する結果を total 付きで格納する.
+
+        ``total`` は backend が報告した accurate な件数 (COUNT(*) 経由)。
+        ``len(result)`` が内部 cap (``_MAX_RESULTS``) で truncate された場合
+        でも ``total`` は実件数を保持するため、ページング終端判定は
+        ``entry.total`` を見ること (#17)。
+        """
         key = self._cache_key(query, filters)
         tokens = self._tokenize(query)
 
         with self._lock:
-            self._store[key] = CacheEntry(result=result, tokens=tokens)
+            self._store[key] = CacheEntry(result=result, total=total, tokens=tokens)
             self._store.move_to_end(key)
 
             while len(self._store) > self._max_size:

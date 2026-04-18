@@ -63,7 +63,18 @@ class SearchResponse(BaseModel):
         ),
     )
     total: int = Field(
-        description="フィルタ後の総件数 (limit/offset 適用前)",
+        description=(
+            "フィルタ後の総件数 (limit/offset 適用前)。"
+            "内部キャッシュの結果上限 (500) で truncate されず、常に正確な件数を返す"
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "総件数が内部キャッシュ上限 (500) を超え、結果配列には 500 件までしか入らない状態。"
+            "true のとき offset>=500 は空配列を返す (Issue #17)。"
+            "この場合 total は正確な件数だが、ページングで到達できない領域がある点に注意。"
+        ),
     )
     results: list[SearchHit] = Field(
         default_factory=list,

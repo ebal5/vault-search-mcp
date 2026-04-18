@@ -131,6 +131,7 @@ def vault_search(
     return SearchResponse(
         tier=raw["tier"],
         total=raw["total"],
+        truncated=raw.get("truncated", False),
         results=[SearchHit(**hit) for hit in raw["results"]],
     ).model_dump(mode="json")
 

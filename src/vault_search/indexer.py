@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS meta (
 class VaultIndex:
     """SQLite + FTS5 によるインデックスと検索エンジン."""
 
+    # FTS5 / filter-only 結果をキャッシュに保持する上限 (Issue #17)。
+    # ``total`` は別途 COUNT(*) で取得するため ``_MAX_RESULTS`` を超えても
+    # accurate な件数がクライアントに届く。``truncated`` フラグで
+    # 「cache 側で切り詰められたか」を明示する。
+    _MAX_RESULTS = 500
+
     def __init__(self, vault_root: str | Path, db_path: str | Path | None = None):
         self.vault_root = Path(vault_root).resolve()
         if db_path is None:
@@ -389,32 +395,102 @@ class VaultIndex:
             }
 
         # Tier 0-1: キャッシュ
-        tier, cached = self._cache.get(query, filters)
-        if cached is not None:
-            sliced = cached[offset : offset + limit]
+        tier, entry = self._cache.get(query, filters)
+        if entry is not None:
+            sliced = entry.result[offset : offset + limit]
             return {
                 "tier": tier,
-                "total": len(cached),
+                "total": entry.total,
+                "truncated": entry.total > self._MAX_RESULTS,
                 "results": sliced,
             }
 
         # Tier 2: FTS5 — キャッシュ用に上限付きで取得
-        _MAX_RESULTS = 500
         results = self._fts5_search(
             query,
             tags=tags,
             folder=folder,
             metadata_conditions=conditions,
-            limit=_MAX_RESULTS,
+            limit=self._MAX_RESULTS,
         )
-        self._cache.put(query, filters, results)
+        total = self._count_matches(
+            query,
+            tags=tags,
+            folder=folder,
+            metadata_conditions=conditions,
+        )
+        self._cache.put(query, filters, results, total=total)
 
         sliced = results[offset : offset + limit]
         return {
             "tier": 2,
-            "total": len(results),
+            "total": total,
+            "truncated": total > self._MAX_RESULTS,
             "results": sliced,
         }
+
+    def _build_match_clause(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None,
+        folder: str | None,
+        metadata_conditions: list[MetadataCondition] | None,
+    ) -> tuple[list[str], list[Any], bool] | None:
+        """検索 WHERE 句と params を組み立て、``_fts5_search`` と
+        ``_count_matches`` で共有する.
+
+        返り値は ``(from_where_sql_parts, params, is_fts)``。
+        空クエリかつフィルタ無し (= 空結果) のケースでは ``None`` を返す。
+        ``is_fts`` は FTS5 インデックスを経由するか (= ``ORDER BY rank`` /
+        snippet が使える) を示す。
+        """
+        terms = query.strip().split()
+        fts_terms = [t for t in terms if len(t) >= 3]
+        short_terms = [t for t in terms if len(t) < 3]
+
+        has_any_filter = bool(short_terms or tags or folder or metadata_conditions)
+        if not terms and not has_any_filter:
+            return None
+
+        params: list[Any] = []
+        if fts_terms:
+            fts_query = " AND ".join('"' + t.replace('"', '""') + '"' for t in fts_terms)
+            sql_parts: list[str] = [
+                "FROM notes_fts f",
+                "JOIN notes n ON n.id = f.rowid",
+                "WHERE notes_fts MATCH ?",
+            ]
+            params.append(fts_query)
+        else:
+            sql_parts = [
+                "FROM notes n",
+                "WHERE 1=1",
+            ]
+
+        for term in short_terms:
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_param = "%" + escaped + "%"
+            sql_parts.append(r"AND (n.title LIKE ? ESCAPE '\' OR n.content LIKE ? ESCAPE '\')")
+            params.extend([like_param, like_param])
+
+        if folder:
+            clause, folder_params = build_folder_filter_clause(folder, column="n.folder")
+            sql_parts.append(f"AND {clause}")
+            params.extend(folder_params)
+
+        if tags:
+            for tag in tags:
+                sql_parts.append("AND n.tags LIKE ?")
+                params.append(f'%"{tag}"%')
+
+        if metadata_conditions:
+            for cond in metadata_conditions:
+                fragment, fragment_params = build_sql_fragment(cond)
+                sql_parts.append(fragment)
+                params.extend(fragment_params)
+
+        return sql_parts, params, bool(fts_terms)
 
     def _fts5_search(
         self,
@@ -432,87 +508,78 @@ class VaultIndex:
         ``metadata_conditions`` のいずれかがあれば、FTS5 を経由せず
         フィルタ専用パスで DB 全体を走査する。
         """
+        built = self._build_match_clause(
+            query,
+            tags=tags,
+            folder=folder,
+            metadata_conditions=metadata_conditions,
+        )
+        if built is None:
+            return []
+        from_where, params, is_fts = built
+
+        if is_fts:
+            select = (
+                "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,\n"
+                "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,\n"
+                "       rank"
+            )
+            order = "ORDER BY rank"
+        else:
+            select = (
+                "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,\n"
+                "       '' AS snippet,\n"
+                "       0 AS rank"
+            )
+            order = "ORDER BY n.file_mtime DESC"
+
+        sql = "\n".join([select, *from_where, order, "LIMIT ?"])
+        exec_params = [*params, limit]
+
         with self.connection() as conn:
-            terms = query.strip().split()
+            rows = conn.execute(sql, exec_params).fetchall()
 
-            fts_terms = [t for t in terms if len(t) >= 3]
-            short_terms = [t for t in terms if len(t) < 3]
+        return [
+            {
+                "path": r["path"],
+                "title": r["title"],
+                "folder": r["folder"],
+                "tags": json.loads(r["tags"]),
+                "created_at": r["created_at"],
+                "modified_at": r["modified_at"],
+                "snippet": r["snippet"],
+                "score": r["rank"],
+            }
+            for r in rows
+        ]
 
-            has_any_filter = bool(short_terms or tags or folder or metadata_conditions)
-            if not terms and not has_any_filter:
-                # 空クエリかつフィルタ無し — 従来通り空結果
-                return []
+    def _count_matches(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        folder: str | None = None,
+        metadata_conditions: list[MetadataCondition] | None = None,
+    ) -> int:
+        """``_fts5_search`` と同じ WHERE でマッチ件数を数える (Issue #17).
 
-            if fts_terms:
-                # FTS5 phrase 内の `"` は `""` にダブルして構文エラーを防ぐ
-                fts_query = " AND ".join('"' + t.replace('"', '""') + '"' for t in fts_terms)
-                sql_parts: list[str] = [
-                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
-                    "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,",
-                    "       rank",
-                    "FROM notes_fts f",
-                    "JOIN notes n ON n.id = f.rowid",
-                    "WHERE notes_fts MATCH ?",
-                ]
-                params: list[Any] = [fts_query]
-            else:
-                # 全語が3文字未満 or 空クエリ + フィルタ — LIKE/フィルタ専用パス
-                sql_parts = [
-                    "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,",
-                    "       '' AS snippet,",
-                    "       0 AS rank",
-                    "FROM notes n",
-                    "WHERE 1=1",
-                ]
-                params = []
+        ``_MAX_RESULTS`` での truncation を避け、ページング終端をエージェントに
+        正しく伝えるために別クエリで発行する。
+        """
+        built = self._build_match_clause(
+            query,
+            tags=tags,
+            folder=folder,
+            metadata_conditions=metadata_conditions,
+        )
+        if built is None:
+            return 0
+        from_where, params, _is_fts = built
 
-            # 短い語は LIKE で補完。'%' '_' '\' はエスケープしてワイルドカード誤ヒットを防ぐ
-            for term in short_terms:
-                escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                like_param = "%" + escaped + "%"
-                sql_parts.append(r"AND (n.title LIKE ? ESCAPE '\' OR n.content LIKE ? ESCAPE '\')")
-                params.extend([like_param, like_param])
-
-            # メタデータフィルタ — folder は同プレフィックス兄弟の誤マッチを避ける
-            if folder:
-                clause, folder_params = build_folder_filter_clause(folder, column="n.folder")
-                sql_parts.append(f"AND {clause}")
-                params.extend(folder_params)
-
-            if tags:
-                for tag in tags:
-                    sql_parts.append("AND n.tags LIKE ?")
-                    params.append(f'%"{tag}"%')
-
-            if metadata_conditions:
-                for cond in metadata_conditions:
-                    fragment, fragment_params = build_sql_fragment(cond)
-                    sql_parts.append(fragment)
-                    params.extend(fragment_params)
-
-            if fts_terms:
-                sql_parts.append("ORDER BY rank")
-            else:
-                sql_parts.append("ORDER BY n.file_mtime DESC")
-            sql_parts.append("LIMIT ?")
-            params.append(limit)
-
-            sql = "\n".join(sql_parts)
-            rows = conn.execute(sql, params).fetchall()
-
-            return [
-                {
-                    "path": r["path"],
-                    "title": r["title"],
-                    "folder": r["folder"],
-                    "tags": json.loads(r["tags"]),
-                    "created_at": r["created_at"],
-                    "modified_at": r["modified_at"],
-                    "snippet": r["snippet"],
-                    "score": r["rank"],
-                }
-                for r in rows
-            ]
+        sql = "\n".join(["SELECT COUNT(*) AS c", *from_where])
+        with self.connection() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row["c"]) if row is not None else 0
 
     # ------------------------------------------------------------------
     # Structured queries (non-FTS)
