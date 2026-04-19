@@ -1039,3 +1039,96 @@ def test_search_query_with_double_quote_does_not_raise(vault_index: VaultIndex) 
         raise AssertionError(f"FTS5 quote leaked as syntax error: {exc}") from exc
     # 結果の形式が壊れていないこと
     assert isinstance(res["results"], list)
+
+
+# ---------------------------------------------------------------------------
+# Issue #80: metadata_filter_diagnostics when total == 0
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_filter_diagnostics_attached_on_zero_total(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """0 件 + metadata_filter 指定時は diagnostics が付与される (Issue #80).
+
+    エージェントが「キーは存在するが値が全件不一致」なのか区別できるよう、
+    filter に使った各キーの observed_values_sample を添える。
+    """
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    # status キーは存在するが "nonexistent_value" は index 内のどの値とも不一致
+    res = idx.search("", metadata_filter={"status": "nonexistent_value"})
+    assert res["total"] == 0
+    assert "metadata_filter_diagnostics" in res, (
+        "0 件 + metadata_filter 指定時は metadata_filter_diagnostics が必要 (Issue #80)"
+    )
+    diag = res["metadata_filter_diagnostics"]
+    assert isinstance(diag, list) and len(diag) == 1
+    entry = diag[0]
+    assert entry["key"] == "status"
+    assert entry["key_present_in_index"] is True
+    # _META_FILTER_NOTES は status = active / active / draft を持つので観測値は {active, draft}
+    assert set(entry["observed_values_sample"]) == {"active", "draft"}
+
+
+def test_metadata_filter_diagnostics_multiple_keys(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """複数キーの AND で 0 件になったとき、全キーの diagnostics が並ぶ."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    # status=active かつ priority=medium の組合せは存在しない (medium は draft のみ)
+    res = idx.search(
+        "", metadata_filter={"status": "active", "priority": "medium"}
+    )
+    assert res["total"] == 0
+    diag = res["metadata_filter_diagnostics"]
+    keys = {entry["key"] for entry in diag}
+    assert keys == {"status", "priority"}
+    for entry in diag:
+        assert entry["key_present_in_index"] is True
+        assert isinstance(entry["observed_values_sample"], list)
+        assert entry["observed_values_sample"], (
+            f"{entry['key']}: observed_values_sample must be non-empty "
+            f"when key present in index"
+        )
+
+
+def test_metadata_filter_diagnostics_absent_when_results_non_empty(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """>0 件ヒット時は diagnostics を付けない (過剰なノイズを避ける)."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"status": "active"})
+    assert res["total"] > 0
+    assert "metadata_filter_diagnostics" not in res
+
+
+def test_metadata_filter_diagnostics_absent_without_metadata_filter(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """metadata_filter 未指定なら 0 件でも diagnostics は付けない."""
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("queryThatMatchesNothingZZZ")
+    assert res["total"] == 0
+    assert "metadata_filter_diagnostics" not in res
+
+
+def test_metadata_filter_diagnostics_ne_operator(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """ne 演算で 0 件のときも diagnostics が付く.
+
+    全ノートが同じ値を持つ場合、`{ne: X}` で 0 件になる。
+    observed_values_sample が `[X]` だと「全件 X で絞れない」と気付ける。
+    """
+    _root, idx = vault_builder(
+        {
+            "a.md": "---\nstatus: active\n---\nbody\n",
+            "b.md": "---\nstatus: active\n---\nbody\n",
+        }
+    )
+    res = idx.search("", metadata_filter={"status": {"ne": "active"}})
+    assert res["total"] == 0
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    assert diag[0]["key"] == "status"
+    assert diag[0]["observed_values_sample"] == ["active"]
