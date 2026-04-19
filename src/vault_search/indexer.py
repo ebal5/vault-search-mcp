@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,6 +29,7 @@ from .filter import (
     parse_metadata_filter,
 )
 from .parser import ParsedNote, parse_note
+from .stats import FrontmatterKeyInfo
 from .validation import normalize_folder
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,75 @@ def _collect_nested_keys(obj: Any, prefix: str, out: set[str]) -> None:
         out.add(key)
         if isinstance(v, dict):
             _collect_nested_keys(v, key, out)
+
+
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _infer_value_type(value: Any) -> str:
+    """value 1 つから value_type を推論する (None は呼び出し側で除外済み前提)."""
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, str) and value in ("true", "false"):
+        return "boolean"
+    if isinstance(value, str) and _NUMBER_RE.fullmatch(value):
+        return "number"
+    return "string"
+
+
+def _collect_key_info(
+    obj: Any,
+    prefix: str,
+    value_counters: dict[str, Counter[str]],
+    type_sets: dict[str, set[str]],
+    note_counts: dict[str, int],
+) -> None:
+    """frontmatter dict を再帰 walk し、各 key の value_counter / type_set / note_count を更新する.
+
+    - 親 dict キー (e.g. 'meta') も含める (value_type='object'、#136 既存契約)
+    - ネスト dict は dotted key として葉ノードを別に集計
+    - None は note_count から除外
+    - 空文字は sample_values (counter) からは除外するが note_count には含める
+    - list 要素の dict は走査しない (SQL の $.tags.x パス不成立のため)
+    """
+    if not isinstance(obj, dict):
+        return
+    for k, v in obj.items():
+        key = f"{prefix}.{k}" if prefix else k
+
+        # None は全集計から除外
+        if v is None:
+            continue
+
+        # note_count は常に +1 (空文字も含む)
+        note_counts[key] = note_counts.get(key, 0) + 1
+
+        # value_type 推論
+        vtype = _infer_value_type(v)
+        type_sets.setdefault(key, set()).add(vtype)
+
+        # sample_values への追加
+        # 親 dict (object) は sample_values を持たない → Counter エントリを作らないが
+        # value_counters に key が登録される必要はある (result イテレート用)
+        counter = value_counters.setdefault(key, Counter())
+
+        if isinstance(v, dict):
+            # 親キーとして登録後、子を再帰 walk
+            _collect_key_info(v, key, value_counters, type_sets, note_counts)
+        elif isinstance(v, list):
+            # 配列全体の JSON 文字列表現を sample に入れる (要素別展開はしない)
+            sample_repr = json.dumps(v, ensure_ascii=False)
+            counter[sample_repr] += 1
+        elif isinstance(v, str):
+            # 空文字 / whitespace-only は sample から除外 (note_count は +1 済)
+            if v.strip():
+                counter[v] += 1
+        else:
+            # _normalize_fm により scalar は str/list/dict/None に収束しているはず
+            # 念のため str 化
+            counter[str(v)] += 1
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +198,7 @@ class VaultIndex:
 
         self._cache = TieredCache()
         self._lock = threading.Lock()
-        self._frontmatter_keys_cache: list[str] | None = None
+        self._frontmatter_keys_cache: list[FrontmatterKeyInfo] | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -408,7 +480,9 @@ class VaultIndex:
         # metadata_filter が指定された場合のみ known_keys を取得する
         # (filter なしでは不要なので呼ばない)。list_frontmatter_keys() は
         # 書込み経路で invalidate される in-memory cache 付き (#118)。
-        known_keys = self.list_frontmatter_keys() if metadata_filter else None
+        known_keys: list[str] | None = (
+            [info.key for info in self.list_frontmatter_keys()] if metadata_filter else None
+        )
         conditions = parse_metadata_filter(metadata_filter, known_keys=known_keys)
 
         filters: dict[str, Any] | None = None
@@ -709,13 +783,16 @@ class VaultIndex:
             ).fetchall()
             return [{"folder": r["folder"], "count": r["count"]} for r in rows]
 
-    def list_frontmatter_keys(self) -> list[str]:
-        """Vault 内 frontmatter のキーをソート済みで返す.
+    def list_frontmatter_keys(self) -> list[FrontmatterKeyInfo]:
+        """Vault 内 frontmatter のキー別メタ情報をソート済みで返す (Issue #20).
 
         トップレベルキーに加え、ネスト dict 値は dotted key (``meta.author``)
         としても含まれる (Issue #136)。validate_identifier / SQL が dotted 形式を
         受理するので、known_keys 側も一貫して dotted を公開し
         ``metadata_filter={"meta.author": ...}`` の false positive UNKNOWN を防ぐ。
+
+        各要素は :class:`FrontmatterKeyInfo` で value_type / sample_values /
+        note_count を持つ。
 
         初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
         invalidate されるまでキャッシュを返す (Issue #118 / #10)。
@@ -724,18 +801,48 @@ class VaultIndex:
             self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
         return list(self._frontmatter_keys_cache)
 
-    def _query_frontmatter_keys_from_db(self) -> list[str]:
-        """Frontmatter のキー集合 (トップレベル + nested dotted) を DB から取得する."""
+    def _query_frontmatter_keys_from_db(self) -> list[FrontmatterKeyInfo]:
+        """Frontmatter のキー別メタ情報 (型推論 + sample_values + note_count) を DB から取得する."""
+        value_counters: dict[str, Counter[str]] = {}
+        type_sets: dict[str, set[str]] = {}
+        note_counts: dict[str, int] = {}
+
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT frontmatter FROM notes WHERE json_valid(frontmatter)"
             ).fetchall()
-        keys: set[str] = set()
+
         for row in rows:
             fm = json.loads(row["frontmatter"])
-            if isinstance(fm, dict):
-                _collect_nested_keys(fm, "", keys)
-        return sorted(keys)
+            if not isinstance(fm, dict):
+                continue
+            _collect_key_info(fm, "", value_counters, type_sets, note_counts)
+
+        result: list[FrontmatterKeyInfo] = []
+        for key in sorted(value_counters.keys()):
+            types = type_sets[key]
+            if len(types) == 1:
+                vtype = next(iter(types))
+            else:
+                vtype = "mixed"
+
+            # top-5 頻度降順、同頻度は辞書順
+            counter = value_counters[key]
+            samples_sorted = sorted(
+                counter.items(),
+                key=lambda kv: (-kv[1], kv[0]),
+            )[:5]
+            samples = [v for v, _ in samples_sorted]
+
+            result.append(
+                FrontmatterKeyInfo(
+                    key=key,
+                    value_type=vtype,
+                    sample_values=samples,
+                    note_count=note_counts[key],
+                )
+            )
+        return result
 
     def stats(self) -> dict[str, Any]:
         """インデックスの統計情報."""

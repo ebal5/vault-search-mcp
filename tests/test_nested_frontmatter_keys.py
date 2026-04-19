@@ -40,7 +40,7 @@ def test_list_frontmatter_keys_includes_nested_dotted_keys(
     nested_index: VaultIndex,
 ) -> None:
     """ネスト dict 値は dotted key として known_keys に現れる."""
-    keys = set(nested_index.list_frontmatter_keys())
+    keys = {info.key for info in nested_index.list_frontmatter_keys()}
     assert "meta" in keys, "トップレベルキーも従来通り含まれる"
     assert "meta.author" in keys, "ネスト子キーも dotted で含まれる必要がある (#136)"
     assert "meta.tag" in keys

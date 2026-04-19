@@ -121,12 +121,17 @@ def test_frontmatter_keys_match_vault(
     assert isinstance(frontmatter_keys, list) and frontmatter_keys, (
         f"frontmatter_keys must be a non-empty list, got {frontmatter_keys!r}"
     )
+    # frontmatter_keys は list[dict] (FrontmatterKeyInfo の model_dump 結果)
+    assert all(isinstance(k, dict) for k in frontmatter_keys), (
+        "frontmatter_keys の各要素は dict (FrontmatterKeyInfo) であるべき"
+    )
     all_fm_keys: set[str] = set()
     for note in vault_index.recent_notes(limit=100):
         detail = vault_index.get_note(note["path"])
         if detail:
             all_fm_keys.update((detail.get("frontmatter") or {}).keys())
-    for key in frontmatter_keys:
+    for info in frontmatter_keys:
+        key = info["key"]
         assert key in all_fm_keys, (
             f"schema key {key!r} not found in any vault note (vault keys: {sorted(all_fm_keys)})"
         )

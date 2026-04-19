@@ -296,7 +296,7 @@ def test_dotted_nested_key_returns_key_info(
         f"meta.author='foo' → value_type='string' (got {key_map['meta.author'].value_type!r})"
     )
 
-    # 親 dict キー "meta" は value_type='object' として保持される (#136 既存契約 + filter 不可を明示)
+    # 親 dict キー "meta" は value_type='object' として保持される (#136 既存契約 + filter 不可を明示)  # noqa: E501
     assert "meta" in key_map, (
         f"親 dict キー 'meta' も FrontmatterKeyInfo として含まれるべき (#136, keys={list(key_map)})"
     )
