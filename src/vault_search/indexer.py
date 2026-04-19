@@ -29,7 +29,7 @@ from .filter import (
     parse_metadata_filter,
 )
 from .parser import ParsedNote, parse_note
-from .stats import FrontmatterKeyInfo
+from .schema_meta import FrontmatterKeyInfo
 from .validation import normalize_folder
 
 logger = logging.getLogger(__name__)
