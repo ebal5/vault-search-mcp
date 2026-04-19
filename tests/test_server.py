@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from vault_search.schemas import (
     SearchResponse,
     TagCount,
 )
+from vault_search.watcher import VaultWatcher
 
 
 @pytest.fixture(autouse=True)
@@ -222,6 +224,74 @@ def test_mcp_tool_vault_reindex(vault_index: VaultIndex) -> None:
     # added/updated/deleted/skipped/errors を必須キーで持つ flat JSON
     for key in ("added", "updated", "deleted", "skipped", "errors"):
         assert res[key] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Watcher observability (#39) — vault_reindex が watcher 健全性を返し、
+# main() が watcher.stop() を try/finally で保証する。
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_vault_reindex_watcher_none_defaults(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_watcher=None (--no-watch) でも watcher_failure_count / last_error はデフォルト (#39)."""
+    monkeypatch.setattr(server_mod, "_watcher", None)
+    fn = _fn(server_mod.vault_reindex)
+    res = fn(False)
+    assert res["watcher_failure_count"] == 0
+    assert res["last_watcher_error_at"] is None
+
+
+def test_mcp_tool_vault_reindex_includes_watcher_failures(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_watcher に failure 履歴があれば vault_reindex の戻りに反映される (#39)."""
+    watcher = VaultWatcher(vault_index)
+    # 内部状態を直接設定 (実 flush を待つと flaky になるため)
+    with watcher._lock:
+        watcher._watcher_failure_count = 2
+        watcher._last_watcher_error_at = datetime(2026, 4, 19, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(server_mod, "_watcher", watcher)
+
+    fn = _fn(server_mod.vault_reindex)
+    res = fn(False)
+    assert res["watcher_failure_count"] == 2
+    # JSON 表現は Pydantic のデフォルト datetime 直列化 (ISO 8601)
+    assert res["last_watcher_error_at"] == "2026-04-19T12:00:00Z"
+
+
+def test_main_stops_watcher_on_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """mcp.run() が例外を起こしても _watcher.stop() が呼ばれる (#39 try/finally)."""
+    import sys as _sys
+
+    vault = tmp_path / "main_vault"
+    vault.mkdir()
+    monkeypatch.setattr(_sys, "argv", ["vault-search-mcp", "--vault", str(vault)])
+
+    stop_calls: list[int] = []
+
+    class _FakeWatcher:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def start(self) -> bool:
+            return True
+
+        def stop(self) -> None:
+            stop_calls.append(1)
+
+    monkeypatch.setattr(server_mod, "VaultWatcher", _FakeWatcher)
+
+    def _raise(*_a: Any, **_kw: Any) -> None:
+        raise RuntimeError("mcp dead")
+
+    monkeypatch.setattr(server_mod.mcp, "run", _raise)
+
+    with pytest.raises(RuntimeError, match="mcp dead"):
+        server_mod.main()
+
+    assert stop_calls == [1]
 
 
 def test_mcp_tool_vault_stats(vault_index: VaultIndex) -> None:

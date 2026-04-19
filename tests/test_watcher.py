@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -266,3 +267,57 @@ def test_watcher_logs_indexed_at_info_on_flush(
 
     info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert any("indexed:" in m for m in info_msgs), info_msgs
+
+
+# ---------------------------------------------------------------------------
+# Failure observability (#39) — agent が watcher の健全性を把握できるよう
+# ``VaultWatcher`` が failure_count と last_error_at を公開する。
+# ---------------------------------------------------------------------------
+
+
+def test_watcher_failure_stats_initial(vault: Path, index: VaultIndex) -> None:
+    """新規 VaultWatcher は failure_count=0, last_error_at=None (#39)."""
+    watcher = VaultWatcher(index)
+    stats = watcher.failure_stats()
+    assert stats["watcher_failure_count"] == 0
+    assert stats["last_watcher_error_at"] is None
+
+
+def test_watcher_flush_records_failure(
+    vault: Path, index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_flush`` 中に update_single が raise すると failure_count インクリメント (#39)."""
+    watcher = VaultWatcher(index)
+
+    def _raise(_rel_path: str) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(index, "update_single", _raise)
+    watcher._pending["note.md"] = time.monotonic()
+
+    before = datetime.now(timezone.utc)
+    watcher._flush()
+    after = datetime.now(timezone.utc)
+
+    stats = watcher.failure_stats()
+    assert stats["watcher_failure_count"] == 1
+    ts = stats["last_watcher_error_at"]
+    assert ts is not None
+    assert before <= ts <= after
+
+
+def test_watcher_flush_accumulates_multiple_failures(
+    vault: Path, index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """複数ファイルの失敗が独立にカウントされる (#39)."""
+    watcher = VaultWatcher(index)
+
+    def _raise(_rel_path: str) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(index, "update_single", _raise)
+    watcher._pending = {"a.md": time.monotonic(), "b.md": time.monotonic()}
+    watcher._flush()
+
+    stats = watcher.failure_stats()
+    assert stats["watcher_failure_count"] == 2
