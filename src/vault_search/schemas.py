@@ -86,9 +86,12 @@ class MetadataFilterDiagnostic(BaseModel):
         default_factory=list,
         description=(
             "このキーで実際に観測されている値のサンプル (頻度降順、最大 5 件)。"
-            "正規化済みの文字列表現。配列型 frontmatter は配列全体の JSON 文字列表現で入る "
-            '(例: categories=[work,urgent] の sample は \'["work", "urgent"]\' — '
-            "要素 'work' 単体のサンプルではない。FrontmatterKeyInfo.sample_values と同じ契約)。"
+            "正規化済みの文字列表現。配列型 frontmatter (value_type='array') は "
+            "**個別要素ごと** の頻度集計を返す (Issue #190): "
+            "categories=[work,urgent], [research] の sample は "
+            '["research", "urgent", "work"] — エージェントは sample をそのまま '
+            "filter value にコピペして retry できる。scalar 型 (string/number/boolean) は "
+            "FrontmatterKeyInfo.sample_values と同じ値表現を返す。"
             "ここに含まれない値を filter に指定していた場合、typo または存在しない値。"
         ),
     )

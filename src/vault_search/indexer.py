@@ -569,12 +569,12 @@ class VaultIndex:
             )
         return result
 
-    @staticmethod
     def _build_metadata_filter_diagnostics(
+        self,
         conditions: list[MetadataCondition],
         key_infos: list[FrontmatterKeyInfo],
     ) -> list[dict[str, Any]]:
-        """Issue #80: 0 件 + metadata_filter 指定時の per-key 診断情報を組み立てる.
+        """Issue #80 / #190: 0 件 + metadata_filter 指定時の per-key 診断情報を組み立てる.
 
         `key_infos` (``list_frontmatter_keys()`` の結果) をキー名で索引化し、
         各 condition のキーを突き合わせて ``key_present_in_index`` /
@@ -583,17 +583,68 @@ class VaultIndex:
         照合済みなので、ここに渡る cond.key は必ず info_by_key にヒットする。
         不一致は validation 段階のバグなので ``KeyError`` を silently catch せず
         surface させる (防衛 fallback は dead code になる)。
+
+        Issue #190: ``value_type == "array"`` のキーに限り
+        ``observed_values_sample`` を **要素別** の頻度集計 top-5 に差し替える
+        (``FrontmatterKeyInfo.sample_values`` が emit する配列全体 JSON 文字列
+        ``'["work", "urgent"]'`` ではなく、個別要素 ``"work"`` / ``"urgent"`` を
+        返す)。エージェントが diagnostics の sample をそのまま filter value に
+        コピペして retry できる UX を実現する。SQL 1 発 (``json_each`` 集計) を
+        array 型キーごとに 0 件時のみ走らせるので性能影響は小さい。
         """
         info_by_key = {info.key: info for info in key_infos}
+        array_keys = [
+            cond.key for cond in conditions if info_by_key[cond.key].value_type == "array"
+        ]
+        array_samples = self._query_array_element_samples(array_keys) if array_keys else {}
+
         return [
             {
                 "key": cond.key,
                 "key_present_in_index": True,
                 "value_type": info_by_key[cond.key].value_type,
-                "observed_values_sample": list(info_by_key[cond.key].sample_values),
+                "observed_values_sample": (
+                    array_samples.get(cond.key, [])
+                    if info_by_key[cond.key].value_type == "array"
+                    else list(info_by_key[cond.key].sample_values)
+                ),
             }
             for cond in conditions
         ]
+
+    def _query_array_element_samples(self, keys: list[str]) -> dict[str, list[str]]:
+        """配列型 frontmatter の各要素を frequency 集計し top-5 を返す (Issue #190).
+
+        ``cond.key`` は :func:`validate_identifier` 通過済みなので
+        ``$.<key>`` JSON path への直接埋め込みは安全 (``filter.build_sql_fragment``
+        と同じ trust boundary)。値プレースホルダは常に ``?``。
+
+        ``json_type(frontmatter, ?) = 'array'`` で防御的に絞り込み、mixed 型
+        キーで scalar 行が混入しても要素扱いされないようにする (現状の caller は
+        ``value_type='array'`` のみを渡すが、再利用時の safety net)。
+        """
+        result: dict[str, list[str]] = {}
+        if not keys:
+            return result
+        with self.connection() as conn:
+            for key in keys:
+                json_path = f"$.{key}"
+                rows = conn.execute(
+                    "SELECT value, COUNT(*) AS cnt "
+                    "FROM notes, json_each(json_extract(frontmatter, ?)) "
+                    "WHERE json_extract(frontmatter, ?) IS NOT NULL "
+                    "  AND json_type(frontmatter, ?) = 'array' "
+                    "  AND value IS NOT NULL "
+                    "GROUP BY value "
+                    "ORDER BY cnt DESC, value ASC "
+                    "LIMIT 5",
+                    (json_path, json_path, json_path),
+                ).fetchall()
+                # frontmatter 値は parser._normalize_fm により index 時に文字列化
+                # 済み。念のため str() で wrap し、SQLite が int/float を返した
+                # 場合 (JSON 数値) も spec 通り str list を返す。
+                result[key] = [str(row["value"]) for row in rows]
+        return result
 
     def _build_match_clause(
         self,
