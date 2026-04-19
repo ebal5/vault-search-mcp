@@ -12,7 +12,6 @@ input_schema / output_schema / annotations) を組み立て、AI エージェン
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,7 +19,6 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
-from .schema_meta import FrontmatterKeyInfo
 from .schemas import (
     FolderCount,
     NoteDetail,
@@ -34,7 +32,6 @@ from .validation import IDENTIFIER_JSON_PATTERN, IDENTIFIER_MAX_LEN, LIMIT_MAX
 __all__ = [
     "TOOL_ENTRIES",
     "TOOL_SPECS",
-    "build_schema_payload",
     "inject_rich_output_schemas",
 ]
 
@@ -321,27 +318,14 @@ def _build_tool_entry(spec: _ToolSchemaSpec, tool_name: str) -> dict[str, Any]:
 
 # ``TOOL_ENTRIES`` は各ツールの (description / input_schema / output_schema) を
 # 束ねる唯一のカノニカルソース。以下 2 経路から参照される:
-#   1. ``build_schema_payload`` → ``schema://tools`` リソース (AI エージェント向け自己記述)
+#   1. ``resources.build_schema_payload`` → ``schema://tools`` リソース
+#      (AI エージェント向け自己記述)
 #   2. ``inject_rich_output_schemas`` → MCP ``tools/list`` の ``outputSchema``
 # FastMCP は ``dict[str, Any]`` 戻り型から rich schema を自動生成できないため、
 # 登録後に本エントリの ``output_schema`` を手動で差し込んで両経路の出力を一致させる。
 TOOL_ENTRIES: dict[str, dict[str, Any]] = {
     name: _build_tool_entry(spec, name) for name, spec in TOOL_SPECS.items()
 }
-
-
-def build_schema_payload(
-    frontmatter_keys: Iterable[FrontmatterKeyInfo],
-) -> dict[str, Any]:
-    """schema://tools resource payload の frontmatter_keys エンベロープ.
-
-    呼び出し側は ``VaultIndex.list_frontmatter_keys()`` 相当の反復可能オブジェクトを
-    そのまま渡す。
-    """
-    return {
-        "tools": TOOL_ENTRIES,
-        "frontmatter_keys": [item.model_dump(mode="json") for item in frontmatter_keys],
-    }
 
 
 # ---------------------------------------------------------------------------

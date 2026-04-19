@@ -53,19 +53,19 @@ def _search_hit_properties(vault_search_output_schema: dict[str, Any]) -> dict[s
 
 
 # ---------------------------------------------------------------------------
-# build_schema_payload (schemas.py に追加予定)
+# build_schema_payload (resources.py)
 # ---------------------------------------------------------------------------
 
 
 def test_build_schema_payload_returns_dict(vault_index: VaultIndex) -> None:
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert isinstance(payload, dict)
 
 
 def test_build_schema_payload_has_tools_key(vault_index: VaultIndex) -> None:
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "tools" in payload
@@ -73,7 +73,7 @@ def test_build_schema_payload_has_tools_key(vault_index: VaultIndex) -> None:
 
 
 def test_build_schema_payload_contains_all_tool_names(vault_index: VaultIndex) -> None:
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     tool_names = set(payload["tools"].keys())
@@ -82,7 +82,7 @@ def test_build_schema_payload_contains_all_tool_names(vault_index: VaultIndex) -
 
 
 def test_each_tool_entry_has_input_and_output_schema(vault_index: VaultIndex) -> None:
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     for name in EXPECTED_TOOL_NAMES:
@@ -100,7 +100,7 @@ def test_vault_search_output_schema_describes_search_hit_fields(
     """SearchHit の全フィールドが vault_search の output_schema 内に存在し、
     それぞれ非空文字列の description を持つことを確認。
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     out_schema = payload["tools"]["vault_search"]["output_schema"]
@@ -119,7 +119,7 @@ def test_frontmatter_keys_listed(vault_index: VaultIndex) -> None:
     """ルートに 'frontmatter_keys' が list[dict] として存在し、
     tmp_vault の Welcome.md に含まれるキーを少なくとも含むこと。
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "frontmatter_keys" in payload
@@ -162,7 +162,7 @@ def test_server_exposes_schema_resource_handler(
     build_schema_payload と同じ dict を返すこと。
     """
     from vault_search import server as server_mod
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     monkeypatch.setattr(server_mod, "_index", vault_index)
 
@@ -203,7 +203,7 @@ def test_list_returning_tools_have_envelope_output_schema(vault_index: VaultInde
     - vault_folders -> {"folders": [FolderCount, ...]}
     - vault_recent  -> {"notes":   [RecentNote,  ...]}
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     for tool_name, env_key in [
@@ -234,7 +234,7 @@ def test_metadata_filter_grammar_structured_in_schema(vault_index: VaultIndex) -
     JSON Schema に露出していないと、エージェントが MongoDB 風の `$in` や
     `{"eq": "..."}` をハルシネーションしてしまう。
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     mf_schema = payload["tools"]["vault_search"]["input_schema"]["properties"]["metadata_filter"]
@@ -272,7 +272,7 @@ def test_ne_operator_description_mentions_missing_key_behavior(vault_index: Vaul
     - ne プロパティが description を持つ
     - description に「キー欠落」「存在しない」「3値」「missing」のいずれかを含む
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     mf_schema = payload["tools"]["vault_search"]["input_schema"]["properties"]["metadata_filter"]
@@ -308,7 +308,7 @@ def test_vault_get_note_output_schema_has_top_level_object_shape(vault_index: Va
     全 7 ツールで ``{"type": "object", "properties": {...}}`` 形を維持する。
     エージェントの schema クローラが ``type == 'object'`` 前提のことがあるため。
     """
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     schema = payload["tools"]["vault_get_note"]["output_schema"]
@@ -337,7 +337,7 @@ def test_read_resource_schema_tools_returns_payload(
     URI 登録チェックだけでなく実際の read_resource 呼び出しまで通す regression guard。
     """
     from vault_search import server as server_mod
-    from vault_search.mcp_contract import build_schema_payload
+    from vault_search.resources import build_schema_payload
 
     monkeypatch.setattr(server_mod, "_index", vault_index)
 

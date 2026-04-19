@@ -30,9 +30,9 @@ from .indexer import VaultIndex
 from .mcp_contract import (
     _FOLDER_DESCRIPTION,
     TOOL_SPECS,
-    build_schema_payload,
     inject_rich_output_schemas,
 )
+from .resources import build_schema_payload
 from .schemas import (
     FolderCount,
     NoteDetail,

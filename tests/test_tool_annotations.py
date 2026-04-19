@@ -27,7 +27,7 @@ import pytest
 
 from vault_search import server as server_mod
 from vault_search.indexer import VaultIndex
-from vault_search.mcp_contract import build_schema_payload
+from vault_search.resources import build_schema_payload
 
 # 期待 annotations マトリクス (MCP spec 準拠).
 # ``None`` は「MCP spec で意味を持たないため意図的に未設定」を示す。
