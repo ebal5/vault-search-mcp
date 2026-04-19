@@ -482,22 +482,31 @@ def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None
     )
 
 
-def test_recommended_flow_tool_names_in_tool_specs(vault_index: VaultIndex) -> None:
-    """recommended_flow の各 step.tool は実在する MCP tool 名であること.
+def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
+    """recommended_flow の各 step.tool は実際に MCP 経由で呼出可能であること (#194).
 
-    TOOL_SPECS と drift したら即検知 (典型: tool rename / 削除時の取り残し)。
+    本質的に守りたい invariant は「flow に書いた tool が agent から実際に
+    invoke 可能であること」で、`TOOL_SPECS` 登録 ≠ MCP server 登録の drift
+    シナリオ (例: `@mcp.tool()` 登録漏れ) が TOOL_SPECS.keys() ベースの guard
+    を素通りしてしまう。`server.mcp.list_tools()` の実登録結果を live 参照して
+    drift の最終層を pin する。
+
     resource URI (schema://tools) は tool 名フィールドに混ぜず overview で触れる。
     """
-    from vault_search.mcp_contract import TOOL_SPECS
+    from vault_search import server as server_mod
     from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     flow = payload["recommended_flow"]
-    tool_names = {step["tool"] for step in flow}
-    unknown = tool_names - set(TOOL_SPECS.keys())
-    assert not unknown, (
-        f"recommended_flow references unknown tool names: {unknown}\n"
-        f"allowed (TOOL_SPECS): {sorted(TOOL_SPECS.keys())}"
+    flow_tools = {step["tool"] for step in flow}
+
+    tools = asyncio.run(server_mod.mcp.list_tools())
+    invocable = {t.name for t in tools}
+
+    missing = flow_tools - invocable
+    assert not missing, (
+        f"recommended_flow references tools not invocable via MCP: {missing}\n"
+        f"invocable (server.mcp.list_tools): {sorted(invocable)}"
     )
 
 
