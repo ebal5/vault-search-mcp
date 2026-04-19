@@ -199,6 +199,11 @@ class VaultIndex:
         self._cache = TieredCache()
         self._lock = threading.Lock()
         self._frontmatter_keys_cache: list[FrontmatterKeyInfo] | None = None
+        # Issue #185: search() hot path 用の軽量 (leaf, object) key 集合。
+        # list_frontmatter_keys() の sample_values / 型推論 / Pydantic 構築を
+        # 伴わないため cache miss 直後のコストを大幅に削減できる。
+        # _invalidate_caches() が両 cache を同時に落とすことで drift を防ぐ。
+        self._known_keys_cache: tuple[frozenset[str], frozenset[str]] | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -424,15 +429,18 @@ class VaultIndex:
             return True
 
     def _invalidate_caches(self) -> None:
-        """書込み経路で tiered cache と frontmatter_keys cache を同時に落とす.
+        """書込み経路で tiered cache / frontmatter_keys cache / known_keys cache を同時に落とす.
 
-        ``_frontmatter_keys_cache`` の書込みは ``self._lock`` 下で行い、
-        ``list_frontmatter_keys()`` の snapshot pattern と対称化する
-        (Round 2 E1)。``_cache.invalidate()`` は自身で thread-safe。
+        ``_frontmatter_keys_cache`` / ``_known_keys_cache`` の書込みは ``self._lock``
+        下で行い、``list_frontmatter_keys()`` / ``known_keys_set()`` の snapshot
+        pattern と対称化する (Round 2 E1)。``_cache.invalidate()`` は自身で
+        thread-safe。両 cache を同一箇所で落とすことで drift を構造的に防ぐ
+        (Issue #185)。
         """
         self._cache.invalidate()
         with self._lock:
             self._frontmatter_keys_cache = None
+            self._known_keys_cache = None
 
     # ------------------------------------------------------------------
     # Search — 3段パイプライン
@@ -484,20 +492,19 @@ class VaultIndex:
 
         # Validate (raises ValidationError on malformed input).
         # metadata_filter が指定された場合のみ known_keys を取得する
-        # (filter なしでは不要なので呼ばない)。list_frontmatter_keys() は
-        # 書込み経路で invalidate される in-memory cache 付き (#118)。
+        # (filter なしでは不要なので呼ばない)。Issue #185: ここでは軽量の
+        # ``known_keys_set()`` (leaf/object の frozenset のみ) を使い、
+        # sample_values / 型推論 / Pydantic 構築を伴う ``list_frontmatter_keys()``
+        # は 0 件 diagnostics 経路まで遅延する。
         # value_type='object' の親 dict キーは filter 不可 (SQL 上は dict が返り
         # 文字列比較で常に false → silent 0 件) なので known_keys から除外し、
         # agent が誤って親キーで filter すると UNKNOWN_FRONTMATTER_KEY で通知する。
         # object_keys を別途渡すことで、UNKNOWN エラーメッセージに
         # 「親 dict なので dotted leaf key を使え」の hint を付与する (Round 2 E2)。
-        known_keys: list[str] | None = None
-        object_keys: list[str] = []
-        key_infos: list[FrontmatterKeyInfo] = []
+        known_keys: frozenset[str] | None = None
+        object_keys: frozenset[str] = frozenset()
         if metadata_filter:
-            key_infos = self.list_frontmatter_keys()
-            known_keys = [info.key for info in key_infos if info.value_type != "object"]
-            object_keys = [info.key for info in key_infos if info.value_type == "object"]
+            known_keys, object_keys = self.known_keys_set()
         conditions = parse_metadata_filter(
             metadata_filter, known_keys=known_keys, object_keys=object_keys
         )
@@ -521,8 +528,9 @@ class VaultIndex:
                 "results": sliced,
             }
             if metadata_filter and entry.total == 0:
+                # Issue #185: diagnostics 経路でのみ重量 API を呼ぶ (遅延取得)。
                 result["metadata_filter_diagnostics"] = self._build_metadata_filter_diagnostics(
-                    conditions, key_infos
+                    conditions, self.list_frontmatter_keys()
                 )
             return result
 
@@ -555,8 +563,9 @@ class VaultIndex:
             "results": sliced,
         }
         if metadata_filter and total == 0:
+            # Issue #185: diagnostics 経路でのみ重量 API を呼ぶ (遅延取得)。
             result["metadata_filter_diagnostics"] = self._build_metadata_filter_diagnostics(
-                conditions, key_infos
+                conditions, self.list_frontmatter_keys()
             )
         return result
 
@@ -859,6 +868,75 @@ class VaultIndex:
                 self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
             snapshot = self._frontmatter_keys_cache
         return list(snapshot)
+
+    def known_keys_set(self) -> tuple[frozenset[str], frozenset[str]]:
+        """metadata_filter 検証用の軽量 (leaf, object) key 集合を返す (Issue #185).
+
+        ``search()`` の hot path で ``list_frontmatter_keys()`` の重量処理
+        (Counter / top-5 sort / 型推論 / Pydantic 構築) を回避するための
+        軽量 API。``_build_metadata_filter_diagnostics`` 等の schema 記述を
+        必要とする経路では従来通り ``list_frontmatter_keys()`` を使う。
+
+        戻り値は ``(leaf_keys, object_keys)`` の二つ組:
+
+        - ``leaf_keys``: ``metadata_filter`` の ``known_keys`` として通せる
+          key 集合。dotted leaf key (``meta.author`` 等) を含む。
+          ``value_type='object'`` 単独のキーは除外
+          (dict 値は str 比較で常に不一致 → silent 0 件になるため)。
+        - ``object_keys``: 常に dict として観測されたキー。
+          UNKNOWN_FRONTMATTER_KEY エラー時の hint 生成に使う。
+          ``leaf_keys`` との集合演算で、片方で観測された mixed 型は
+          ``leaf_keys`` 側に振る (``list_frontmatter_keys`` の
+          ``value_type='mixed'`` → ``known_keys`` 採用と一致)。
+
+        並行制御は ``list_frontmatter_keys()`` と同じ double-checked locking
+        + snapshot pattern (Round 2 E1)。``_invalidate_caches()`` で
+        ``_frontmatter_keys_cache`` と同時に落ちる。
+        """
+        with self._lock:
+            if self._known_keys_cache is None:
+                self._known_keys_cache = self._compute_known_keys_from_db()
+            snapshot = self._known_keys_cache
+        return snapshot
+
+    def _compute_known_keys_from_db(self) -> tuple[frozenset[str], frozenset[str]]:
+        """DB から (leaf, object) key 集合だけを抽出する軽量 scan (Issue #185).
+
+        ``_query_frontmatter_keys_from_db`` のサブセット相当だが、
+        Counter / 型推論 / Pydantic 構築を伴わない。
+        """
+        leaf: set[str] = set()
+        obj: set[str] = set()
+
+        def _walk(node: Any, prefix: str) -> None:
+            if not isinstance(node, dict):
+                return
+            for k, v in node.items():
+                key = f"{prefix}.{k}" if prefix else k
+                if v is None:
+                    # None は全集計から除外 (list_frontmatter_keys と同じ規約)。
+                    continue
+                if isinstance(v, dict):
+                    obj.add(key)
+                    _walk(v, key)
+                else:
+                    leaf.add(key)
+
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT frontmatter FROM notes WHERE json_valid(frontmatter)"
+            ).fetchall()
+        for row in rows:
+            fm = json.loads(row["frontmatter"])
+            if not isinstance(fm, dict):
+                continue
+            _walk(fm, "")
+
+        # mixed (object と非-object を両方観測した) key は leaf 扱いに寄せる。
+        # ``_query_frontmatter_keys_from_db`` 側で value_type='mixed' が
+        # known_keys (leaf) に入る挙動と一致させるため。
+        obj -= leaf
+        return frozenset(leaf), frozenset(obj)
 
     def _query_frontmatter_keys_from_db(self) -> list[FrontmatterKeyInfo]:
         """Frontmatter のキー別メタ情報 (型推論 + sample_values + note_count) を DB から取得する."""

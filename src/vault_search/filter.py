@@ -33,7 +33,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -117,8 +117,8 @@ class MetadataCondition:
 
 def parse_metadata_filter(
     raw: dict[str, Any] | None,
-    known_keys: Sequence[str] | None = None,
-    object_keys: Sequence[str] = (),
+    known_keys: Collection[str] | None = None,
+    object_keys: Collection[str] = (),
 ) -> list[MetadataCondition]:
     """``metadata_filter`` dict を :class:`MetadataCondition` リストへ変換する.
 
