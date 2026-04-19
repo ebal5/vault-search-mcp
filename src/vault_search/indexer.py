@@ -35,21 +35,6 @@ from .validation import normalize_folder
 logger = logging.getLogger(__name__)
 
 
-def _collect_nested_keys(obj: Any, prefix: str, out: set[str]) -> None:
-    """frontmatter dict を再帰 walk して dotted key を ``out`` に収集する.
-
-    array 要素の dict (``tags: [{a: 1}]``) は走査しない — SQL の
-    ``$.tags.a`` パスは不成立で意味がないため、known_keys に含めない。
-    """
-    if not isinstance(obj, dict):
-        return
-    for k, v in obj.items():
-        key = f"{prefix}.{k}" if prefix else k
-        out.add(key)
-        if isinstance(v, dict):
-            _collect_nested_keys(v, key, out)
-
-
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
