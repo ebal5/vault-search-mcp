@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from .indexer import VaultIndex
@@ -103,6 +104,8 @@ class VaultWatcher:
         self._pending: dict[str, float] = {}
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
+        self._watcher_failure_count: int = 0
+        self._last_watcher_error_at: datetime | None = None
 
     def start(self) -> bool:
         """監視開始。watchdog が利用可能なら True."""
@@ -137,6 +140,18 @@ class VaultWatcher:
             self._timer.daemon = True
             self._timer.start()
 
+    def failure_stats(self) -> dict[str, Any]:
+        """差分更新の失敗累計を返す (#39).
+
+        agent が ``vault_reindex`` 経由で watcher の健全性を把握できるよう、
+        起動以降の _flush 失敗カウントと最新失敗時刻 (UTC) を公開する。
+        """
+        with self._lock:
+            return {
+                "watcher_failure_count": self._watcher_failure_count,
+                "last_watcher_error_at": self._last_watcher_error_at,
+            }
+
     def _flush(self) -> None:
         with self._lock:
             paths = list(self._pending.keys())
@@ -149,3 +164,6 @@ class VaultWatcher:
                 logger.info("indexed: %s (pending=%d)", rel_path, n - i - 1)
             except Exception:
                 logger.exception("Failed to update index for %s", rel_path)
+                with self._lock:
+                    self._watcher_failure_count += 1
+                    self._last_watcher_error_at = datetime.now(timezone.utc)

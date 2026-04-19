@@ -258,9 +258,16 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
 
     Returns:
         dict: ReindexStats に相当する flat JSON
-            (``added`` / ``updated`` / ``deleted`` / ``skipped`` / ``errors``)。
+            (``added`` / ``updated`` / ``deleted`` / ``skipped`` / ``errors`` /
+            ``watcher_failure_count`` / ``last_watcher_error_at``)。
+            末尾 2 つは VaultWatcher が差分更新で失敗した累計 (#39) を返す。
+            ``--no-watch`` で watcher 無効の場合と起動以降失敗ゼロの場合は
+            それぞれ ``0`` / ``null``。
     """
-    return ReindexStats(**_get_index().build_index(force=force)).model_dump(mode="json")
+    stats = _get_index().build_index(force=force)
+    if _watcher is not None:
+        stats.update(_watcher.failure_stats())
+    return ReindexStats(**stats).model_dump(mode="json")
 
 
 @mcp.tool(annotations=TOOL_SPECS["vault_stats"].annotations)
@@ -362,8 +369,14 @@ def main() -> None:
         _watcher.start()
 
     # MCP サーバー起動（stdio）
+    # shutdown / 例外どちらの経路でも watcher.stop() で Observer スレッドを
+    # 明示停止し、プロセス終了時のリソースリークを防ぐ (#39)。
     logger.info("Starting MCP server (stdio)")
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        if _watcher is not None:
+            _watcher.stop()
 
 
 if __name__ == "__main__":
