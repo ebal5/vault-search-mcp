@@ -126,7 +126,8 @@ class VaultWatcher:
     def stop(self) -> None:
         if self._observer:
             self._observer.stop()
-            self._observer.join(timeout=5)
+            if self._observer.is_alive():
+                self._observer.join(timeout=5)
             self._observer = None
 
     def _schedule_update(self, rel_path: str) -> None:
