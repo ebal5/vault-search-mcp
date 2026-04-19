@@ -116,7 +116,7 @@ def test_vault_search_output_schema_describes_search_hit_fields(
 
 
 def test_frontmatter_keys_listed(vault_index: VaultIndex) -> None:
-    """ルートに 'frontmatter_keys' が list[str] として存在し、
+    """ルートに 'frontmatter_keys' が list[dict] として存在し、
     tmp_vault の Welcome.md に含まれるキーを少なくとも含むこと。
     """
     from vault_search.mcp_contract import build_schema_payload
@@ -125,18 +125,26 @@ def test_frontmatter_keys_listed(vault_index: VaultIndex) -> None:
     assert "frontmatter_keys" in payload
     keys = payload["frontmatter_keys"]
     assert isinstance(keys, list)
-    assert all(isinstance(k, str) for k in keys)
+    assert all(isinstance(k, dict) for k in keys)
+
+    # 各 dict に必須フィールドが含まれること
+    for info in keys:
+        assert "key" in info, f"'key' フィールドが欠落: {info!r}"
+        assert "value_type" in info, f"'value_type' フィールドが欠落: {info!r}"
+        assert "note_count" in info, f"'note_count' フィールドが欠落: {info!r}"
+
+    key_names = {info["key"] for info in keys}
 
     expected_from_welcome = {"title", "tags", "aliases", "created_at", "modified_at"}
     # created_at / modified_at は conftest の Welcome.md で使われているキー名。
     # 実装側が created / modified へ正規化する可能性もあるので
     # 「少なくとも title / tags / aliases と 日付系 1つ以上」を要求。
-    assert {"title", "tags", "aliases"}.issubset(set(keys)), (
-        f"expected at least title/tags/aliases in frontmatter_keys, got {keys}"
+    assert {"title", "tags", "aliases"}.issubset(key_names), (
+        f"expected at least title/tags/aliases in frontmatter_keys, got {key_names}"
     )
     date_keys = {"created_at", "modified_at", "created", "modified"}
-    assert date_keys & set(keys), (
-        f"expected at least one date-like key in frontmatter_keys, got {keys}"
+    assert date_keys & key_names, (
+        f"expected at least one date-like key in frontmatter_keys, got {key_names}"
     )
     # 参照だけしておく (将来の拡張用)
     _ = expected_from_welcome

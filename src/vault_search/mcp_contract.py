@@ -27,7 +27,7 @@ from .schemas import (
     SearchResponse,
     TagCount,
 )
-from .stats import ReindexStats, VaultStats
+from .stats import FrontmatterKeyInfo, ReindexStats, VaultStats
 from .validation import IDENTIFIER_JSON_PATTERN, IDENTIFIER_MAX_LEN, LIMIT_MAX
 
 __all__ = [
@@ -329,15 +329,17 @@ TOOL_ENTRIES: dict[str, dict[str, Any]] = {
 }
 
 
-def build_schema_payload(frontmatter_keys: Iterable[str]) -> dict[str, Any]:
-    """AI エージェント向けに全ツールの入出力スキーマと frontmatter キー一覧を集約.
+def build_schema_payload(
+    frontmatter_keys: Iterable[FrontmatterKeyInfo],
+) -> dict[str, Any]:
+    """schema://tools resource payload の frontmatter_keys エンベロープ.
 
     呼び出し側は ``VaultIndex.list_frontmatter_keys()`` 相当の反復可能オブジェクトを
-    渡す。mcp_contract モジュールが indexer に依存しないよう引数化している。
+    そのまま渡す。
     """
     return {
         "tools": TOOL_ENTRIES,
-        "frontmatter_keys": list(frontmatter_keys),
+        "frontmatter_keys": [item.model_dump(mode="json") for item in frontmatter_keys],
     }
 
 

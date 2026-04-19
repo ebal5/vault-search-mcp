@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,24 +29,78 @@ from .filter import (
     parse_metadata_filter,
 )
 from .parser import ParsedNote, parse_note
+from .stats import FrontmatterKeyInfo
 from .validation import normalize_folder
 
 logger = logging.getLogger(__name__)
 
 
-def _collect_nested_keys(obj: Any, prefix: str, out: set[str]) -> None:
-    """frontmatter dict を再帰 walk して dotted key を ``out`` に収集する.
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
 
-    array 要素の dict (``tags: [{a: 1}]``) は走査しない — SQL の
-    ``$.tags.a`` パスは不成立で意味がないため、known_keys に含めない。
+
+def _infer_value_type(value: Any) -> str:
+    """value 1 つから value_type を推論する (None は呼び出し側で除外済み前提)."""
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, str) and value in ("true", "false"):
+        return "boolean"
+    if isinstance(value, str) and _NUMBER_RE.fullmatch(value):
+        return "number"
+    return "string"
+
+
+def _collect_key_info(
+    obj: Any,
+    prefix: str,
+    value_counters: dict[str, Counter[str]],
+    type_sets: dict[str, set[str]],
+    note_counts: dict[str, int],
+) -> None:
+    """frontmatter dict を再帰 walk し、各 key の value_counter / type_set / note_count を更新する.
+
+    - 親 dict キー (e.g. 'meta') も含める (value_type='object'、#136 既存契約)
+    - ネスト dict は dotted key として葉ノードを別に集計
+    - None は note_count から除外
+    - 空文字は sample_values (counter) からは除外するが note_count には含める
+    - list 要素の dict は走査しない (SQL の $.tags.x パス不成立のため)
     """
     if not isinstance(obj, dict):
         return
     for k, v in obj.items():
         key = f"{prefix}.{k}" if prefix else k
-        out.add(key)
+
+        # None は全集計から除外
+        if v is None:
+            continue
+
+        # note_count は常に +1 (空文字も含む)。
+        # note_counts.keys() を「この走査で観測された key 全集合」の正準 source of
+        # truth として扱い、呼び出し側はこれを iterate する (Reviewer D6)。
+        note_counts[key] = note_counts.get(key, 0) + 1
+
+        # value_type 推論
+        vtype = _infer_value_type(v)
+        type_sets.setdefault(key, set()).add(vtype)
+
+        # sample_values の追加 — 値を持つ経路のみ Counter エントリを作る。
+        # 親 dict (object) は sample を持たないので value_counters に登録しない。
         if isinstance(v, dict):
-            _collect_nested_keys(v, key, out)
+            # 親キーのサンプルは空。子を再帰 walk する。
+            _collect_key_info(v, key, value_counters, type_sets, note_counts)
+        elif isinstance(v, list):
+            # 配列全体の JSON 文字列表現を sample に入れる (要素別展開はしない)。
+            sample_repr = json.dumps(v, ensure_ascii=False)
+            value_counters.setdefault(key, Counter())[sample_repr] += 1
+        elif isinstance(v, str):
+            # 空文字 / whitespace-only は sample から除外 (note_count は +1 済)。
+            if v.strip():
+                value_counters.setdefault(key, Counter())[v] += 1
+        else:
+            # _normalize_fm により scalar は str/list/dict/None に収束しているはず。
+            # 念のため str 化。
+            value_counters.setdefault(key, Counter())[str(v)] += 1
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +182,7 @@ class VaultIndex:
 
         self._cache = TieredCache()
         self._lock = threading.Lock()
-        self._frontmatter_keys_cache: list[str] | None = None
+        self._frontmatter_keys_cache: list[FrontmatterKeyInfo] | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -352,9 +408,15 @@ class VaultIndex:
             return True
 
     def _invalidate_caches(self) -> None:
-        """書込み経路で tiered cache と frontmatter_keys cache を同時に落とす."""
+        """書込み経路で tiered cache と frontmatter_keys cache を同時に落とす.
+
+        ``_frontmatter_keys_cache`` の書込みは ``self._lock`` 下で行い、
+        ``list_frontmatter_keys()`` の snapshot pattern と対称化する
+        (Round 2 E1)。``_cache.invalidate()`` は自身で thread-safe。
+        """
         self._cache.invalidate()
-        self._frontmatter_keys_cache = None
+        with self._lock:
+            self._frontmatter_keys_cache = None
 
     # ------------------------------------------------------------------
     # Search — 3段パイプライン
@@ -408,8 +470,20 @@ class VaultIndex:
         # metadata_filter が指定された場合のみ known_keys を取得する
         # (filter なしでは不要なので呼ばない)。list_frontmatter_keys() は
         # 書込み経路で invalidate される in-memory cache 付き (#118)。
-        known_keys = self.list_frontmatter_keys() if metadata_filter else None
-        conditions = parse_metadata_filter(metadata_filter, known_keys=known_keys)
+        # value_type='object' の親 dict キーは filter 不可 (SQL 上は dict が返り
+        # 文字列比較で常に false → silent 0 件) なので known_keys から除外し、
+        # agent が誤って親キーで filter すると UNKNOWN_FRONTMATTER_KEY で通知する。
+        # object_keys を別途渡すことで、UNKNOWN エラーメッセージに
+        # 「親 dict なので dotted leaf key を使え」の hint を付与する (Round 2 E2)。
+        known_keys: list[str] | None = None
+        object_keys: list[str] = []
+        if metadata_filter:
+            _key_infos = self.list_frontmatter_keys()
+            known_keys = [info.key for info in _key_infos if info.value_type != "object"]
+            object_keys = [info.key for info in _key_infos if info.value_type == "object"]
+        conditions = parse_metadata_filter(
+            metadata_filter, known_keys=known_keys, object_keys=object_keys
+        )
 
         filters: dict[str, Any] | None = None
         if tags or folder or metadata_filter:
@@ -709,33 +783,80 @@ class VaultIndex:
             ).fetchall()
             return [{"folder": r["folder"], "count": r["count"]} for r in rows]
 
-    def list_frontmatter_keys(self) -> list[str]:
-        """Vault 内 frontmatter のキーをソート済みで返す.
+    def list_frontmatter_keys(self) -> list[FrontmatterKeyInfo]:
+        """Vault 内 frontmatter のキー別メタ情報をソート済みで返す (Issue #20).
 
         トップレベルキーに加え、ネスト dict 値は dotted key (``meta.author``)
         としても含まれる (Issue #136)。validate_identifier / SQL が dotted 形式を
         受理するので、known_keys 側も一貫して dotted を公開し
         ``metadata_filter={"meta.author": ...}`` の false positive UNKNOWN を防ぐ。
 
+        各要素は :class:`FrontmatterKeyInfo` で value_type / sample_values /
+        note_count を持つ。
+
         初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
         invalidate されるまでキャッシュを返す (Issue #118 / #10)。
-        """
-        if self._frontmatter_keys_cache is None:
-            self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
-        return list(self._frontmatter_keys_cache)
 
-    def _query_frontmatter_keys_from_db(self) -> list[str]:
-        """Frontmatter のキー集合 (トップレベル + nested dotted) を DB から取得する."""
+        並行処理対策 (A4 + Round 2 E1):
+        - double-checked locking で初回 DB scan の重複実行を防ぐ
+        - lock 下で snapshot 参照を取得してから return することで、read 後に
+          ``_invalidate_caches()`` が ``_frontmatter_keys_cache = None`` に
+          書き込んでも ``list(None)`` にならない
+        """
+        with self._lock:
+            if self._frontmatter_keys_cache is None:
+                self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
+            snapshot = self._frontmatter_keys_cache
+        return list(snapshot)
+
+    def _query_frontmatter_keys_from_db(self) -> list[FrontmatterKeyInfo]:
+        """Frontmatter のキー別メタ情報 (型推論 + sample_values + note_count) を DB から取得する."""
+        value_counters: dict[str, Counter[str]] = {}
+        type_sets: dict[str, set[str]] = {}
+        note_counts: dict[str, int] = {}
+
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT frontmatter FROM notes WHERE json_valid(frontmatter)"
             ).fetchall()
-        keys: set[str] = set()
+
         for row in rows:
             fm = json.loads(row["frontmatter"])
-            if isinstance(fm, dict):
-                _collect_nested_keys(fm, "", keys)
-        return sorted(keys)
+            if not isinstance(fm, dict):
+                continue
+            _collect_key_info(fm, "", value_counters, type_sets, note_counts)
+
+        # note_counts を「観測された key 全集合」の正準とする (Reviewer D6)。
+        # value_counters は parent dict (object) key にはエントリを持たない。
+        result: list[FrontmatterKeyInfo] = []
+        for key in sorted(note_counts.keys()):
+            types = type_sets[key]
+            if len(types) == 1:
+                vtype = next(iter(types))
+            else:
+                vtype = "mixed"
+
+            # top-5 頻度降順、同頻度は辞書順。
+            # parent dict (object) は value_counters に存在しないので samples=[]。
+            counter = value_counters.get(key)
+            if counter is None:
+                samples: list[str] = []
+            else:
+                samples_sorted = sorted(
+                    counter.items(),
+                    key=lambda kv: (-kv[1], kv[0]),
+                )[:5]
+                samples = [v for v, _ in samples_sorted]
+
+            result.append(
+                FrontmatterKeyInfo(
+                    key=key,
+                    value_type=vtype,
+                    sample_values=samples,
+                    note_count=note_counts[key],
+                )
+            )
+        return result
 
     def stats(self) -> dict[str, Any]:
         """インデックスの統計情報."""

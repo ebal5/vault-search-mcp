@@ -46,7 +46,7 @@ def test_list_frontmatter_keys_invalidated_after_update_single_add(
 ) -> None:
     """update_single でキーが追加されたら次の呼出で反映される."""
     root, idx = vault_builder({"seed.md": "---\nexisting_key: seed\n---\nbody\n"})
-    before = set(idx.list_frontmatter_keys())
+    before = {info.key for info in idx.list_frontmatter_keys()}
     assert "brand_new_key_xyzzy" not in before
 
     (root / "new_with_key.md").write_text(
@@ -55,7 +55,7 @@ def test_list_frontmatter_keys_invalidated_after_update_single_add(
     )
     assert idx.update_single("new_with_key.md") is True
 
-    after = set(idx.list_frontmatter_keys())
+    after = {info.key for info in idx.list_frontmatter_keys()}
     assert "brand_new_key_xyzzy" in after
 
 
@@ -74,14 +74,14 @@ def test_list_frontmatter_keys_invalidated_after_update_single_delete(
         }
     )
     _ = idx.list_frontmatter_keys()  # populate cache
-    assert "shared_key" in set(idx.list_frontmatter_keys())
+    assert "shared_key" in {info.key for info in idx.list_frontmatter_keys()}
 
     (root / "alpha.md").unlink()
     (root / "beta.md").unlink()
     assert idx.update_single("alpha.md") is True
     assert idx.update_single("beta.md") is True
 
-    after = set(idx.list_frontmatter_keys())
+    after = {info.key for info in idx.list_frontmatter_keys()}
     assert "shared_key" not in after
     # 無関係キーは残る (部分削除 regression guard)
     assert "unrelated_key" in after
@@ -100,5 +100,52 @@ def test_list_frontmatter_keys_invalidated_after_build_index(
     )
     idx.build_index(force=True)
 
-    keys = set(idx.list_frontmatter_keys())
+    keys = {info.key for info in idx.list_frontmatter_keys()}
     assert "extra_key_from_rebuild" in keys
+
+
+def test_list_frontmatter_keys_concurrent_read_during_invalidate(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """read と invalidate の並行実行で TypeError / 破損が発生しない (Round 2 E1).
+
+    `list_frontmatter_keys()` 読出し中に別スレッドが `_invalidate_caches()` で
+    キャッシュを None にしても、snapshot pattern + lock 対称化により
+    ``list(None)`` にならず、常に valid な list を返す。
+    """
+    import threading
+
+    _root, idx = vault_builder(
+        {
+            "a.md": "---\nalpha: 1\n---\nbody\n",
+            "b.md": "---\nbeta: 2\n---\nbody\n",
+        }
+    )
+    idx.list_frontmatter_keys()  # prime cache
+
+    errors: list[Exception] = []
+    barrier = threading.Barrier(2)
+
+    def reader() -> None:
+        barrier.wait()
+        for _ in range(200):
+            try:
+                result = idx.list_frontmatter_keys()
+                assert isinstance(result, list)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                return
+
+    def invalidator() -> None:
+        barrier.wait()
+        for _ in range(200):
+            idx._invalidate_caches()
+
+    t1 = threading.Thread(target=reader)
+    t2 = threading.Thread(target=invalidator)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not errors, f"concurrent read/invalidate should not raise: {errors!r}"
