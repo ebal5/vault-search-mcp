@@ -632,13 +632,12 @@ class VaultIndex:
                 rows = conn.execute(
                     "SELECT value, COUNT(*) AS cnt "
                     "FROM notes, json_each(json_extract(frontmatter, ?)) "
-                    "WHERE json_extract(frontmatter, ?) IS NOT NULL "
-                    "  AND json_type(frontmatter, ?) = 'array' "
+                    "WHERE json_type(frontmatter, ?) = 'array' "
                     "  AND value IS NOT NULL "
                     "GROUP BY value "
                     "ORDER BY cnt DESC, value ASC "
                     "LIMIT 5",
-                    (json_path, json_path, json_path),
+                    (json_path, json_path),
                 ).fetchall()
                 # frontmatter 値は parser._normalize_fm により index 時に文字列化
                 # 済み。念のため str() で wrap し、SQLite が int/float を返した
