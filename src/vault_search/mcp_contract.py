@@ -24,11 +24,10 @@ from .schemas import (
     FolderCount,
     NoteDetail,
     RecentNote,
-    ReindexStats,
     SearchResponse,
     TagCount,
-    VaultStats,
 )
+from .stats import ReindexStats, VaultStats
 from .validation import IDENTIFIER_JSON_PATTERN, IDENTIFIER_MAX_LEN, LIMIT_MAX
 
 __all__ = [

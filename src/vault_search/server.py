@@ -37,12 +37,11 @@ from .schemas import (
     FolderCount,
     NoteDetail,
     RecentNote,
-    ReindexStats,
     SearchHit,
     SearchResponse,
     TagCount,
-    VaultStats,
 )
+from .stats import ReindexStats, VaultStats
 from .validation import normalize_folder, validate_pagination
 from .watcher import VaultWatcher
 
