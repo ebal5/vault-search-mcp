@@ -20,6 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
+from .schema_meta import FrontmatterKeyInfo
 from .schemas import (
     FolderCount,
     NoteDetail,
@@ -27,7 +28,7 @@ from .schemas import (
     SearchResponse,
     TagCount,
 )
-from .stats import FrontmatterKeyInfo, ReindexStats, VaultStats
+from .stats import ReindexStats, VaultStats
 from .validation import IDENTIFIER_JSON_PATTERN, IDENTIFIER_MAX_LEN, LIMIT_MAX
 
 __all__ = [

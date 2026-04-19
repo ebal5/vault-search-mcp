@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 try:
-    from vault_search.stats import FrontmatterKeyInfo
+    from vault_search.schema_meta import FrontmatterKeyInfo
 except ImportError:
     FrontmatterKeyInfo = None  # Red では未定義、Green で実装される
 
@@ -27,7 +27,7 @@ from vault_search.indexer import VaultIndex
 
 def test_frontmatter_key_info_literal_and_forbid() -> None:
     """FrontmatterKeyInfo の Literal 制約と extra=forbid を検証する."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     # 正常構築
     obj = FrontmatterKeyInfo(key="x", value_type="mixed", note_count=1)
@@ -48,7 +48,7 @@ def test_frontmatter_key_info_literal_and_forbid() -> None:
 
 def test_frontmatter_key_info_sample_values_default() -> None:
     """sample_values は省略時に空リスト [] がデフォルト値になる."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     obj = FrontmatterKeyInfo(key="y", value_type="string", note_count=2)
     assert obj.sample_values == [], (
@@ -65,7 +65,7 @@ def test_list_frontmatter_keys_returns_frontmatter_key_info(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """list_frontmatter_keys() が list[FrontmatterKeyInfo] を返す."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"note.md": "---\npriority: high\n---\nbody\n"})
     result = idx.list_frontmatter_keys()
@@ -85,7 +85,7 @@ def test_value_type_boolean_and_number_and_string(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """YAML bool/int/float は正規化後 value_type 推論で boolean/number に分類される."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder(
         {
@@ -123,7 +123,7 @@ def test_value_type_array(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """YAML list 値は value_type='array' に分類され、sample_values に JSON 文字列表現が入る."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"arr_note.md": "---\ntags:\n  - a\n  - b\n---\nbody\n"})
     result = idx.list_frontmatter_keys()
@@ -145,7 +145,7 @@ def test_value_type_mixed(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """同一キーに string と number が混在する場合 value_type='mixed' になる."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder(
         {
@@ -172,7 +172,7 @@ def test_sample_values_top5_frequency_and_tiebreak(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """sample_values は頻度降順 top-5、同頻度は辞書順で安定する."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     # status の頻度: active=3, draft=2, wip=1, todo=1, done=1, cancel=1
     _root, idx = vault_builder(
@@ -212,7 +212,7 @@ def test_sample_values_excludes_empty_but_note_count_includes(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """空文字は sample_values から除外されるが note_count には含まれる."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder(
         {
@@ -241,7 +241,7 @@ def test_note_count_excludes_null(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """YAML null は note_count から除外される."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder(
         {
@@ -267,7 +267,7 @@ def test_empty_vault_returns_empty_list(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """frontmatter を持つ note が 0 件の場合、空リストが返る."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"no_fm.md": "# Plain note\n\nNo frontmatter here.\n"})
     result = idx.list_frontmatter_keys()
@@ -279,7 +279,7 @@ def test_dotted_nested_key_returns_key_info(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """ネスト frontmatter は親 dict key + dotted leaf key 両方が返る (#136 の既存契約保持)."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"nested.md": "---\nmeta:\n  author: foo\n---\nbody\n"})
     result = idx.list_frontmatter_keys()
@@ -316,7 +316,7 @@ def test_unicode_key_and_value_supported(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
     """Unicode キーと値が FrontmatterKeyInfo に正しく格納される."""
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義 (Green で追加)"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"unicode_note.md": "---\n日本語キー: あいうえお\n---\nbody\n"})
     result = idx.list_frontmatter_keys()
@@ -344,7 +344,7 @@ def test_value_type_number_exponent_notation(
     Python float の str 変換は 1e16 以上を ``'1e+16'`` 形式で出す。既存 regex
     ``^-?\\d+(\\.\\d+)?$`` はこれを string 扱いしていたため誤分類していた。
     """
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder(
         {
@@ -373,7 +373,7 @@ def test_object_key_rejected_from_metadata_filter(
     """
     from vault_search.validation import ValidationError
 
-    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義"
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
     _root, idx = vault_builder({"nested.md": "---\nmeta:\n  author: foo\n---\nbody\n"})
     # 親キー 'meta' は value_type='object' として list_frontmatter_keys に含まれるが、
