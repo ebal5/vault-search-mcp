@@ -1129,3 +1129,27 @@ def test_metadata_filter_diagnostics_ne_operator(
     assert len(diag) == 1
     assert diag[0]["key"] == "status"
     assert diag[0]["observed_values_sample"] == ["active"]
+
+
+def test_metadata_filter_diagnostics_value_type_included(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """diagnostics に value_type を含める (Issue #80 cause #3: 型不一致の早期気付き).
+
+    frontmatter は index 時に文字列に正規化されるため、bool や int の値を
+    filter する際も ``"true"`` / ``"5"`` 形式で渡す必要がある。observed 値が
+    ``"true"/"false"`` で value_type が ``"boolean"`` と判れば、エージェントが
+    型不一致で silent miss しているケースを自己発見できる。
+    """
+    _root, idx = vault_builder(
+        {
+            "a.md": "---\narchived: true\n---\nbody\n",
+            "b.md": "---\narchived: false\n---\nbody\n",
+        }
+    )
+    # 意図的にヒットしない値を指定して 0 件を引く
+    res = idx.search("", metadata_filter={"archived": "notabool"})
+    assert res["total"] == 0
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    assert diag[0]["value_type"] == "boolean"
