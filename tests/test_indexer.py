@@ -1075,20 +1075,21 @@ def test_metadata_filter_diagnostics_attached_on_zero_total(
 def test_metadata_filter_diagnostics_multiple_keys(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
-    """複数キーの AND で 0 件になったとき、全キーの diagnostics が並ぶ."""
+    """複数キーの AND で 0 件になったとき、全キーの diagnostics が並び、
+    各キーの observed_values_sample は頻度降順 (同頻度は辞書順) で pin される."""
     _root, idx = vault_builder(_META_FILTER_NOTES)
     # status=active かつ priority=medium の組合せは存在しない (medium は draft のみ)
     res = idx.search("", metadata_filter={"status": "active", "priority": "medium"})
     assert res["total"] == 0
     diag = res["metadata_filter_diagnostics"]
-    keys = {entry["key"] for entry in diag}
-    assert keys == {"status", "priority"}
-    for entry in diag:
-        assert entry["key_present_in_index"] is True
-        assert isinstance(entry["observed_values_sample"], list)
-        assert entry["observed_values_sample"], (
-            f"{entry['key']}: observed_values_sample must be non-empty when key present in index"
-        )
+    by_key = {entry["key"]: entry for entry in diag}
+    assert set(by_key) == {"status", "priority"}
+    # status: active (2) / draft (1) → 頻度降順で ["active", "draft"]
+    assert by_key["status"]["key_present_in_index"] is True
+    assert by_key["status"]["observed_values_sample"] == ["active", "draft"]
+    # priority: high (1) / low (1) / medium (1) → 同頻度、辞書順 ["high", "low", "medium"]
+    assert by_key["priority"]["key_present_in_index"] is True
+    assert by_key["priority"]["observed_values_sample"] == ["high", "low", "medium"]
 
 
 def test_metadata_filter_diagnostics_absent_when_results_non_empty(
@@ -1155,3 +1156,51 @@ def test_metadata_filter_diagnostics_value_type_included(
     diag = res["metadata_filter_diagnostics"]
     assert len(diag) == 1
     assert diag[0]["value_type"] == "boolean"
+
+
+def test_metadata_filter_diagnostics_on_cache_hit(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Tier 0 cache hit 経路でも diagnostics が付与される.
+
+    初回呼び出しは Tier 2 (FTS5) で総件数 0 を cache に格納し、
+    2 回目の同一クエリは Tier 0 で cache から返す。indexer.search() の
+    cache hit 分岐でも ``_build_metadata_filter_diagnostics`` を通すことを
+    lock-in し、将来 Tier 0/1 branch で silent に diagnostics が落ちた場合の
+    regression を検知する。
+    """
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    filt = {"status": "nonexistent_value"}
+    first = idx.search("", metadata_filter=filt)
+    assert first["total"] == 0
+    assert first["tier"] == 2
+    assert "metadata_filter_diagnostics" in first
+
+    second = idx.search("", metadata_filter=filt)
+    assert second["total"] == 0
+    assert second["tier"] == 0, f"2 回目は Tier 0 cache hit になるはず (tier={second['tier']})"
+    assert "metadata_filter_diagnostics" in second, (
+        "Tier 0 cache hit 経路でも diagnostics が付与されるべき"
+    )
+    # 両 tier で同じ diagnostics を返す (cache は key_infos を参照しないので安定)
+    assert second["metadata_filter_diagnostics"] == first["metadata_filter_diagnostics"]
+
+
+def test_metadata_filter_diagnostics_with_non_empty_query(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """非空 FTS query + metadata_filter で 0 件のときも diagnostics が付く.
+
+    FTS term + filter の積集合で 0 件になるパターン。indexer.search() の
+    FTS 経路が filter 条件独立に diagnostics を emit することを確認する。
+    """
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    # alpha/beta/gamma は本文に "obsidian" を含まないのでヒット 0、
+    # かつ filter 条件も明示的に 0 件になるように指定
+    res = idx.search("obsidian", metadata_filter={"status": "nonexistent_value"})
+    assert res["total"] == 0
+    assert "metadata_filter_diagnostics" in res
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    assert diag[0]["key"] == "status"
+    assert diag[0]["observed_values_sample"] == ["active", "draft"]

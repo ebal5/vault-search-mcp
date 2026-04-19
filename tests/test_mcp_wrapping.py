@@ -146,6 +146,29 @@ def test_mcp_vault_recent_full_response_validates(vault_index: VaultIndex) -> No
     jsonschema.validate(structured, schema)
 
 
+def test_mcp_vault_search_diagnostics_validates_zero_total(
+    vault_index: VaultIndex,
+) -> None:
+    """Issue #80: 0 件 + metadata_filter 時の diagnostics 付き structuredContent が
+    lowlevel の jsonschema.validate を通る.
+
+    FastMCP の call_tool 経路だけでは MCP lowlevel の
+    ``jsonschema.validate(structured, outputSchema)`` をバイパスする
+    (.claude/rules/fastmcp-gotchas.md 「テスト経路」)。本テストは
+    diagnostics list を持つ response shape が injected outputSchema に
+    適合することを明示検証し、``MetadataFilterDiagnostic`` の JSON schema
+    drift を検知する。
+    """
+    # Welcome.md は status=active を持つ → 値を外して 0 件 + diagnostics を誘発
+    _content, structured = _call_tool(
+        "vault_search", {"query": "", "metadata_filter": {"status": "nonexistent"}}
+    )
+    assert structured["total"] == 0
+    assert "metadata_filter_diagnostics" in structured
+    schema = _get_tool_output_schema("vault_search")
+    jsonschema.validate(structured, schema)
+
+
 def test_vault_reindex_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
     """vault_reindex の structured content が ``result`` でラップされない.
 
