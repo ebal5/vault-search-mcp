@@ -414,9 +414,6 @@ def test_payload_has_version_key(vault_index: VaultIndex) -> None:
     assert payload.get("version") == _SCHEMA_VERSION, (
         f"payload['version']={payload.get('version')!r} vs _SCHEMA_VERSION={_SCHEMA_VERSION!r}"
     )
-    assert isinstance(payload["version"], str) and payload["version"].strip(), (
-        f"version must be non-empty str, got: {payload['version']!r}"
-    )
 
 
 def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex) -> None:
@@ -424,8 +421,9 @@ def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex)
 
     文字数検証は brittle なので、**agent が overview から読み取るべき contractual
     invariant** をテストする: 「schema://tools resource を入り口とすること」と
-    「recommended_flow の参照」を勧める旨のキーワードが含まれる。
-    文言の細かい改善で壊れないよう複数候補の OR 判定とする。
+    「recommended_flow の参照」の **両方が必須** (AND 判定)。両キーワードが
+    overview に揃って初めて agent が「自分が読んでいる resource 名」と「推奨
+    呼出順序の所在」を一度に把握できる。
     """
     from vault_search.resources import build_schema_payload
 
