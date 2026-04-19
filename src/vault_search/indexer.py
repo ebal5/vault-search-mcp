@@ -554,38 +554,21 @@ class VaultIndex:
         `key_infos` (``list_frontmatter_keys()`` の結果) をキー名で索引化し、
         各 condition のキーを突き合わせて ``key_present_in_index`` /
         ``value_type`` / ``observed_values_sample`` を返す。条件キーは parse 時点で
-        ``known_keys`` と照合済みなので通常は全て hit するが、
-        object 親キー (value_type='object') の一致など防衛的に false 分岐も保持する。
-
-        Note: tier 0/1 cache hit 時は ``results`` はキャッシュされた時点の
-        snapshot だが、``key_infos`` は現在の index 状態を反映する。
-        診断は advisory 情報なので意図的にこの非対称を許容する
-        (stale sample よりも現在の index 状態に基づく hint の方がエージェントの
-        自己修正に有用)。
+        ``known_keys`` (= value_type が object 以外の FrontmatterKeyInfo) と
+        照合済みなので、ここに渡る cond.key は必ず info_by_key にヒットする。
+        不一致は validation 段階のバグなので ``KeyError`` を silently catch せず
+        surface させる (防衛 fallback は dead code になる)。
         """
         info_by_key = {info.key: info for info in key_infos}
-        diagnostics: list[dict[str, Any]] = []
-        for cond in conditions:
-            info = info_by_key.get(cond.key)
-            if info is not None and info.note_count > 0:
-                diagnostics.append(
-                    {
-                        "key": cond.key,
-                        "key_present_in_index": True,
-                        "value_type": info.value_type,
-                        "observed_values_sample": list(info.sample_values),
-                    }
-                )
-            else:
-                diagnostics.append(
-                    {
-                        "key": cond.key,
-                        "key_present_in_index": False,
-                        "value_type": None,
-                        "observed_values_sample": [],
-                    }
-                )
-        return diagnostics
+        return [
+            {
+                "key": cond.key,
+                "key_present_in_index": True,
+                "value_type": info_by_key[cond.key].value_type,
+                "observed_values_sample": list(info_by_key[cond.key].sample_values),
+            }
+            for cond in conditions
+        ]
 
     def _build_match_clause(
         self,

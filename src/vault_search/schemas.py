@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .schema_meta import FrontmatterValueType
+
 # ---------------------------------------------------------------------------
 # Search responses
 # ---------------------------------------------------------------------------
@@ -67,26 +69,26 @@ class MetadataFilterDiagnostic(BaseModel):
     key_present_in_index: bool = Field(
         description=(
             "このキーを持つノートが index 内に 1 件以上あるか。"
-            "false のときは typo の可能性が高い (ただし通常ルートでは unknown key は "
-            "UNKNOWN_FRONTMATTER_KEY でより早期に拒否される — 本フラグは防衛的な冗長化)。"
+            "通常ルートでは unknown key は UNKNOWN_FRONTMATTER_KEY で parse 段階で拒否される"
+            "ため、diagnostics が返る時点で常に true。将来 validation が relax された際の"
+            "forward-compat + エージェント向けの意味論明示のために残している。"
         ),
     )
-    value_type: str | None = Field(
-        default=None,
+    value_type: FrontmatterValueType = Field(
         description=(
             "このキーで観測された値の推論型 (FrontmatterKeyInfo.value_type と同じ enum: "
             "string / number / boolean / array / object / mixed)。"
             "型不一致で 0 件になっていないか (例: archived が boolean なのに "
-            '"1"/"0" で渡そうとしている) のヒントに使う。key_present_in_index=false の'
-            "ときは null。"
+            '"1"/"0" で渡そうとしている) のヒントに使う。'
         ),
     )
     observed_values_sample: list[str] = Field(
         default_factory=list,
         description=(
             "このキーで実際に観測されている値のサンプル (頻度降順、最大 5 件)。"
-            "正規化済みの文字列表現。配列型 frontmatter は JSON 配列表現で入る "
-            "(FrontmatterKeyInfo.sample_values と同じ)。"
+            "正規化済みの文字列表現。配列型 frontmatter は配列全体の JSON 文字列表現で入る "
+            '(例: categories=[work,urgent] の sample は \'["work", "urgent"]\' — '
+            "要素 'work' 単体のサンプルではない。FrontmatterKeyInfo.sample_values と同じ契約)。"
             "ここに含まれない値を filter に指定していた場合、typo または存在しない値。"
         ),
     )

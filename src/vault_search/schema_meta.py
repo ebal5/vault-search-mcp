@@ -11,6 +11,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# FrontmatterKeyInfo.value_type の enum を集約する型エイリアス。
+# schemas.MetadataFilterDiagnostic.value_type でも同一 Literal を共有し、
+# JSON schema に enum 情報を残す (Issue #80 round 2 レビュー指摘)。
+FrontmatterValueType = Literal["string", "number", "boolean", "array", "object", "mixed"]
+
 
 class FrontmatterKeyInfo(BaseModel):
     """frontmatter キー 1 件のメタ情報 (Issue #20)."""
@@ -25,7 +30,7 @@ class FrontmatterKeyInfo(BaseModel):
             "親キー名を metadata_filter に渡すと UNKNOWN_FRONTMATTER_KEY が返る)"
         )
     )
-    value_type: Literal["string", "number", "boolean", "array", "object", "mixed"] = Field(
+    value_type: FrontmatterValueType = Field(
         description=(
             "観測された値型。index 時に全スカラーが文字列に正規化されるため、"
             "boolean / number はヒューリスティック推論 ('true'/'false' 完全一致で boolean、"
