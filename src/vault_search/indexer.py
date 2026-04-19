@@ -35,7 +35,7 @@ from .validation import normalize_folder
 logger = logging.getLogger(__name__)
 
 
-_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
 
 
 def _infer_value_type(value: Any) -> str:
@@ -465,8 +465,13 @@ class VaultIndex:
         # metadata_filter が指定された場合のみ known_keys を取得する
         # (filter なしでは不要なので呼ばない)。list_frontmatter_keys() は
         # 書込み経路で invalidate される in-memory cache 付き (#118)。
+        # value_type='object' の親 dict キーは filter 不可 (SQL 上は dict が返り
+        # 文字列比較で常に false → silent 0 件) なので known_keys から除外し、
+        # agent が誤って親キーで filter すると UNKNOWN_FRONTMATTER_KEY で通知する。
         known_keys: list[str] | None = (
-            [info.key for info in self.list_frontmatter_keys()] if metadata_filter else None
+            [info.key for info in self.list_frontmatter_keys() if info.value_type != "object"]
+            if metadata_filter
+            else None
         )
         conditions = parse_metadata_filter(metadata_filter, known_keys=known_keys)
 
