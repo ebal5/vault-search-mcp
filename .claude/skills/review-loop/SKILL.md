@@ -166,6 +166,41 @@ reviewer または fix エージェントが動作確認のため一時スクリ
 - `reviewer 自らに収束判定を求める` instruction を Round 2 以降の prompt に
   入れると Opus reviewer が明示的な「Round N 不要」判定を返しやすい
 
+## PR #204 実績 (2026-04-20): 3 round 軽量化パターン
+
+4 issue 統合 PR (diff ~250 行) の review-loop サンプル:
+
+- **Round 1** (4 視点 A/B/C Sonnet + D Opus 並列): 19 件指摘 → PR 内 fix 6 件
+  (score 6-7) + Issue 起票 4 件 (#199-202)
+- **Round 2** (2 視点 Sonnet + Opus): 5 件追加 → PR 内 fix 3 件 (R2-2 phantom
+  promise enforcement test 等)、2 件は Round 1 起票 issue に集約
+- **Round 3** (Sonnet 1 reviewer 軽量): 0 件 (CONVERGED 判定) — rebase 後
+  整合性チェック中心の probes に絞る
+
+### Round 数の絞り込み判定
+
+findings 半減を観測したら次 round は reviewer 数を減らす:
+
+| Round | Findings | Reviewer 数 | 狙い |
+|---|---|---|---|
+| 1 | 多数 (15-20+) | 4 視点並列 | 網羅的発見 |
+| 2 | 半減 (3-7) | 2 視点 (Sonnet+Opus) | 残ベクトル探索 |
+| 3 | <5 想定 | 1 視点 (Sonnet) | CONVERGED 判定 |
+
+**Round 3 で 5+ findings が再発した場合**: probe を新たに加えて Round 4 へ。
+ただし通常は Round 2 で 5+ が出尽くしているため、Round 3 が CONVERGED を
+返すなら Round 4 不要 (PR #204 実例)。
+
+### Round 3 軽量 reviewer の prompt 構成
+
+- Round 1+2 fixes と起票済み issue を全列挙 (don't re-raise リスト)
+- 「rebase 後の整合性」「test 重複」「docstring と implementation の drift」
+  などの **integration probes** に絞る
+- 末尾で必ず CONVERGED / NOT CONVERGED 判定を要求
+
+このパターンは PR diff <300 行 + issue 数 <5 のケースで有効。大規模 refactor
+には適用しない (Round 1 が「網羅探索」では収まらない可能性が高い)。
+
 ## プロジェクト固有メモの拡張
 
 プロジェクトごとの conventions (特定 SDK の罠、命名規則、test infrastructure

@@ -159,6 +159,49 @@ commit prefix は「振る舞いが変わるか」で選ぶ:
 - `git pull --rebase` 相当の自動調停は禁止 (意図しないマージは親の責任)
 - 同一ファイルを 2 エージェントが書く予定があれば逐次化、並列しない
 
+## 同一ファイル touch issue の統合 PR ガイドライン
+
+複数 issue が同じファイルを必ず触る場合、個別 PR にすると merge 順序の rebase
+コストが累積する。以下の判定で統合 PR を採用する:
+
+### 統合 PR を採用する条件 (AND)
+
+1. **責務を 1 行で言語化できる** (例: 「schema://tools payload の agent DX 改善」)
+   — 複数 issue を同じ責務クラスタとして説明できる
+2. **同一ファイルを高確率で touch** (例: 全部 `resources.py` の同一 dict)
+3. **個別 PR に分けても review が独立しない** — どの issue を先 merge しても
+   後続が rebase 必須
+
+### 個別 PR を維持する条件
+
+- 責務が異なる (例: cache 改善 + observability 改善は同じ indexer.py でも別責務)
+- 1 issue が他に依存しない、片方だけ revert したい可能性がある
+- review reviewer の専門が分かれる (perf / security / DX が混在)
+
+### 統合 PR の commit 粒度
+
+issue ごとに Red/Green/Refactor を分けると 4 issue × 3 commit = 12 commits
+となり review が破綻する。**1 つの責務として TDD 構成する**:
+
+- `Red`: 全 issue 統合の失敗テスト追加 (1 commit)
+- `Green`: 全 issue 統合の最小実装 (1 commit)
+- `Fix Round N`: review-loop 指摘対応 (round 1 commit)
+
+PR body の commit 説明節で「issue → commit hash」の対応を書く。
+
+### 並行 PR で同一 issue が独立実装された場合の rebase 戦略
+
+別セッションが同じ issue を独立実装し先に merge された場合 (PR #204 と #203
+の #196 衝突実例):
+
+1. 先着 PR が採用した実装方針を rebase で取り込む (=自分の同 issue 実装は捨てる)
+2. 自分の追加要件 (本 PR 例: #192 の optional/condition フィールド) を上書き
+   復元する
+3. **副次的 drift** に注意: 先着の docstring と自分の implementation 解決が
+   独立に rebase されて整合性が崩れる典型シナリオ。rebase 完了後に
+   `git diff origin/main..HEAD` で docstring と実装の言及内容が一致するか
+   目視確認する
+
 ## 複数 issue の並列運用パターン
 
 Phase A/B のように「互いにほぼ独立した 2-4 issue を短時間でまとめて片付けたい」
