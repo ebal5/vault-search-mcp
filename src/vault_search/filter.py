@@ -118,6 +118,7 @@ class MetadataCondition:
 def parse_metadata_filter(
     raw: dict[str, Any] | None,
     known_keys: Sequence[str] | None = None,
+    object_keys: Sequence[str] = (),
 ) -> list[MetadataCondition]:
     """``metadata_filter`` dict を :class:`MetadataCondition` リストへ変換する.
 
@@ -155,7 +156,12 @@ def parse_metadata_filter(
     # building) lives in ``validate_known_keys`` so filter.py and validation.py
     # share one code path (#140/#141).
     if known_keys is not None:
-        validate_known_keys(list(raw.keys()), known_keys, kind="frontmatter key")
+        validate_known_keys(
+            list(raw.keys()),
+            known_keys,
+            kind="frontmatter key",
+            object_keys=object_keys,
+        )
 
     # Third pass: parse individual entries. op / value 検証は fail-first。
     conditions: list[MetadataCondition] = []

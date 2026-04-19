@@ -201,6 +201,7 @@ def format_unknown_keys_message(
     *,
     schema_ref: str = "schema://tools",
     registry_label: str = "frontmatter_keys list",
+    object_keys: Sequence[str] = (),
 ) -> str:
     """Build a unified unknown-key error message covering 1 and N unknown keys.
 
@@ -210,8 +211,25 @@ def format_unknown_keys_message(
     ``known_keys`` は順不同で渡してよい — 関数内で ``sorted()`` してから preview
     を組み立てる。callsite に「ソート済みで渡す」暗黙契約を強いず、drift
     リスクを低減する (Round 1 review D4)。
+
+    ``object_keys`` に含まれる unknown は「value_type='object' の親 dict キー」
+    として特別な hint 文言をメッセージに含める (#20 PR round 2): schema://tools
+    では公開されているが metadata_filter では使えないキーに対し、dotted leaf
+    key (e.g. ``meta.author``) への誘導を agent に通知する。
     """
     allowed_sorted = sorted(known_keys)
+    object_keys_set = set(object_keys)
+    # 各 unknown のうち object key にマッチするものだけをヒント対象にする。
+    unknown_object_keys = sorted(name for name in unknowns if name in object_keys_set)
+    object_hint = (
+        (
+            f" Note: {', '.join(repr(k) for k in unknown_object_keys)} "
+            "is a parent dict (value_type='object') and not filterable; "
+            "use a dotted leaf key (e.g. 'meta.author')."
+        )
+        if unknown_object_keys
+        else ""
+    )
 
     if len(unknowns) == 1:
         ((name, suggestions),) = unknowns.items()
@@ -219,7 +237,7 @@ def format_unknown_keys_message(
             return (
                 f"Unknown {kind} {name!r}; "
                 f"did you mean: {', '.join(suggestions)}? "
-                f"See {schema_ref} for the {registry_label}"
+                f"See {schema_ref} for the {registry_label}{object_hint}"
             )
         preview = ", ".join(allowed_sorted[:5])
         suffix = ", ..." if len(allowed_sorted) > 5 else ""
@@ -230,7 +248,7 @@ def format_unknown_keys_message(
         return (
             f"Unknown {kind} {name!r}; "
             f"valid keys include: {preview}{suffix}. "
-            f"See {schema_ref} for the full list"
+            f"See {schema_ref} for the full list{object_hint}"
         )
 
     # Multi-key path. Sort by unknown key name so the message is deterministic
@@ -248,9 +266,9 @@ def format_unknown_keys_message(
         return (
             f"Unknown {kind}s: {keys_str}. "
             f"Valid keys include: {preview}{suffix}. "
-            f"See {schema_ref} for the {registry_label}"
+            f"See {schema_ref} for the {registry_label}{object_hint}"
         )
-    return f"Unknown {kind}s: {keys_str}. See {schema_ref} for the {registry_label}"
+    return f"Unknown {kind}s: {keys_str}. See {schema_ref} for the {registry_label}{object_hint}"
 
 
 def validate_known_keys(
@@ -260,6 +278,7 @@ def validate_known_keys(
     kind: str,
     schema_ref: str = "schema://tools",
     registry_label: str = "frontmatter_keys list",
+    object_keys: Sequence[str] = (),
 ) -> None:
     """Validate that every name in ``names`` appears in ``known_keys`` (batch).
 
@@ -302,6 +321,7 @@ def validate_known_keys(
             known_keys,
             schema_ref=schema_ref,
             registry_label=registry_label,
+            object_keys=object_keys,
         ),
         error_code="UNKNOWN_FRONTMATTER_KEY",
         did_you_mean=all_candidates,

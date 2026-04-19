@@ -467,12 +467,17 @@ class VaultIndex:
         # value_type='object' の親 dict キーは filter 不可 (SQL 上は dict が返り
         # 文字列比較で常に false → silent 0 件) なので known_keys から除外し、
         # agent が誤って親キーで filter すると UNKNOWN_FRONTMATTER_KEY で通知する。
-        known_keys: list[str] | None = (
-            [info.key for info in self.list_frontmatter_keys() if info.value_type != "object"]
-            if metadata_filter
-            else None
+        # object_keys を別途渡すことで、UNKNOWN エラーメッセージに
+        # 「親 dict なので dotted leaf key を使え」の hint を付与する (Round 2 E2)。
+        known_keys: list[str] | None = None
+        object_keys: list[str] = []
+        if metadata_filter:
+            _key_infos = self.list_frontmatter_keys()
+            known_keys = [info.key for info in _key_infos if info.value_type != "object"]
+            object_keys = [info.key for info in _key_infos if info.value_type == "object"]
+        conditions = parse_metadata_filter(
+            metadata_filter, known_keys=known_keys, object_keys=object_keys
         )
-        conditions = parse_metadata_filter(metadata_filter, known_keys=known_keys)
 
         filters: dict[str, Any] | None = None
         if tags or folder or metadata_filter:

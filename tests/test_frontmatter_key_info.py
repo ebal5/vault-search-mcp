@@ -428,9 +428,7 @@ def test_object_key_filter_error_message_has_dotted_leaf_hint(
     msg = str(exc_info.value)
     assert "meta" in msg, f"エラーメッセージに 'meta' が含まれるべき (got: {msg})"
     # "parent dict" / "dotted" / "object" いずれかの hint が含まれる
-    hint_found = any(
-        token in msg.lower() for token in ("parent dict", "dotted", "object", "leaf")
-    )
+    hint_found = any(token in msg.lower() for token in ("parent dict", "dotted", "object", "leaf"))
     assert hint_found, (
         "エラーメッセージに dotted leaf / parent dict / object のいずれかの hint が"
         f" 必要 (got: {msg})"
