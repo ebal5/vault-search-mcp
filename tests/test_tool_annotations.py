@@ -328,6 +328,36 @@ def test_vault_reindex_docstring_explains_force_behavior() -> None:
     )
 
 
+def test_folder_docstring_contains_schema_description() -> None:
+    """``folder`` 引数を持つツールの docstring が ``_FOLDER_DESCRIPTION`` を
+    そのまま含むこと (Issue #37).
+
+    schema://tools の input_schema は ``_FOLDER_DESCRIPTION`` を参照して
+    「兄弟プレフィックス除外」などの挙動を明記しているが、Python docstring
+    を読むクライアント (FastMCP の一部経路 / SDK / help() / IDE ホバー等)
+    には元々この説明が届かず、agent が ``folder='Projects'`` が
+    ``'Projects Hermes/...'`` もマッチすると誤解するリスクがあった。
+
+    本テストは docstring と schema description の文言ドリフトを regression
+    guard する。``_FOLDER_DESCRIPTION`` を single source of truth として
+    そのまま埋め込む方針 (Issue #37 推奨修正)。
+    """
+    import inspect
+
+    from vault_search.mcp_contract import _FOLDER_DESCRIPTION
+
+    for tool_name in ("vault_search", "vault_recent"):
+        tool = getattr(server_mod, tool_name)
+        doc = inspect.getdoc(tool)
+        assert doc is not None, f"{tool_name} has no docstring"
+        assert _FOLDER_DESCRIPTION in doc, (
+            f"{tool_name} docstring must contain the canonical folder "
+            f"description from _FOLDER_DESCRIPTION verbatim (Issue #37). "
+            f"This ensures docstring readers see the sibling-exclusion "
+            f"semantics (例: 'Projects' は 'Projects Hermes' を除外する)。"
+        )
+
+
 def test_schema_tools_resource_exposes_annotations(vault_index: VaultIndex) -> None:
     """``schema://tools`` リソースも各 tool の annotations を公開する.
 
