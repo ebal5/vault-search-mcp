@@ -1204,3 +1204,77 @@ def test_metadata_filter_diagnostics_with_non_empty_query(
     assert len(diag) == 1
     assert diag[0]["key"] == "status"
     assert diag[0]["observed_values_sample"] == ["active", "draft"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: array 型 frontmatter の observed_values_sample を element-level に
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_filter_diagnostics_array_sample_is_element_level(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #190: 配列型 frontmatter の diagnostics sample は単一要素の配列を返す.
+
+    ``categories: [work, urgent]`` / ``[research]`` を持つ vault で
+    ``{"categories": "nonexistent"}`` で検索すると 0 件になる。ここで
+    ``observed_values_sample`` が JSON 配列文字列
+    (``'["work", "urgent"]'``) ではなく個別要素 (``"work"`` / ``"urgent"`` /
+    ``"research"``) の配列であることを pin する。エージェントが sample を
+    そのまま filter value にコピペして retry できる UX の regression guard。
+    """
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"categories": "nonexistent"})
+    assert res["total"] == 0
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    entry = diag[0]
+    assert entry["key"] == "categories"
+    assert entry["value_type"] == "array"
+
+    samples = entry["observed_values_sample"]
+    # 頻度降順 + 同頻度辞書順: research=1, urgent=1, work=1 → alphabetical
+    assert samples == ["research", "urgent", "work"], (
+        "配列型 diagnostics sample は単一要素ごとの頻度集計であるべき "
+        f"(got {samples!r})"
+    )
+
+    # JSON-array 文字列が混入していないこと (以前の sample_values 契約流用バグの pin)
+    for s in samples:
+        assert not s.startswith("["), f"sample {s!r} が JSON 配列文字列になっている"
+
+
+def test_metadata_filter_diagnostics_scalar_sample_unchanged(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """非配列型キー (string / number / boolean) は従来挙動を維持する (#190 の単一型不変性).
+
+    配列要素展開ロジックは ``value_type == "array"`` のキーだけに適用し、
+    scalar 型の observed_values_sample は ``FrontmatterKeyInfo.sample_values``
+    そのままであること。
+    """
+    _root, idx = vault_builder(_META_FILTER_NOTES)
+    res = idx.search("", metadata_filter={"status": "nonexistent"})
+    assert res["total"] == 0
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    # 頻度降順: active=2, draft=1
+    assert diag[0]["observed_values_sample"] == ["active", "draft"]
+
+
+def test_metadata_filter_diagnostics_array_element_top5_frequency(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """配列型 diagnostics は頻度降順 top-5 (同頻度辞書順) の contract を守る."""
+    _root, idx = vault_builder(
+        {
+            "a.md": "---\ntags: [x, y, z, a, b, c]\n---\nbody\n",
+            "b.md": "---\ntags: [x, y]\n---\nbody\n",
+            "c.md": "---\ntags: [x]\n---\nbody\n",
+        }
+    )
+    res = idx.search("", metadata_filter={"tags": "nope"})
+    assert res["total"] == 0
+    samples = res["metadata_filter_diagnostics"][0]["observed_values_sample"]
+    # freq: x=3, y=2, a=1, b=1, c=1, z=1 → top-5 は [x, y, a, b, c]
+    assert samples == ["x", "y", "a", "b", "c"]
