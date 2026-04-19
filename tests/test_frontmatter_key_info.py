@@ -400,3 +400,38 @@ def test_object_key_rejected_from_metadata_filter(
         offset=0,
     )
     assert res["total"] == 1
+
+
+def test_object_key_filter_error_message_has_dotted_leaf_hint(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """object 型 filter エラーで dotted leaf key の hint が message にある (Round 2).
+
+    Round 1 B1 fix で `meta` は UNKNOWN_FRONTMATTER_KEY を返すようになったが、
+    schema://tools では `meta` が公開されているため、agent 視点では「schema と
+    error が不整合」に見える。MCP wire では structured error 属性が消える
+    (fastmcp-gotchas.md) ため、`str(err)` に agent が self-correct できるヒントを
+    埋める必要がある。
+    """
+    from vault_search.validation import ValidationError
+
+    _root, idx = vault_builder({"nested.md": "---\nmeta:\n  author: foo\n---\nbody\n"})
+
+    with pytest.raises(ValidationError) as exc_info:
+        idx.search(
+            query="",
+            folder=None,
+            metadata_filter={"meta": "any"},
+            limit=20,
+            offset=0,
+        )
+    msg = str(exc_info.value)
+    assert "meta" in msg, f"エラーメッセージに 'meta' が含まれるべき (got: {msg})"
+    # "parent dict" / "dotted" / "object" いずれかの hint が含まれる
+    hint_found = any(
+        token in msg.lower() for token in ("parent dict", "dotted", "object", "leaf")
+    )
+    assert hint_found, (
+        "エラーメッセージに dotted leaf / parent dict / object のいずれかの hint が"
+        f" 必要 (got: {msg})"
+    )
