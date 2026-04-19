@@ -388,3 +388,213 @@ def test_read_resource_unknown_uri_raises_error(
     assert "unknown" in str(exc_info.value).lower() or "resource" in str(exc_info.value).lower(), (
         f"expected error message to mention resource or unknown, got: {exc_info.value}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #38 / #179: schema://tools top-level metadata
+# ---------------------------------------------------------------------------
+#
+# エージェントが初回接続時に overview / recommended_flow / errors を読むことで
+# tool description 全体を context に入れずに済むようにする (B2.4)。
+# #179 は FrontmatterKeyInfo の JSON Schema を公開して value_type の許容値を
+# 機械検証可能にする (B4)。
+
+
+def test_payload_has_version_key(vault_index: VaultIndex) -> None:
+    """payload["version"] が module の _SCHEMA_VERSION 定数と一致すること.
+
+    schema://tools resource payload 自身のバージョン (各 tool 契約のバージョン
+    ではない)。agent が改変検知のために pin する対象。定数を直接 import して
+    test 側にリテラルを置かないことで drift する唯一の SoT を resources.py に
+    一本化する。
+    """
+    from vault_search.resources import _SCHEMA_VERSION, build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert payload.get("version") == _SCHEMA_VERSION, (
+        f"payload['version']={payload.get('version')!r} vs _SCHEMA_VERSION={_SCHEMA_VERSION!r}"
+    )
+
+
+def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex) -> None:
+    """payload["overview"] が初見 agent へのエントリ導線を案内すること.
+
+    文字数検証は brittle なので、**agent が overview から読み取るべき contractual
+    invariant** をテストする: 「schema://tools resource を入り口とすること」と
+    「recommended_flow の参照」の **両方が必須** (AND 判定)。両キーワードが
+    overview に揃って初めて agent が「自分が読んでいる resource 名」と「推奨
+    呼出順序の所在」を一度に把握できる。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "overview" in payload, f"'overview' key missing: keys={list(payload)}"
+    overview = payload["overview"]
+    assert isinstance(overview, str) and overview.strip(), (
+        f"overview must be non-empty str, got: {overview!r}"
+    )
+    # 初回エントリ導線としての schema://tools 自身への言及
+    assert "schema://tools" in overview, (
+        f"overview should mention 'schema://tools' as entry point: {overview[:80]!r}..."
+    )
+    # 推奨 flow への参照 (recommended_flow key の存在を agent に伝えるため)
+    assert "recommended_flow" in overview, (
+        f"overview should reference 'recommended_flow' top-level key: {overview[:80]!r}..."
+    )
+
+
+def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None:
+    """payload["recommended_flow"] が step/tool/purpose キーを持つ list[dict].
+
+    step は 1-based int で **連番かつ重複なし** (エージェントが "step 3 から"
+    と言及しやすい可読性のため)。重複や 0 や 9 が混入していたら即検知する。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "recommended_flow" in payload, f"'recommended_flow' missing: keys={list(payload)}"
+    flow = payload["recommended_flow"]
+    assert isinstance(flow, list) and len(flow) > 0, (
+        f"recommended_flow must be non-empty list, got {flow!r}"
+    )
+
+    for idx, step in enumerate(flow, start=1):
+        assert isinstance(step, dict), f"flow[{idx - 1}] must be dict: {step!r}"
+        assert set(step.keys()) >= {"step", "tool", "purpose"}, (
+            f"flow[{idx - 1}] missing required keys: got {set(step.keys())}"
+        )
+        assert isinstance(step["step"], int) and step["step"] >= 1, (
+            f"step must be 1-based int, got {step['step']!r}"
+        )
+        assert isinstance(step["tool"], str) and step["tool"], (
+            f"tool must be non-empty str, got {step['tool']!r}"
+        )
+        assert isinstance(step["purpose"], str) and step["purpose"], (
+            f"purpose must be non-empty str, got {step['purpose']!r}"
+        )
+
+    step_numbers = [step["step"] for step in flow]
+    assert step_numbers == list(range(1, len(flow) + 1)), (
+        f"step numbers must be consecutive 1-based ints with no gaps/duplicates, got {step_numbers}"
+    )
+
+
+def test_recommended_flow_tool_names_in_tool_specs(vault_index: VaultIndex) -> None:
+    """recommended_flow の各 step.tool は実在する MCP tool 名であること.
+
+    TOOL_SPECS と drift したら即検知 (典型: tool rename / 削除時の取り残し)。
+    resource URI (schema://tools) は tool 名フィールドに混ぜず overview で触れる。
+    """
+    from vault_search.mcp_contract import TOOL_SPECS
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    flow = payload["recommended_flow"]
+    tool_names = {step["tool"] for step in flow}
+    unknown = tool_names - set(TOOL_SPECS.keys())
+    assert not unknown, (
+        f"recommended_flow references unknown tool names: {unknown}\n"
+        f"allowed (TOOL_SPECS): {sorted(TOOL_SPECS.keys())}"
+    )
+
+
+def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
+    """payload["errors"] が NoteNotFoundError と ValidationError を含む dict.
+
+    各値は description / error_code / example キーを持つこと。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "errors" in payload, f"'errors' key missing: keys={list(payload)}"
+    errors = payload["errors"]
+    assert isinstance(errors, dict), f"errors must be dict, got {type(errors).__name__}"
+    for cls_name in ("NoteNotFoundError", "ValidationError"):
+        assert cls_name in errors, f"errors['{cls_name}'] missing: got {list(errors)}"
+        entry = errors[cls_name]
+        assert isinstance(entry, dict), f"errors['{cls_name}'] must be dict: {entry!r}"
+        for field in ("description", "error_code", "example"):
+            assert field in entry, f"errors['{cls_name}'] missing '{field}': {entry!r}"
+            assert isinstance(entry[field], str) and entry[field].strip(), (
+                f"errors['{cls_name}']['{field}'] must be non-empty str: {entry[field]!r}"
+            )
+
+
+def test_errors_error_code_matches_live_exception_class(vault_index: VaultIndex) -> None:
+    """errors[cls]['error_code'] が実クラスの error_code 属性と一致すること.
+
+    ErrorCode Literal の drift をテスト層で pin する (exceptions.py の rename や
+    code 変更時に即検知)。Refactor で import-time assert を置く代わりに runtime
+    テストで吸収する。NoteNotFoundError と ValidationError 両方とも class
+    attribute (default error_code) を持つので live class 比較で対称化する。
+    """
+    from vault_search.exceptions import NoteNotFoundError
+    from vault_search.resources import build_schema_payload
+    from vault_search.validation import ValidationError as VE
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    errors = payload["errors"]
+
+    assert errors["NoteNotFoundError"]["error_code"] == NoteNotFoundError.error_code, (
+        f"NoteNotFoundError error_code drifted: "
+        f"payload={errors['NoteNotFoundError']['error_code']!r} "
+        f"vs live={NoteNotFoundError.error_code!r}"
+    )
+    assert errors["ValidationError"]["error_code"] == VE.error_code, (
+        f"ValidationError error_code drifted: "
+        f"payload={errors['ValidationError']['error_code']!r} "
+        f"vs live={VE.error_code!r}"
+    )
+
+
+def test_payload_has_frontmatter_key_info_schema(vault_index: VaultIndex) -> None:
+    """payload に FrontmatterKeyInfo の JSON Schema が含まれること (#179).
+
+    agent が value_type の許容値集合や sample_values の型を機械検証できるよう
+    Pydantic model_json_schema() をそのまま公開する。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "frontmatter_key_info_schema" in payload, (
+        f"'frontmatter_key_info_schema' missing: keys={list(payload)}"
+    )
+    schema = payload["frontmatter_key_info_schema"]
+    assert isinstance(schema, dict), f"schema must be dict: {type(schema).__name__}"
+    assert schema.get("type") == "object", f"top-level must be object: {schema!r}"
+    assert "properties" in schema, f"schema must have properties: {list(schema)}"
+    for field in ("key", "value_type", "sample_values", "note_count"):
+        assert field in schema["properties"], (
+            f"FrontmatterKeyInfo field '{field}' missing from JSON Schema"
+        )
+
+
+def test_frontmatter_key_info_schema_pins_value_type_enum(vault_index: VaultIndex) -> None:
+    """value_type プロパティの enum 集合が Literal 宣言値と一致すること.
+
+    Pydantic v2 upgrade 等で Literal 展開挙動が変わった場合の regression guard。
+    agent が value_type を比較するときの許容値集合を pin する。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    schema = payload["frontmatter_key_info_schema"]
+    value_type_schema = schema["properties"]["value_type"]
+
+    enum = value_type_schema.get("enum")
+    assert enum is not None, (
+        f"value_type must expose enum for machine validation, got: {value_type_schema!r}"
+    )
+    expected = {"string", "number", "boolean", "array", "object", "mixed"}
+    assert set(enum) == expected, (
+        f"value_type enum drifted from FrontmatterKeyInfo Literal:\n"
+        f"  got: {set(enum)}\n"
+        f"  expected: {expected}"
+    )
+
+
+# NOTE: read_resource 経路の JSON round-trip 検証は
+# `test_read_resource_schema_tools_returns_payload` (上方) が
+# `payload == expected` の strict 等値で完全カバーしているため、新 top-level
+# keys 専用の重複テストは設けない (C-R5)。新 keys は build_schema_payload に
+# 追加された時点で expected も自動的に変わるため drift しない設計。
