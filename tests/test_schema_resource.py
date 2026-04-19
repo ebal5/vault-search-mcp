@@ -416,6 +416,103 @@ def test_payload_has_version_key(vault_index: VaultIndex) -> None:
     )
 
 
+def test_payload_has_version_policy(vault_index: VaultIndex) -> None:
+    """payload["version_policy"] が version の bumping semantics を説明すること (#193).
+
+    agent が version を pin してキャッシュ戦略を立てる際、additive vs
+    destructive 変更の区別を機械可読な文字列で取得できる必要がある。
+    SemVer-like の「major/minor」か「additive/destructive」のいずれかの
+    キーワードを含めることで agent が policy を読み取れるようにする。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "version_policy" in payload, f"'version_policy' missing: keys={list(payload)}"
+    policy = payload["version_policy"]
+    assert isinstance(policy, str) and policy.strip(), (
+        f"version_policy must be non-empty str, got: {policy!r}"
+    )
+    # additive vs destructive の概念を明示するキーワードが含まれること
+    keywords = ("additive", "destructive", "major", "minor", "breaking")
+    assert any(kw in policy.lower() for kw in keywords), (
+        f"version_policy must mention bumping semantics (expected any of {keywords}): {policy!r}"
+    )
+
+
+def test_payload_version_matches_semver_like_format(vault_index: VaultIndex) -> None:
+    """payload["version"] が semver-like (major.minor) 形式であること (#193).
+
+    version_policy が SemVer 類似の semantics を宣言するため、version 文字列
+    自体も最低限 `<major>.<minor>` の dotted numeric format に pin する。
+    このテストは format のみ検証 (semantic correctness は別途 code review で保証)。
+    """
+    import re
+
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    version = payload["version"]
+    assert re.fullmatch(r"\d+\.\d+(\.\d+)?", version), (
+        f"version must be semver-like (e.g. '2.0' or '2.0.0'), got: {version!r}"
+    )
+
+
+def test_payload_major_version_2_top_level_keys_pinned(vault_index: VaultIndex) -> None:
+    """v2.x の payload top-level key set が既知のセットと一致すること (R2-2 enforcement).
+
+    _VERSION_POLICY で "destructive changes bump major" と約束しているため、
+    top-level key の削除や rename には major version の bump が必要。
+    このテストはその約束を CI で部分的に強制する:
+    - top-level key を削除した場合 → このテストが失敗して bump 漏れを検知
+    - major が 3 に上がった場合 → このテストが失敗して内容更新を要求
+
+    additive 変更 (key 追加) は _EXPECTED_V2_KEYS を更新すれば済む。
+    minor version の bump は不要 (テストが通ったまま)。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    version = payload["version"]
+    major = int(version.split(".")[0])
+    assert major == 2, (
+        f"This test pins the v2 top-level key set; update this test when bumping to v{major}.x "
+        f"(current version: {version!r})"
+    )
+
+    expected_v2_keys = {
+        "version",
+        "version_policy",
+        "overview",
+        "recommended_flow",
+        "errors",
+        "tools",
+        "frontmatter_key_info_schema",
+        "frontmatter_keys",
+    }
+    actual_keys = set(payload.keys())
+    removed = expected_v2_keys - actual_keys
+    assert not removed, (
+        f"Top-level keys removed without major version bump: {removed}. "
+        f"Either bump _SCHEMA_VERSION to 3.x or restore the removed keys."
+    )
+
+
+def test_vault_search_in_recommended_flow(vault_index: VaultIndex) -> None:
+    """recommended_flow に vault_search が含まれること (R2-1 guard).
+
+    vault_search は "ほとんどのタスクの起点" として condition に明記されており、
+    flow から消えると agent が主要な検索経路を見失う。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    flow = payload["recommended_flow"]
+    flow_tools = [step["tool"] for step in flow]
+    assert "vault_search" in flow_tools, (
+        f"vault_search must be in recommended_flow (primary entry point); got tools: {flow_tools}"
+    )
+
+
 def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex) -> None:
     """payload["overview"] が初見 agent へのエントリ導線を案内すること.
 
@@ -444,14 +541,14 @@ def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex)
 
 
 def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None:
-    """payload["recommended_flow"] は step/tool のみの list[dict] (#196).
+    """payload["recommended_flow"] が step/tool/optional キーを持つ list[dict].
 
     step は 1-based int で **連番かつ重複なし** (エージェントが "step 3 から"
     と言及しやすい可読性のため)。重複や 0 や 9 が混入していたら即検知する。
 
-    各 step に purpose 等の prose フィールドを追加しない — tool 個別の説明は
-    ``tools[name].description`` が単一 SoT であり、`recommended_flow` は
-    「呼び出し順序」のみを契約とする (Issue #196, Option A)。
+    #196 Option A に従い ``purpose`` フィールドは削除 (tool description との
+    drift を構造的に排除)。#192 に従い ``optional: bool`` は必須フィールド、
+    ``condition: str`` は optional=True の step で必須。
     """
     from vault_search.resources import build_schema_payload
 
@@ -464,10 +561,12 @@ def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None
 
     for idx, step in enumerate(flow, start=1):
         assert isinstance(step, dict), f"flow[{idx - 1}] must be dict: {step!r}"
-        assert set(step.keys()) == {"step", "tool"}, (
-            f"flow[{idx - 1}] must have exactly {{'step', 'tool'}} keys, "
-            f"got {set(step.keys())} — prose fields (purpose 等) は "
-            f"tools[name].description に委譲する (#196)"
+        assert set(step.keys()) >= {"step", "tool", "optional"}, (
+            f"flow[{idx - 1}] missing required keys: got {set(step.keys())}"
+        )
+        assert "purpose" not in step, (
+            f"flow[{idx - 1}] should not have 'purpose' (removed per #196 Option A, "
+            f"see tools[name].description instead): {step!r}"
         )
         assert isinstance(step["step"], int) and step["step"] >= 1, (
             f"step must be 1-based int, got {step['step']!r}"
@@ -475,11 +574,39 @@ def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None
         assert isinstance(step["tool"], str) and step["tool"], (
             f"tool must be non-empty str, got {step['tool']!r}"
         )
+        assert isinstance(step["optional"], bool), (
+            f"optional must be bool, got {step['optional']!r}"
+        )
 
     step_numbers = [step["step"] for step in flow]
     assert step_numbers == list(range(1, len(flow) + 1)), (
         f"step numbers must be consecutive 1-based ints with no gaps/duplicates, got {step_numbers}"
     )
+
+
+def test_recommended_flow_optional_steps_have_condition(vault_index: VaultIndex) -> None:
+    """optional=True の step は condition 文字列を持つこと (#192).
+
+    agent が「このステップを踏むべきか」を機械可読に判定できるようにする。
+    必須 step (optional=False) では condition は不要。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    flow = payload["recommended_flow"]
+
+    optional_steps = [step for step in flow if step.get("optional") is True]
+    assert optional_steps, (
+        "at least one step should be optional (else agent will treat whole flow as mandatory)"
+    )
+
+    for step in optional_steps:
+        assert "condition" in step, (
+            f"optional step {step['step']} ({step['tool']}) must have 'condition': {step!r}"
+        )
+        assert isinstance(step["condition"], str) and step["condition"].strip(), (
+            f"condition must be non-empty str, got {step['condition']!r}"
+        )
 
 
 def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
@@ -511,52 +638,89 @@ def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
 
 
 def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
-    """payload["errors"] が NoteNotFoundError と ValidationError を含む dict.
+    """payload["errors"] が ErrorCode の全値をカバーし、各エントリに必須フィールドを持つこと (#191).
 
-    各値は description / error_code / example キーを持つこと。
+    error_code 単位 re-key 後も全 ErrorCode (VAULT_SEARCH_ERROR 含む) が
+    description / raised_by / example を持つことを確認する。
+    test_errors_covers_all_error_codes と合わせて exact-set + field-structure を両面保証。
     """
+    from typing import get_args
+
+    from vault_search.exceptions import ErrorCode
     from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "errors" in payload, f"'errors' key missing: keys={list(payload)}"
     errors = payload["errors"]
     assert isinstance(errors, dict), f"errors must be dict, got {type(errors).__name__}"
-    for cls_name in ("NoteNotFoundError", "ValidationError"):
-        assert cls_name in errors, f"errors['{cls_name}'] missing: got {list(errors)}"
-        entry = errors[cls_name]
-        assert isinstance(entry, dict), f"errors['{cls_name}'] must be dict: {entry!r}"
-        for field in ("description", "error_code", "example"):
-            assert field in entry, f"errors['{cls_name}'] missing '{field}': {entry!r}"
+    for code in get_args(ErrorCode):
+        assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
+        entry = errors[code]
+        assert isinstance(entry, dict), f"errors['{code}'] must be dict: {entry!r}"
+        for field in ("description", "raised_by", "example"):
+            assert field in entry, f"errors['{code}'] missing '{field}': {entry!r}"
             assert isinstance(entry[field], str) and entry[field].strip(), (
-                f"errors['{cls_name}']['{field}'] must be non-empty str: {entry[field]!r}"
+                f"errors['{code}']['{field}'] must be non-empty str: {entry[field]!r}"
             )
 
 
-def test_errors_error_code_matches_live_exception_class(vault_index: VaultIndex) -> None:
-    """errors[cls]['error_code'] が実クラスの error_code 属性と一致すること.
+def test_errors_covers_all_error_codes(vault_index: VaultIndex) -> None:
+    """errors が ErrorCode Literal の全値をカバーすること (#191 drift guard).
 
-    ErrorCode Literal の drift をテスト層で pin する (exceptions.py の rename や
-    code 変更時に即検知)。Refactor で import-time assert を置く代わりに runtime
-    テストで吸収する。NoteNotFoundError と ValidationError 両方とも class
-    attribute (default error_code) を持つので live class 比較で対称化する。
+    `typing.get_args(ErrorCode)` の全要素が payload["errors"] キー集合と一致
+    する。新 ErrorCode 追加時に _ERRORS 追加忘れを即検知する。
     """
-    from vault_search.exceptions import NoteNotFoundError
+    from typing import get_args
+
+    from vault_search.exceptions import ErrorCode
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    errors = payload["errors"]
+
+    declared_codes = set(get_args(ErrorCode))
+    payload_codes = set(errors.keys())
+    missing = declared_codes - payload_codes
+    extra = payload_codes - declared_codes
+    assert not missing, (
+        f"ErrorCode values missing from payload['errors']: {missing}\n"
+        f"declared in ErrorCode Literal but not documented"
+    )
+    assert not extra, (
+        f"payload['errors'] has codes not in ErrorCode Literal: {extra}\n"
+        f"either drifted key or missing from exceptions.ErrorCode"
+    )
+
+
+def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) -> None:
+    """errors[code]['raised_by'] が実クラス名と一致すること (全 5 ErrorCode をカバー).
+
+    #191 で error_code 単位に re-key された後も、どの Python 例外クラスから
+    raise されるかを agent に伝える必要がある。class の __name__ を live 参照
+    することで、exception class rename 時に即検知する。
+    ValidationError サブコード (UNKNOWN_FRONTMATTER_KEY / UNSUPPORTED_RANGE_OPERATOR /
+    VALIDATION_ERROR) はいずれも ValidationError から raise されることを pin する。
+    """
+    from vault_search.exceptions import NoteNotFoundError, VaultSearchError
     from vault_search.resources import build_schema_payload
     from vault_search.validation import ValidationError as VE
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     errors = payload["errors"]
 
-    assert errors["NoteNotFoundError"]["error_code"] == NoteNotFoundError.error_code, (
-        f"NoteNotFoundError error_code drifted: "
-        f"payload={errors['NoteNotFoundError']['error_code']!r} "
-        f"vs live={NoteNotFoundError.error_code!r}"
-    )
-    assert errors["ValidationError"]["error_code"] == VE.error_code, (
-        f"ValidationError error_code drifted: "
-        f"payload={errors['ValidationError']['error_code']!r} "
-        f"vs live={VE.error_code!r}"
-    )
+    expected_raised_by = {
+        "VAULT_SEARCH_ERROR": VaultSearchError.__name__,
+        "NOTE_NOT_FOUND": NoteNotFoundError.__name__,
+        "VALIDATION_ERROR": VE.__name__,
+        "UNKNOWN_FRONTMATTER_KEY": VE.__name__,
+        "UNSUPPORTED_RANGE_OPERATOR": VE.__name__,
+    }
+    for code, expected_cls_name in expected_raised_by.items():
+        actual = errors[code]["raised_by"]
+        assert actual == expected_cls_name, (
+            f"errors['{code}']['raised_by'] drifted: "
+            f"payload={actual!r} vs live={expected_cls_name!r}"
+        )
 
 
 def test_payload_has_frontmatter_key_info_schema(vault_index: VaultIndex) -> None:
