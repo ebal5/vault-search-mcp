@@ -873,6 +873,12 @@ class VaultIndex:
 
         for row in rows:
             fm = json.loads(row["frontmatter"])
+            # SQLite の ``json_valid()`` (RFC 8259) と Python の ``json.loads``
+            # はコーナーケース (重複キー扱い / サロゲートペア / ``NaN``/``Infinity``
+            # 等) で挙動が微細に異なり、また ``.vault-search.db`` へ直接書込まれた
+            # 破損 frontmatter (トップレベル null / array など) も理論上ありうる。
+            # ``parser._normalize_fm`` が trust boundary で dict を保証するが、
+            # DB への直書きはそれを bypass するため二重 check で防御する (#181)。
             if not isinstance(fm, dict):
                 continue
             _collect_key_info(fm, "", value_counters, type_sets, note_counts)
