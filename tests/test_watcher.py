@@ -323,3 +323,22 @@ def test_watcher_flush_accumulates_multiple_failures(
 
     stats = watcher.failure_stats()
     assert stats["watcher_failure_count"] == 2
+
+
+def test_watcher_stop_safe_when_observer_not_started(vault: Path, index: VaultIndex) -> None:
+    """``stop()`` が ``observer.start()`` 未呼び出し状態でも安全に完了する (#39).
+
+    ``start()`` 内で ``self._observer = Observer()`` を設定した直後に
+    ``observer.start()`` が失敗した場合 (inotify 上限・権限エラー等)、
+    ``_observer`` は設定済みだがスレッドは未起動。
+    このとき ``stop()`` → ``observer.join()`` は
+    ``RuntimeError: cannot join thread before it is started`` を投げる。
+    """
+    from watchdog.observers import Observer
+
+    watcher = VaultWatcher(index)
+    # observer を設定するが start() は呼ばない (start() が途中失敗する状況を模倣)
+    watcher._observer = Observer()
+    watcher._observer.daemon = True
+    # stop() が RuntimeError を投げないこと
+    watcher.stop()  # must not raise
