@@ -102,3 +102,50 @@ def test_list_frontmatter_keys_invalidated_after_build_index(
 
     keys = {info.key for info in idx.list_frontmatter_keys()}
     assert "extra_key_from_rebuild" in keys
+
+
+def test_list_frontmatter_keys_concurrent_read_during_invalidate(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """read と invalidate の並行実行で TypeError / 破損が発生しない (Round 2 E1).
+
+    `list_frontmatter_keys()` 読出し中に別スレッドが `_invalidate_caches()` で
+    キャッシュを None にしても、snapshot pattern + lock 対称化により
+    ``list(None)`` にならず、常に valid な list を返す。
+    """
+    import threading
+
+    _root, idx = vault_builder(
+        {
+            "a.md": "---\nalpha: 1\n---\nbody\n",
+            "b.md": "---\nbeta: 2\n---\nbody\n",
+        }
+    )
+    idx.list_frontmatter_keys()  # prime cache
+
+    errors: list[Exception] = []
+    barrier = threading.Barrier(2)
+
+    def reader() -> None:
+        barrier.wait()
+        for _ in range(200):
+            try:
+                result = idx.list_frontmatter_keys()
+                assert isinstance(result, list)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+                return
+
+    def invalidator() -> None:
+        barrier.wait()
+        for _ in range(200):
+            idx._invalidate_caches()
+
+    t1 = threading.Thread(target=reader)
+    t2 = threading.Thread(target=invalidator)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not errors, f"concurrent read/invalidate should not raise: {errors!r}"

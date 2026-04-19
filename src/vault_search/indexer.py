@@ -408,9 +408,15 @@ class VaultIndex:
             return True
 
     def _invalidate_caches(self) -> None:
-        """書込み経路で tiered cache と frontmatter_keys cache を同時に落とす."""
+        """書込み経路で tiered cache と frontmatter_keys cache を同時に落とす.
+
+        ``_frontmatter_keys_cache`` の書込みは ``self._lock`` 下で行い、
+        ``list_frontmatter_keys()`` の snapshot pattern と対称化する
+        (Round 2 E1)。``_cache.invalidate()`` は自身で thread-safe。
+        """
         self._cache.invalidate()
-        self._frontmatter_keys_cache = None
+        with self._lock:
+            self._frontmatter_keys_cache = None
 
     # ------------------------------------------------------------------
     # Search — 3段パイプライン
@@ -791,15 +797,17 @@ class VaultIndex:
         初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
         invalidate されるまでキャッシュを返す (Issue #118 / #10)。
 
-        double-checked locking で並行初回呼出時の重複 DB scan を回避する
-        (本 PR で query コストが type 推論 + sample 集計に増大したため、
-        Reviewer A4 の指摘を踏まえ明示保護)。
+        並行処理対策 (A4 + Round 2 E1):
+        - double-checked locking で初回 DB scan の重複実行を防ぐ
+        - lock 下で snapshot 参照を取得してから return することで、read 後に
+          ``_invalidate_caches()`` が ``_frontmatter_keys_cache = None`` に
+          書き込んでも ``list(None)`` にならない
         """
-        if self._frontmatter_keys_cache is None:
-            with self._lock:
-                if self._frontmatter_keys_cache is None:
-                    self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
-        return list(self._frontmatter_keys_cache)
+        with self._lock:
+            if self._frontmatter_keys_cache is None:
+                self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
+            snapshot = self._frontmatter_keys_cache
+        return list(snapshot)
 
     def _query_frontmatter_keys_from_db(self) -> list[FrontmatterKeyInfo]:
         """Frontmatter のキー別メタ情報 (型推論 + sample_values + note_count) を DB から取得する."""
