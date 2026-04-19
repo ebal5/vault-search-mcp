@@ -322,3 +322,74 @@ def test_unicode_key_and_value_supported(
         "sample_values に 'あいうえお' が含まれるべき"
         f" (got {key_map['日本語キー'].sample_values!r})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 1 review 由来の追加 (A1 / B1)
+# ---------------------------------------------------------------------------
+
+
+def test_value_type_number_exponent_notation(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """YAML float の指数表記 (1e15 以上) が number と判定される (Reviewer A1).
+
+    Python float の str 変換は 1e16 以上を ``'1e+16'`` 形式で出す。既存 regex
+    ``^-?\\d+(\\.\\d+)?$`` はこれを string 扱いしていたため誤分類していた。
+    """
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義"
+
+    _root, idx = vault_builder(
+        {
+            "exp_note.md": "---\nlarge: 1.5e100\n---\nbody\n",
+            "neg_exp_note.md": "---\nsmall: 2e-10\n---\nbody\n",
+        }
+    )
+    result = idx.list_frontmatter_keys()
+    key_map = {item.key: item for item in result}
+
+    assert "large" in key_map and key_map["large"].value_type == "number", (
+        f"large: 1.5e100 → value_type='number' (got {key_map['large'].value_type!r})"
+    )
+    assert "small" in key_map and key_map["small"].value_type == "number", (
+        f"small: 2e-10 → value_type='number' (got {key_map['small'].value_type!r})"
+    )
+
+
+def test_object_key_rejected_from_metadata_filter(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """親 dict key は metadata_filter の known_keys から除外される (B1).
+
+    object 型は filter 不可なので、親キー名で filter を試みると silent 0 件ではなく
+    UNKNOWN_FRONTMATTER_KEY ValidationError で agent に誤用を通知する。
+    """
+    from vault_search.validation import ValidationError
+
+    assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が stats.py に未定義"
+
+    _root, idx = vault_builder({"nested.md": "---\nmeta:\n  author: foo\n---\nbody\n"})
+    # 親キー 'meta' は value_type='object' として list_frontmatter_keys に含まれるが、
+    # metadata_filter の known_keys からは除外されている必要がある。
+    with pytest.raises(ValidationError) as exc_info:
+        idx.search(
+            query="",
+            folder=None,
+            metadata_filter={"meta": "any"},
+            limit=20,
+            offset=0,
+        )
+    assert exc_info.value.error_code == "UNKNOWN_FRONTMATTER_KEY", (
+        f"object 型キー 'meta' への filter は UNKNOWN_FRONTMATTER_KEY になるべき "
+        f"(got {exc_info.value.error_code!r})"
+    )
+
+    # dotted leaf key 'meta.author' は引き続き filter 可能 (既存契約 #136 保持)
+    res = idx.search(
+        query="",
+        folder=None,
+        metadata_filter={"meta.author": "foo"},
+        limit=20,
+        offset=0,
+    )
+    assert res["total"] == 1
