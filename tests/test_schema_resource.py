@@ -444,10 +444,14 @@ def test_payload_has_overview_with_entry_point_guidance(vault_index: VaultIndex)
 
 
 def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None:
-    """payload["recommended_flow"] が step/tool/purpose キーを持つ list[dict].
+    """payload["recommended_flow"] は step/tool のみの list[dict] (#196).
 
     step は 1-based int で **連番かつ重複なし** (エージェントが "step 3 から"
     と言及しやすい可読性のため)。重複や 0 や 9 が混入していたら即検知する。
+
+    各 step に purpose 等の prose フィールドを追加しない — tool 個別の説明は
+    ``tools[name].description`` が単一 SoT であり、`recommended_flow` は
+    「呼び出し順序」のみを契約とする (Issue #196, Option A)。
     """
     from vault_search.resources import build_schema_payload
 
@@ -460,17 +464,16 @@ def test_payload_has_recommended_flow_structure(vault_index: VaultIndex) -> None
 
     for idx, step in enumerate(flow, start=1):
         assert isinstance(step, dict), f"flow[{idx - 1}] must be dict: {step!r}"
-        assert set(step.keys()) >= {"step", "tool", "purpose"}, (
-            f"flow[{idx - 1}] missing required keys: got {set(step.keys())}"
+        assert set(step.keys()) == {"step", "tool"}, (
+            f"flow[{idx - 1}] must have exactly {{'step', 'tool'}} keys, "
+            f"got {set(step.keys())} — prose fields (purpose 等) は "
+            f"tools[name].description に委譲する (#196)"
         )
         assert isinstance(step["step"], int) and step["step"] >= 1, (
             f"step must be 1-based int, got {step['step']!r}"
         )
         assert isinstance(step["tool"], str) and step["tool"], (
             f"tool must be non-empty str, got {step['tool']!r}"
-        )
-        assert isinstance(step["purpose"], str) and step["purpose"], (
-            f"purpose must be non-empty str, got {step['purpose']!r}"
         )
 
     step_numbers = [step["step"] for step in flow]
