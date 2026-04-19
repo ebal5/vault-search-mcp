@@ -138,28 +138,47 @@ def test_frontmatter_keys_match_vault(
 
 
 def test_value_samples_subset(schema_payload: dict[str, Any], vault_index: VaultIndex) -> None:
-    """frontmatter_value_samples の各サンプル値が実 vault の実データの部分集合である."""
-    samples = schema_payload.get("frontmatter_value_samples") or {}
-    assert isinstance(samples, dict), "frontmatter_value_samples must be a dict"
-    for key, bucket in samples.items():
-        if not isinstance(bucket, list) or not bucket:
+    """frontmatter_keys[*].sample_values の各値が実 vault の frontmatter 値と整合する.
+
+    正規化 (parser._normalize_scalar) 後の文字列表現と sample_values 値を比較:
+      - scalar (bool/int/float/date) は isoformat / str() で文字列化されている
+      - 配列値は json.dumps(..., ensure_ascii=False) の文字列
+      - value_type='object' の親キーは sample_values=[] なので skip
+    """
+    fm_keys = schema_payload.get("frontmatter_keys") or []
+    assert isinstance(fm_keys, list), "frontmatter_keys must be a list"
+    assert len(fm_keys) > 0, "fixture vault should have frontmatter keys"
+
+    # vault から各 key の正規化済み値の集合を収集
+    expected_by_key: dict[str, set[str]] = {}
+    for note in vault_index.recent_notes(limit=100):
+        detail = vault_index.get_note(note["path"])
+        if detail is None:
             continue
-        vault_values: set[Any] = set()
-        for note in vault_index.recent_notes(limit=100):
-            detail = vault_index.get_note(note["path"])
-            if detail is None:
+        fm = detail.get("frontmatter") or {}
+        for k, v in fm.items():
+            if v is None or isinstance(v, dict):
                 continue
-            fm = detail.get("frontmatter") or {}
-            if key in fm:
-                v = fm[key]
-                if isinstance(v, list):
-                    vault_values.update(v)
-                else:
-                    vault_values.add(v)
-        for sample_val in bucket:
-            assert sample_val in vault_values, (
-                f"sample value {sample_val!r} for key {key!r} "
-                f"not found in vault (vault values: {sorted(str(x) for x in vault_values)})"
+            bucket = expected_by_key.setdefault(k, set())
+            if isinstance(v, list):
+                bucket.add(json.dumps(v, ensure_ascii=False))
+            elif isinstance(v, str):
+                if v.strip():
+                    bucket.add(v)
+            else:
+                bucket.add(str(v))
+
+    for info in fm_keys:
+        if info.get("value_type") == "object":
+            assert info["sample_values"] == [], (
+                f"object 型 '{info['key']}' の sample_values は [] でなければならない"
+            )
+            continue
+        expected = expected_by_key.get(info["key"], set())
+        for sample_val in info["sample_values"]:
+            assert sample_val in expected, (
+                f"sample value {sample_val!r} for key {info['key']!r} "
+                f"not found in vault (expected subset: {sorted(expected)})"
             )
 
 

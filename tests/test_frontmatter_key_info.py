@@ -133,12 +133,11 @@ def test_value_type_array(
     assert key_map["tags"].value_type == "array", (
         f"tags: [a, b] → value_type='array' であるべき (got {key_map['tags'].value_type!r})"
     )
-    # sample_values に配列全体の JSON 文字列表現が含まれる (例: '["a", "b"]')
-    assert len(key_map["tags"].sample_values) > 0, "sample_values に配列表現が含まれるべき"
-    # 少なくとも 1 件は JSON 配列文字列 ([ で始まる)
-    assert any(v.startswith("[") for v in key_map["tags"].sample_values), (
-        "sample_values に '[' で始まる JSON 配列文字列が含まれるべき"
-        f" (got {key_map['tags'].sample_values!r})"
+    # sample_values に配列全体の JSON 文字列表現が厳密に含まれる (Reviewer C5)。
+    # `str(list)` の Python repr (`"['a', 'b']"`) ではなく `json.dumps` 出力を pin。
+    assert '["a", "b"]' in key_map["tags"].sample_values, (
+        f'sample_values に JSON 配列文字列 \'["a", "b"]\' が含まれるべき '
+        f"(got {key_map['tags'].sample_values!r})"
     )
 
 
@@ -195,19 +194,18 @@ def test_sample_values_top5_frequency_and_tiebreak(
     assert "status" in key_map, "status キーが含まれるべき"
     samples = key_map["status"].sample_values
 
-    # 最大 5 件
-    assert len(samples) <= 5, f"sample_values は最大 5 件 (got {len(samples)})"
+    # 厳密に 5 件 (top-5 強制の regression guard: 全件返却バグや [:5] 削除バグを検知)
+    assert len(samples) == 5, f"sample_values は厳密に 5 件 (got {len(samples)})"
 
-    # 1 位は "active" (頻度 3)
-    assert samples[0] == "active", f"頻度最大の 'active' が先頭であるべき (got {samples[0]!r})"
+    # 1-2 位は頻度上位: active(3), draft(2)
+    assert samples[0] == "active", f"頻度 3 の 'active' が先頭 (got {samples[0]!r})"
+    assert samples[1] == "draft", f"頻度 2 の 'draft' が 2 位 (got {samples[1]!r})"
 
-    # 2 位は "draft" (頻度 2)
-    assert len(samples) >= 2, "sample_values に少なくとも 2 件あるべき"
-    assert samples[1] == "draft", f"2 位は 'draft' (頻度 2) であるべき (got {samples[1]!r})"
-
-    # 3 位以降は同頻度 (1) → 辞書順: cancel, done, todo, wip の先頭 2 件
-    if len(samples) >= 3:
-        assert samples[2] == "cancel", f"3 位は辞書順 'cancel' であるべき (got {samples[2]!r})"
+    # 3-5 位は同頻度 (1) → 辞書順: cancel, done, todo (wip は 6 番目で除外)
+    assert samples[2] == "cancel", f"3 位は辞書順 'cancel' (got {samples[2]!r})"
+    assert samples[3] == "done", f"4 位は辞書順 'done' (got {samples[3]!r})"
+    assert samples[4] == "todo", f"5 位は辞書順 'todo' (got {samples[4]!r})"
+    assert "wip" not in samples, f"6 番目 (辞書順で 'wip') は除外されるべき (got {samples!r})"
 
 
 def test_sample_values_excludes_empty_but_note_count_includes(
@@ -302,6 +300,15 @@ def test_dotted_nested_key_returns_key_info(
     )
     assert key_map["meta"].value_type == "object", (
         f"親 dict キーは value_type='object' であるべき (got {key_map['meta'].value_type!r})"
+    )
+    # object 型の sample_values と note_count contract (Reviewer C3):
+    # sample_values は空リスト (dict 値は filter 不可なのでサンプルを持たない)
+    assert key_map["meta"].sample_values == [], (
+        f"object 型キーの sample_values は空リスト (got {key_map['meta'].sample_values!r})"
+    )
+    # note_count は親キーが出現する note 数
+    assert key_map["meta"].note_count == 1, (
+        f"object 型キーの note_count は出現 note 数 (got {key_map['meta'].note_count})"
     )
 
 
