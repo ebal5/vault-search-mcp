@@ -61,9 +61,12 @@ __all__ = ["build_schema_payload"]
 #
 # version format は ``<major>.<minor>`` の semver-like 文字列。bumping policy は
 # payload["version_policy"] として agent に露出する (#193)。
-_SCHEMA_VERSION: str = "1.1"
+_SCHEMA_VERSION: str = "2.0"
 
 # payload["version"] の bumping policy。agent が cache invalidation 判断に使う。
+# version 2.0 はこのポリシーを確立した版であり、同時に 1.x からの破壊的変更
+# (errors の再 key 化、recommended_flow の purpose 削除) を含む。
+# ポリシーは 2.0 以降の変更に適用される。
 _VERSION_POLICY: str = (
     "additive changes (adding new top-level keys, adding new fields to existing "
     "objects, or adding new enum values) bump the minor version. "
@@ -71,7 +74,9 @@ _VERSION_POLICY: str = (
     "narrowing enum values) are breaking and bump the major version. "
     "agents should invalidate cached schema payloads on any major version change "
     "and re-read the payload; minor version changes are safe to ignore if the "
-    "agent only consumes known keys."
+    "agent only consumes known keys. "
+    "this policy applies to changes made from version 2.0 onward; version 2.0 "
+    "itself established this policy alongside breaking structural changes from 1.x."
 )
 
 _OVERVIEW: str = (
@@ -113,12 +118,19 @@ _RECOMMENDED_FLOW: list[dict[str, Any]] = [
     {
         "step": 3,
         "tool": "vault_search",
-        "optional": False,
+        "optional": True,
+        "condition": (
+            "テキスト / タグ / フォルダ / metadata_filter 条件でノートを絞り込む場合 (典型的な起点)"
+        ),
     },
     {
         "step": 4,
         "tool": "vault_get_note",
-        "optional": False,
+        "optional": True,
+        "condition": (
+            "特定ノートの全文・frontmatter を取得する場合 "
+            "(vault_search の path または既知の path を使用)"
+        ),
     },
     {
         "step": 5,
@@ -175,9 +187,11 @@ _ERRORS: dict[str, dict[str, str]] = {
         "description": (
             "エージェント入力の検証失敗 (識別子不正 / ページング範囲外 など)。"
             "より具体的な UNKNOWN_FRONTMATTER_KEY / UNSUPPORTED_RANGE_OPERATOR で"
-            "返るケースもあるため、error_code の完全一致分岐ではなく prefix / 集合判定を推奨。"
+            "返るケースもある。FastMCP は例外を 'Error executing tool <tool>: <message>' "
+            "形式のプレーンテキストに変換するため、agent は各 entry の example 文字列を "
+            "ベースにした message パターンマッチでエラー種別を判定する。"
         ),
-        "example": "limit must be <= 100 (got 500)",
+        "example": "limit must be <= 500 (got 1000)",
     },
     "UNKNOWN_FRONTMATTER_KEY": {
         "raised_by": ValidationError.__name__,

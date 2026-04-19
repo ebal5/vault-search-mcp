@@ -581,25 +581,22 @@ def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
 
 
 def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
-    """payload["errors"] が error_code 単位で主要エラーを含む dict (#191).
+    """payload["errors"] が ErrorCode の全値をカバーし、各エントリに必須フィールドを持つこと (#191).
 
-    旧仕様 (class name キー) から error_code キーへ移行。各値は
-    description / raised_by / example キーを持つ。主要エラーとして
-    NOTE_NOT_FOUND / VALIDATION_ERROR / UNKNOWN_FRONTMATTER_KEY /
-    UNSUPPORTED_RANGE_OPERATOR を必ず含める。
+    error_code 単位 re-key 後も全 ErrorCode (VAULT_SEARCH_ERROR 含む) が
+    description / raised_by / example を持つことを確認する。
+    test_errors_covers_all_error_codes と合わせて exact-set + field-structure を両面保証。
     """
+    from typing import get_args
+
+    from vault_search.exceptions import ErrorCode
     from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "errors" in payload, f"'errors' key missing: keys={list(payload)}"
     errors = payload["errors"]
     assert isinstance(errors, dict), f"errors must be dict, got {type(errors).__name__}"
-    for code in (
-        "NOTE_NOT_FOUND",
-        "VALIDATION_ERROR",
-        "UNKNOWN_FRONTMATTER_KEY",
-        "UNSUPPORTED_RANGE_OPERATOR",
-    ):
+    for code in get_args(ErrorCode):
         assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
         entry = errors[code]
         assert isinstance(entry, dict), f"errors['{code}'] must be dict: {entry!r}"
@@ -639,29 +636,34 @@ def test_errors_covers_all_error_codes(vault_index: VaultIndex) -> None:
 
 
 def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) -> None:
-    """errors[code]['raised_by'] が実クラス名と一致すること.
+    """errors[code]['raised_by'] が実クラス名と一致すること (全 5 ErrorCode をカバー).
 
     #191 で error_code 単位に re-key された後も、どの Python 例外クラスから
     raise されるかを agent に伝える必要がある。class の __name__ を live 参照
     することで、exception class rename 時に即検知する。
+    ValidationError サブコード (UNKNOWN_FRONTMATTER_KEY / UNSUPPORTED_RANGE_OPERATOR /
+    VALIDATION_ERROR) はいずれも ValidationError から raise されることを pin する。
     """
-    from vault_search.exceptions import NoteNotFoundError
+    from vault_search.exceptions import NoteNotFoundError, VaultSearchError
     from vault_search.resources import build_schema_payload
     from vault_search.validation import ValidationError as VE
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     errors = payload["errors"]
 
-    assert errors["NOTE_NOT_FOUND"]["raised_by"] == NoteNotFoundError.__name__, (
-        f"NOTE_NOT_FOUND raised_by drifted: "
-        f"payload={errors['NOTE_NOT_FOUND']['raised_by']!r} "
-        f"vs live={NoteNotFoundError.__name__!r}"
-    )
-    assert errors["VALIDATION_ERROR"]["raised_by"] == VE.__name__, (
-        f"VALIDATION_ERROR raised_by drifted: "
-        f"payload={errors['VALIDATION_ERROR']['raised_by']!r} "
-        f"vs live={VE.__name__!r}"
-    )
+    expected_raised_by = {
+        "VAULT_SEARCH_ERROR": VaultSearchError.__name__,
+        "NOTE_NOT_FOUND": NoteNotFoundError.__name__,
+        "VALIDATION_ERROR": VE.__name__,
+        "UNKNOWN_FRONTMATTER_KEY": VE.__name__,
+        "UNSUPPORTED_RANGE_OPERATOR": VE.__name__,
+    }
+    for code, expected_cls_name in expected_raised_by.items():
+        actual = errors[code]["raised_by"]
+        assert actual == expected_cls_name, (
+            f"errors['{code}']['raised_by'] drifted: "
+            f"payload={actual!r} vs live={expected_cls_name!r}"
+        )
 
 
 def test_payload_has_frontmatter_key_info_schema(vault_index: VaultIndex) -> None:
