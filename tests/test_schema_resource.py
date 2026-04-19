@@ -435,8 +435,7 @@ def test_payload_has_version_policy(vault_index: VaultIndex) -> None:
     # additive vs destructive の概念を明示するキーワードが含まれること
     keywords = ("additive", "destructive", "major", "minor", "breaking")
     assert any(kw in policy.lower() for kw in keywords), (
-        f"version_policy must mention bumping semantics "
-        f"(expected any of {keywords}): {policy!r}"
+        f"version_policy must mention bumping semantics (expected any of {keywords}): {policy!r}"
     )
 
 

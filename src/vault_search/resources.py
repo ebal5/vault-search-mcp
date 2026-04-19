@@ -42,7 +42,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from .exceptions import NoteNotFoundError
+from .exceptions import NoteNotFoundError, VaultSearchError
 from .mcp_contract import TOOL_ENTRIES
 from .schema_meta import FrontmatterKeyInfo
 from .validation import ValidationError
@@ -58,17 +58,33 @@ __all__ = ["build_schema_payload"]
 # の入出力契約バージョン (tools[name].input_schema / output_schema) とは別の
 # 層。payload shape を破壊する変更 (key rename / 型変更) を入れる際に手動で
 # 更新する (自動 derive しない)。
-_SCHEMA_VERSION: str = "1.0"
+#
+# version format は ``<major>.<minor>`` の semver-like 文字列。bumping policy は
+# payload["version_policy"] として agent に露出する (#193)。
+_SCHEMA_VERSION: str = "1.1"
+
+# payload["version"] の bumping policy。agent が cache invalidation 判断に使う。
+_VERSION_POLICY: str = (
+    "additive changes (adding new top-level keys, adding new fields to existing "
+    "objects, or adding new enum values) bump the minor version. "
+    "destructive changes (renaming or removing keys, changing value types, or "
+    "narrowing enum values) are breaking and bump the major version. "
+    "agents should invalidate cached schema payloads on any major version change "
+    "and re-read the payload; minor version changes are safe to ignore if the "
+    "agent only consumes known keys."
+)
 
 _OVERVIEW: str = (
     "vault-search-mcp は Obsidian Vault を構造化された知識ベースとして公開する MCP サーバー。"
     "SQLite FTS5 trigram インデックスで日英両対応の全文検索を提供し、note 単位の frontmatter を"
     "機械可読な値として metadata_filter 経由で絞り込める。\n\n"
     "エージェントはまず本 schema://tools resource を読み、利用可能な tool 一覧、"
-    "frontmatter_keys の型・値例、代表エラーの構造を把握してから recommended_flow の順で "
-    "tool を呼び出すことが推奨される。recommended_flow は呼出順序のみを示し、"
-    "各 tool の用途・引数・戻り値の詳細は tools[name].description / input_schema / "
-    "output_schema を参照する。全スカラー frontmatter 値は index 時に文字列へ"
+    "frontmatter_keys の型・値例、代表エラーの構造を把握してから recommended_flow を参考に "
+    "tool を呼び出すことが推奨される。recommended_flow は典型フローの順序ガイドであり、"
+    "各 step の ``optional`` / ``condition`` フィールドで逸脱可能性 (例: query が既知なら "
+    "vault_search から開始) を機械可読に示す。各 tool の詳細挙動・引数・戻り値は "
+    "tools[name].description / input_schema / output_schema を参照する。\n\n"
+    "全スカラー frontmatter 値は index 時に文字列へ"
     "正規化される (例: int 5 → '5'、date 2024-01-15 → '2024-01-15'、"
     "bool true → 'true')。vault 本体を変更するのは vault_reindex のみで、他は全て read-only。"
 )
@@ -77,43 +93,113 @@ _OVERVIEW: str = (
 # 照合する (#194)。schema://tools resource 自身は step 0 (overview の冒頭) で触れる想定で
 # 本 flow には含めない。
 #
-# 各 step は {step, tool} のみを contract とし、prose な説明は持たない (#196 Option A)。
-# tool 個別の用途は tools[name].description を単一 SoT として参照する。
+# 各 step は ``optional: bool`` を持つ。optional=True の step は ``condition``
+# フィールドで発動条件を人間可読かつ machine-parseable な短文で示す (#192)。
+# 詳細な purpose 説明は ``tools[name].description`` に寄せ、本 flow には含めない
+# (#196 Option A: drift guard 面積を排除)。
 _RECOMMENDED_FLOW: list[dict[str, Any]] = [
-    {"step": 1, "tool": "vault_folders"},
-    {"step": 2, "tool": "vault_tags"},
-    {"step": 3, "tool": "vault_search"},
-    {"step": 4, "tool": "vault_get_note"},
-    {"step": 5, "tool": "vault_recent"},
-    {"step": 6, "tool": "vault_stats"},
-    {"step": 7, "tool": "vault_reindex"},
+    {
+        "step": 1,
+        "tool": "vault_folders",
+        "optional": True,
+        "condition": "フォルダ構造が未知で、後続検索の scope を事前に絞りたい場合",
+    },
+    {
+        "step": 2,
+        "tool": "vault_tags",
+        "optional": True,
+        "condition": "利用可能なタグ一覧が未知で、metadata_filter の候補を把握したい場合",
+    },
+    {
+        "step": 3,
+        "tool": "vault_search",
+        "optional": False,
+    },
+    {
+        "step": 4,
+        "tool": "vault_get_note",
+        "optional": False,
+    },
+    {
+        "step": 5,
+        "tool": "vault_recent",
+        "optional": True,
+        "condition": "最近編集された note を起点に探索したい場合 (query なしの補助的な起点)",
+    },
+    {
+        "step": 6,
+        "tool": "vault_stats",
+        "optional": True,
+        "condition": "index の健全性 / note 総数を確認したい場合 (診断用途)",
+    },
+    {
+        "step": 7,
+        "tool": "vault_reindex",
+        "optional": True,
+        "condition": "watcher 外の変更や index 破損が疑われる場合のみ (通常は不要)",
+    },
 ]
 
-# error_code は live class 属性を参照して drift を防ぐ
-# (tests/test_schema_resource.py::test_errors_error_code_matches_live_exception_class)。
+# _ERRORS は error_code 単位で展開する (#191)。outer key が ErrorCode Literal
+# の値、inner ``raised_by`` が Python 例外クラス名 (live __name__ 参照で drift
+# を防ぐ)。全 ErrorCode を必ず載せる — 欠落は
+# ``tests/test_schema_resource.py::test_errors_covers_all_error_codes`` が検知。
 #
 # MCP wire format 注記: FastMCP は例外を ToolError でラップするため、agent が
 # 実際に受け取る文字列は 'Error executing tool <tool_name>: <raw_message>' 形式。
 # `example` 値は raw_message 部分のみを示す (.claude/rules/fastmcp-gotchas.md
 # の「Tool error — 構造化属性の wire 消失」節参照)。`error_code` 属性は
 # 現状の MCP wire には含まれないため、agent は error_code ベースの programmatic
-# 分岐ではなく message 文字列を見ることになる。
+# 分岐ではなく message 文字列を見ることになる。本 errors section は payload
+# の key 自身が error_code 値なので、agent は schema://tools を読んだ段階で
+# 想定される全 error_code 集合を機械的に把握できる。
 _ERRORS: dict[str, dict[str, str]] = {
-    "NoteNotFoundError": {
-        "error_code": NoteNotFoundError.error_code,
+    VaultSearchError.error_code: {
+        "raised_by": VaultSearchError.__name__,
+        "description": (
+            "vault-search-mcp ドメインの基底例外。通常は直接 raise されず、"
+            "より具体的なサブクラス (NoteNotFoundError / ValidationError) で送出される。"
+        ),
+        "example": "(base class; not raised directly)",
+    },
+    NoteNotFoundError.error_code: {
+        "raised_by": NoteNotFoundError.__name__,
         "description": (
             "指定された path の note が index に存在しない。"
             "vault_search や vault_folders で path を先に確認してから再試行する。"
         ),
         "example": "Note not found: Projects/foo.md",
     },
-    "ValidationError": {
-        "error_code": ValidationError.error_code,
+    ValidationError.error_code: {
+        "raised_by": ValidationError.__name__,
         "description": (
-            "エージェント入力の検証失敗 (識別子不正 / 未知の frontmatter key / "
-            "ページング範囲外 など)。hint や did_you_mean で自己修正ヒントを付けて返す。"
+            "エージェント入力の検証失敗 (識別子不正 / ページング範囲外 など)。"
+            "より具体的な UNKNOWN_FRONTMATTER_KEY / UNSUPPORTED_RANGE_OPERATOR で"
+            "返るケースもあるため、error_code の完全一致分岐ではなく prefix / 集合判定を推奨。"
+        ),
+        "example": "limit must be <= 100 (got 500)",
+    },
+    "UNKNOWN_FRONTMATTER_KEY": {
+        "raised_by": ValidationError.__name__,
+        "description": (
+            "metadata_filter に未知の frontmatter key を指定。message に "
+            "``did you mean: <key>?`` の修正候補 (編集距離 suggest) が付く。"
+            "schema://tools の frontmatter_keys で有効キー集合を事前確認できる。"
         ),
         "example": "Unknown frontmatter key 'statu'; did you mean: status?",
+    },
+    "UNSUPPORTED_RANGE_OPERATOR": {
+        "raised_by": ValidationError.__name__,
+        "description": (
+            "metadata_filter で gt / lt / gte / lte 等の範囲比較演算子を指定。"
+            "frontmatter 値は index 時に文字列正規化されるため範囲比較は未対応。"
+            "対応演算子は eq (bare string) / in / ne のみ。数値・日付比較は"
+            "取得後のクライアント側 post-filter で行う。"
+        ),
+        "example": (
+            "Unsupported operator 'gt' for key 'priority': "
+            "numeric/date range comparison is not supported in metadata_filter."
+        ),
     },
 }
 
@@ -133,6 +219,7 @@ def build_schema_payload(
     """
     return {
         "version": _SCHEMA_VERSION,
+        "version_policy": _VERSION_POLICY,
         "overview": _OVERVIEW,
         "recommended_flow": _RECOMMENDED_FLOW,
         "errors": _ERRORS,
