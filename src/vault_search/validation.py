@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 
 from .exceptions import ErrorCode, VaultSearchError
 
@@ -197,11 +197,11 @@ def validate_identifier(
 def format_unknown_keys_message(
     unknowns: Mapping[str, Sequence[str]],
     kind: str,
-    known_keys: Sequence[str],
+    known_keys: Collection[str],
     *,
     schema_ref: str = "schema://tools",
     registry_label: str = "frontmatter_keys list",
-    object_keys: Sequence[str] = (),
+    object_keys: Collection[str] = (),
 ) -> str:
     """Build a unified unknown-key error message covering 1 and N unknown keys.
 
@@ -279,12 +279,12 @@ def format_unknown_keys_message(
 
 def validate_known_keys(
     names: Iterable[str],
-    known_keys: Sequence[str],
+    known_keys: Collection[str],
     *,
     kind: str,
     schema_ref: str = "schema://tools",
     registry_label: str = "frontmatter_keys list",
-    object_keys: Sequence[str] = (),
+    object_keys: Collection[str] = (),
 ) -> None:
     """Validate that every name in ``names`` appears in ``known_keys`` (batch).
 
