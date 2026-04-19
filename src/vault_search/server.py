@@ -73,7 +73,25 @@ mcp = FastMCP("vault-search")
 # server.py 側で定数を重複定義しない。
 
 
+def _with_folder_description(fn):
+    """docstring の ``{FOLDER_DESCRIPTION}`` placeholder を ``_FOLDER_DESCRIPTION``
+    の本文で置換する (Issue #37 — SSOT).
+
+    ``_FOLDER_DESCRIPTION`` は ``mcp_contract._FOLDER_DESCRIPTION`` を単一
+    ソースとし、``Field(description=...)`` (MCP inputSchema 経由) と docstring
+    (``inspect.getdoc`` / ``help`` / FastMCP description 経由) の両方でこの値を
+    共有する。backslash escape 差で drift しないよう、docstring には
+    ``{FOLDER_DESCRIPTION}`` という placeholder を書き、本 decorator で runtime
+    に差し替える。``@mcp.tool()`` より内側 (decorator スタックの下) で適用する
+    ことで、FastMCP が ``__doc__`` を読む時点で既に展開済みにする。
+    """
+    if fn.__doc__ and "{FOLDER_DESCRIPTION}" in fn.__doc__:
+        fn.__doc__ = fn.__doc__.replace("{FOLDER_DESCRIPTION}", _FOLDER_DESCRIPTION)
+    return fn
+
+
 @mcp.tool(annotations=TOOL_SPECS["vault_search"].annotations)
+@_with_folder_description
 def vault_search(
     query: str,
     tags: list[str] | None = None,
@@ -92,9 +110,7 @@ def vault_search(
     Args:
         query: 検索クエリ。スペース区切りで AND 検索。日本語・英語混在可。
         tags: タグフィルタ（例: ["project/hermes-agent", "status/decided"]）。全て AND。
-        folder: フォルダプレフィックスフィルタ（例: "Projects/Hermes Agent"）。
-            末尾 '/' および '\\' 区切りは自動で正規化される（例: "Projects/" → "Projects"）。
-            スラッシュのみの入力（'/', '//', '\\\\'）はフィルタなし（= 全件）として扱う。
+        folder: {FOLDER_DESCRIPTION}
         limit: 最大返却件数（デフォルト 20）。
         offset: 開始位置（ページネーション用）。
         metadata_filter: frontmatter プロパティでの AND フィルタ。
@@ -169,6 +185,7 @@ def vault_get_note(path: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=TOOL_SPECS["vault_recent"].annotations)
+@_with_folder_description
 def vault_recent(
     limit: int = 20,
     offset: int = 0,
@@ -181,9 +198,7 @@ def vault_recent(
         offset: ページング用の開始位置（デフォルト 0, >=0）。vault_search と同じ
                 意味論で、最近更新順 (file_mtime DESC) の先頭から offset 件を
                 スキップして limit 件返す。
-        folder: フォルダプレフィックスで絞り込み（例: "Research"）。
-            末尾 '/' および '\\' 区切りは自動で正規化される（例: "Research/" → "Research"）。
-            スラッシュのみの入力（'/', '//', '\\\\'）はフィルタなし（= 全件）として扱う。
+        folder: {FOLDER_DESCRIPTION}
 
     副作用: 読み取り専用 (vault / DB 書き込み無し)。
 
@@ -272,9 +287,8 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
             それぞれ ``0`` / ``null``。
     """
     stats = _get_index().build_index(force=force)
-    if _watcher is not None:
-        stats.update(_watcher.failure_stats())
-    return ReindexStats(**stats).model_dump(mode="json")
+    watcher_stats = _watcher.failure_stats() if _watcher is not None else {}
+    return ReindexStats(**stats, **watcher_stats).model_dump(mode="json")
 
 
 @mcp.tool(annotations=TOOL_SPECS["vault_stats"].annotations)
