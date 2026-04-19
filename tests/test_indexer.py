@@ -1235,8 +1235,7 @@ def test_metadata_filter_diagnostics_array_sample_is_element_level(
     samples = entry["observed_values_sample"]
     # 頻度降順 + 同頻度辞書順: research=1, urgent=1, work=1 → alphabetical
     assert samples == ["research", "urgent", "work"], (
-        "配列型 diagnostics sample は単一要素ごとの頻度集計であるべき "
-        f"(got {samples!r})"
+        f"配列型 diagnostics sample は単一要素ごとの頻度集計であるべき (got {samples!r})"
     )
 
     # JSON-array 文字列が混入していないこと (以前の sample_values 契約流用バグの pin)
