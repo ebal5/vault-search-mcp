@@ -1066,8 +1066,10 @@ def test_metadata_filter_diagnostics_attached_on_zero_total(
     entry = diag[0]
     assert entry["key"] == "status"
     assert entry["key_present_in_index"] is True
-    # _META_FILTER_NOTES は status = active / active / draft を持つので観測値は {active, draft}
-    assert set(entry["observed_values_sample"]) == {"active", "draft"}
+    # _META_FILTER_NOTES は status = active (alpha,beta) / draft (gamma)。
+    # sample_values は頻度降順なので active → draft の順で並ぶ
+    # (FrontmatterKeyInfo.sample_values の契約を引き継ぐ)。
+    assert entry["observed_values_sample"] == ["active", "draft"]
 
 
 def test_metadata_filter_diagnostics_multiple_keys(

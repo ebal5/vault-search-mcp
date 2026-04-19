@@ -71,6 +71,16 @@ class MetadataFilterDiagnostic(BaseModel):
             "UNKNOWN_FRONTMATTER_KEY でより早期に拒否される — 本フラグは防衛的な冗長化)。"
         ),
     )
+    value_type: str | None = Field(
+        default=None,
+        description=(
+            "このキーで観測された値の推論型 (FrontmatterKeyInfo.value_type と同じ enum: "
+            "string / number / boolean / array / object / mixed)。"
+            "型不一致で 0 件になっていないか (例: archived が boolean なのに "
+            '"1"/"0" で渡そうとしている) のヒントに使う。key_present_in_index=false の'
+            "ときは null。"
+        ),
+    )
     observed_values_sample: list[str] = Field(
         default_factory=list,
         description=(

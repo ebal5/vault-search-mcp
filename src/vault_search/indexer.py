@@ -552,10 +552,16 @@ class VaultIndex:
         """Issue #80: 0 件 + metadata_filter 指定時の per-key 診断情報を組み立てる.
 
         `key_infos` (``list_frontmatter_keys()`` の結果) をキー名で索引化し、
-        各 condition のキーを突き合わせて ``key_present_in_index`` と
-        ``observed_values_sample`` を返す。条件キーは parse 時点で
+        各 condition のキーを突き合わせて ``key_present_in_index`` /
+        ``value_type`` / ``observed_values_sample`` を返す。条件キーは parse 時点で
         ``known_keys`` と照合済みなので通常は全て hit するが、
         object 親キー (value_type='object') の一致など防衛的に false 分岐も保持する。
+
+        Note: tier 0/1 cache hit 時は ``results`` はキャッシュされた時点の
+        snapshot だが、``key_infos`` は現在の index 状態を反映する。
+        診断は advisory 情報なので意図的にこの非対称を許容する
+        (stale sample よりも現在の index 状態に基づく hint の方がエージェントの
+        自己修正に有用)。
         """
         info_by_key = {info.key: info for info in key_infos}
         diagnostics: list[dict[str, Any]] = []
@@ -566,6 +572,7 @@ class VaultIndex:
                     {
                         "key": cond.key,
                         "key_present_in_index": True,
+                        "value_type": info.value_type,
                         "observed_values_sample": list(info.sample_values),
                     }
                 )
@@ -574,6 +581,7 @@ class VaultIndex:
                     {
                         "key": cond.key,
                         "key_present_in_index": False,
+                        "value_type": None,
                         "observed_values_sample": [],
                     }
                 )
