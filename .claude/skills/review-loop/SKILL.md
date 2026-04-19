@@ -66,6 +66,20 @@ model: sonnet
 - **出力フォーマット** (場所/スコア/問題/推奨/既存 Issue 独立性)
 - **最大指摘数 5-7 件で抑制** (本当に重要な順)
 
+**既知 Issue 一覧の渡し方の注意**: `Agent()` tool の `prompt` 文字列は
+bash 展開されない。`$(cat /tmp/.../issues.txt)` のような記法をそのまま
+書いても reviewer には literal text として見える。以下のいずれかで渡すこと:
+
+1. **推奨**: 親が事前に `gh issue list` で取得し、prompt に**直接埋め込む**
+   (issue 数が多い場合は number: title を改行区切りで inline)
+2. 代替: reviewer に「`gh issue list --state open --limit 60 --json
+   number,title` を自分で実行せよ」と明示 (+1 tool call 発生)
+
+過去事例 (PR #189 Round 1, 2026-04-19): 方法 1 を prompt 内 bash 記法で
+試みたが展開されず、reviewer は issue 一覧を持たない状態で review したが、
+たまたま重大な被害は出なかった。方法 1 の直接埋め込みに切り替えて以降は
+Round 2 で重複検知が確実に機能した。
+
 ### Phase 2: トリアージ
 
 Reviewer 報告を集約し、スコアで振り分け:
@@ -133,6 +147,24 @@ reviewer または fix エージェントが動作確認のため一時スクリ
 - Round 9 で「実質収束、実装フェーズ移行推奨」と reviewer 判定
 - FastMCP の Union 戻り型 / wrap_output / outputSchema 制約への迂回で
   workaround コードが 3 層累積 → 根本解は上流 SDK に依存
+
+## PR #189 実績 (2026-04-19): 軽量 2 round で収束
+
+追加機能追加系 (diff <130 行) の review-loop サンプル:
+
+- **Round 1**: 4 視点から計 19 件 (ただし prompt bash 展開漏れで重複多め) →
+  PR 内 fix 7 件 (Fix: commit) + Issue 起票 7 件 (#191-#197)
+- **Round 2**: 4 視点から計 3 件 (A:0 / B:1 = Round 1 起票と重複 / C:2 微小 /
+  D:0 で reviewer 自ら収束判定) → PR 内 fix 2 件、新規 Issue 0
+- 結論: 実質収束、Round 3 不要
+
+教訓:
+- 5-7 score の PR 内対処方針 (`feedback_review_loop_pr_internal_5_7.md`)
+  により Issue 起票数を約半減できた
+- 既知 Issue 一覧を prompt に **直接埋め込む** ことが Round 2 以降の重複検知に
+  決定的に重要
+- `reviewer 自らに収束判定を求める` instruction を Round 2 以降の prompt に
+  入れると Opus reviewer が明示的な「Round N 不要」判定を返しやすい
 
 ## プロジェクト固有メモの拡張
 
