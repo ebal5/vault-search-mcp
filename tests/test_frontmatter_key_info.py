@@ -433,3 +433,43 @@ def test_object_key_filter_error_message_has_dotted_leaf_hint(
         "エラーメッセージに dotted leaf / parent dict / object のいずれかの hint が"
         f" 必要 (got: {msg})"
     )
+
+
+def test_object_key_multi_error_message_uses_plural_grammar(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """複数の object 型キーを同時 filter 試行した時、plural 文法でメッセージが整う (Round 3).
+
+    Round 2 E2 の hint は単数前提で書かれており、複数 object key の同時 filter で
+    `'a', 'b' is a parent dict` という主語・動詞不一致 (plural subject + singular
+    verb) が生じる。agent の batch hallucination は MCP 運用で主要シナリオなので
+    文法整合性を pin する。
+    """
+    from vault_search.validation import ValidationError
+
+    _root, idx = vault_builder(
+        {
+            "nested.md": "---\nmeta:\n  author: foo\nconfig:\n  env: prod\n---\nbody\n",
+        }
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        idx.search(
+            query="",
+            folder=None,
+            metadata_filter={"meta": "x", "config": "y"},
+            limit=20,
+            offset=0,
+        )
+    msg = str(exc_info.value)
+    # 両 object key の言及
+    assert "meta" in msg and "config" in msg, (
+        f"エラーメッセージに両 object key が含まれる (got: {msg})"
+    )
+    # plural 形 ("are parent dicts" 等) で singular ("is a parent dict") を使わない
+    assert "are parent dicts" in msg.lower() or "parent dicts" in msg.lower(), (
+        f"複数 object key 時は plural 文法 ('are parent dicts' 等) であるべき (got: {msg})"
+    )
+    assert "is a parent dict" not in msg.lower(), (
+        f"複数 object key 時に singular 'is a parent dict' は誤文法 (got: {msg})"
+    )
