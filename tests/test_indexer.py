@@ -1076,9 +1076,7 @@ def test_metadata_filter_diagnostics_multiple_keys(
     """複数キーの AND で 0 件になったとき、全キーの diagnostics が並ぶ."""
     _root, idx = vault_builder(_META_FILTER_NOTES)
     # status=active かつ priority=medium の組合せは存在しない (medium は draft のみ)
-    res = idx.search(
-        "", metadata_filter={"status": "active", "priority": "medium"}
-    )
+    res = idx.search("", metadata_filter={"status": "active", "priority": "medium"})
     assert res["total"] == 0
     diag = res["metadata_filter_diagnostics"]
     keys = {entry["key"] for entry in diag}
@@ -1087,8 +1085,7 @@ def test_metadata_filter_diagnostics_multiple_keys(
         assert entry["key_present_in_index"] is True
         assert isinstance(entry["observed_values_sample"], list)
         assert entry["observed_values_sample"], (
-            f"{entry['key']}: observed_values_sample must be non-empty "
-            f"when key present in index"
+            f"{entry['key']}: observed_values_sample must be non-empty when key present in index"
         )
 
 

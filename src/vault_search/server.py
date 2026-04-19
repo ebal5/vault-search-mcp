@@ -116,10 +116,16 @@ def vault_search(
         ``truncated`` は結果配列が内部上限 (現在 500 件) で打ち切られた状態を
         true で示す。true のとき offset>=500 は空配列を返すため、クエリを絞るか
         tags / folder / metadata_filter を追加して 500 件以下に収めてから
-        ページングを続けること。構造の詳細 (SearchResponse の rich JSON Schema)
-        は ``schema://tools`` リソースの ``tools.vault_search.output_schema``
-        を参照。ツール戻り型を Union にすると FastMCP が structured content を
-        ``{"result": ...}`` でラップしてしまうため、dict 統一で回避している。
+        ページングを続けること。
+        ``total==0`` かつ ``metadata_filter`` 指定時のみ、追加で
+        ``metadata_filter_diagnostics`` (list) を含む。各要素は filter に使った
+        キーの存在可否 (``key_present_in_index``) と観測値サンプル
+        (``observed_values_sample``) を示し、「値が全件不一致」か「キー欠落」か
+        をエージェントが区別する助けになる (Issue #80)。
+        構造の詳細 (SearchResponse の rich JSON Schema) は ``schema://tools``
+        リソースの ``tools.vault_search.output_schema`` を参照。ツール戻り型を
+        Union にすると FastMCP が structured content を ``{"result": ...}`` で
+        ラップしてしまうため、dict 統一で回避している。
     """
     validate_pagination(limit, offset)
     raw = _get_index().search(
@@ -135,7 +141,8 @@ def vault_search(
         total=raw["total"],
         truncated=raw.get("truncated", False),
         results=[SearchHit(**hit) for hit in raw["results"]],
-    ).model_dump(mode="json")
+        metadata_filter_diagnostics=raw.get("metadata_filter_diagnostics"),
+    ).model_dump(mode="json", exclude_none=True)
 
 
 @mcp.tool(annotations=TOOL_SPECS["vault_get_note"].annotations)

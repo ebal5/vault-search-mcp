@@ -52,6 +52,36 @@ class SearchHit(BaseModel):
     )
 
 
+class MetadataFilterDiagnostic(BaseModel):
+    """0 件 + metadata_filter 指定時の per-key 診断情報 (Issue #80).
+
+    `total==0` かつ `metadata_filter` が指定されている場合のみ
+    `SearchResponse.metadata_filter_diagnostics` として返る。エージェントが
+    「キーは存在するが値が全件不一致」なのか「そもそもキーが無い」のかを
+    区別できるよう、観測された値サンプルとキー存在フラグを添える。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(description="フィルタに使われた frontmatter キー")
+    key_present_in_index: bool = Field(
+        description=(
+            "このキーを持つノートが index 内に 1 件以上あるか。"
+            "false のときは typo の可能性が高い (ただし通常ルートでは unknown key は "
+            "UNKNOWN_FRONTMATTER_KEY でより早期に拒否される — 本フラグは防衛的な冗長化)。"
+        ),
+    )
+    observed_values_sample: list[str] = Field(
+        default_factory=list,
+        description=(
+            "このキーで実際に観測されている値のサンプル (頻度降順、最大 5 件)。"
+            "正規化済みの文字列表現。配列型 frontmatter は JSON 配列表現で入る "
+            "(FrontmatterKeyInfo.sample_values と同じ)。"
+            "ここに含まれない値を filter に指定していた場合、typo または存在しない値。"
+        ),
+    )
+
+
 class SearchResponse(BaseModel):
     """`vault_search` ツールのレスポンス."""
 
@@ -84,6 +114,15 @@ class SearchResponse(BaseModel):
     results: list[SearchHit] = Field(
         default_factory=list,
         description="limit/offset でスライスされた検索ヒット一覧",
+    )
+    metadata_filter_diagnostics: list[MetadataFilterDiagnostic] | None = Field(
+        default=None,
+        description=(
+            "Issue #80: total==0 かつ metadata_filter 指定時のみ付与される per-key 診断。"
+            "各要素は filter に使われたキーの存在可否と観測値サンプルを示し、"
+            "エージェントが「値が全件不一致」と「キー欠落」を区別できるようにする。"
+            "それ以外の場合 (ヒットあり or filter 無し) は null。"
+        ),
     )
 
 
