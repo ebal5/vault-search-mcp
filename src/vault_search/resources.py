@@ -85,9 +85,9 @@ _OVERVIEW: str = (
     "機械可読な値として metadata_filter 経由で絞り込める。\n\n"
     "エージェントはまず本 schema://tools resource を読み、利用可能な tool 一覧、"
     "frontmatter_keys の型・値例、代表エラーの構造を把握してから recommended_flow を参考に "
-    "tool を呼び出すことが推奨される。recommended_flow は典型フローの順序ガイドであり、"
-    "各 step の ``optional`` / ``condition`` フィールドで逸脱可能性 (例: query が既知なら "
-    "vault_search から開始) を機械可読に示す。各 tool の詳細挙動・引数・戻り値は "
+    "tool を呼び出すことが推奨される。recommended_flow は全ステップが optional であり、"
+    "各 step の ``condition`` フィールドでそのステップを呼ぶ判断基準を機械可読に示す "
+    "(step 3 vault_search が「ほとんどのタスクの起点」)。各 tool の詳細挙動・引数・戻り値は "
     "tools[name].description / input_schema / output_schema を参照する。\n\n"
     "全スカラー frontmatter 値は index 時に文字列へ"
     "正規化される (例: int 5 → '5'、date 2024-01-15 → '2024-01-15'、"
@@ -120,7 +120,8 @@ _RECOMMENDED_FLOW: list[dict[str, Any]] = [
         "tool": "vault_search",
         "optional": True,
         "condition": (
-            "テキスト / タグ / フォルダ / metadata_filter 条件でノートを絞り込む場合 (典型的な起点)"
+            "ほとんどのタスクの起点。"
+            "テキスト / タグ / フォルダ / metadata_filter 条件でノートを絞り込む場合"
         ),
     },
     {

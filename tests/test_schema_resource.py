@@ -444,6 +444,7 @@ def test_payload_version_matches_semver_like_format(vault_index: VaultIndex) -> 
 
     version_policy が SemVer 類似の semantics を宣言するため、version 文字列
     自体も最低限 `<major>.<minor>` の dotted numeric format に pin する。
+    このテストは format のみ検証 (semantic correctness は別途 code review で保証)。
     """
     import re
 
@@ -452,7 +453,63 @@ def test_payload_version_matches_semver_like_format(vault_index: VaultIndex) -> 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     version = payload["version"]
     assert re.fullmatch(r"\d+\.\d+(\.\d+)?", version), (
-        f"version must be semver-like (e.g. '1.0' or '1.0.0'), got: {version!r}"
+        f"version must be semver-like (e.g. '2.0' or '2.0.0'), got: {version!r}"
+    )
+
+
+def test_payload_major_version_2_top_level_keys_pinned(vault_index: VaultIndex) -> None:
+    """v2.x の payload top-level key set が既知のセットと一致すること (R2-2 enforcement).
+
+    _VERSION_POLICY で "destructive changes bump major" と約束しているため、
+    top-level key の削除や rename には major version の bump が必要。
+    このテストはその約束を CI で部分的に強制する:
+    - top-level key を削除した場合 → このテストが失敗して bump 漏れを検知
+    - major が 3 に上がった場合 → このテストが失敗して内容更新を要求
+
+    additive 変更 (key 追加) は _EXPECTED_V2_KEYS を更新すれば済む。
+    minor version の bump は不要 (テストが通ったまま)。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    version = payload["version"]
+    major = int(version.split(".")[0])
+    assert major == 2, (
+        f"This test pins the v2 top-level key set; update this test when bumping to v{major}.x "
+        f"(current version: {version!r})"
+    )
+
+    expected_v2_keys = {
+        "version",
+        "version_policy",
+        "overview",
+        "recommended_flow",
+        "errors",
+        "tools",
+        "frontmatter_key_info_schema",
+        "frontmatter_keys",
+    }
+    actual_keys = set(payload.keys())
+    removed = expected_v2_keys - actual_keys
+    assert not removed, (
+        f"Top-level keys removed without major version bump: {removed}. "
+        f"Either bump _SCHEMA_VERSION to 3.x or restore the removed keys."
+    )
+
+
+def test_vault_search_in_recommended_flow(vault_index: VaultIndex) -> None:
+    """recommended_flow に vault_search が含まれること (R2-1 guard).
+
+    vault_search は "ほとんどのタスクの起点" として condition に明記されており、
+    flow から消えると agent が主要な検索経路を見失う。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    flow = payload["recommended_flow"]
+    flow_tools = [step["tool"] for step in flow]
+    assert "vault_search" in flow_tools, (
+        f"vault_search must be in recommended_flow (primary entry point); got tools: {flow_tools}"
     )
 
 
