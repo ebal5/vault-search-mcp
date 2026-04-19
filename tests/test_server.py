@@ -155,6 +155,35 @@ def test_mcp_tool_vault_search_truncated_true_path(
     SearchResponse.model_validate(res)
 
 
+def test_mcp_tool_vault_search_diagnostics_on_zero_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #80: MCP tool の戻り dict が metadata_filter_diagnostics を含む.
+
+    server 層が indexer からの diagnostics を SearchResponse に通過させ、
+    SearchResponse (extra='forbid') が schema drift せず受理できることを確認する。
+    """
+    vault = tmp_path / "diag_vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("---\nstatus: active\n---\nbody\n", encoding="utf-8")
+    (vault / "b.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
+    idx = VaultIndex(vault, db_path=tmp_path / "diag.db")
+    idx.build_index()
+    monkeypatch.setattr(server_mod, "_index", idx)
+
+    fn = _fn(server_mod.vault_search)
+    res = fn("", metadata_filter={"status": "nonexistent"})
+    assert res["total"] == 0
+    assert "metadata_filter_diagnostics" in res
+    diag = res["metadata_filter_diagnostics"]
+    assert len(diag) == 1
+    assert diag[0]["key"] == "status"
+    assert diag[0]["key_present_in_index"] is True
+    assert set(diag[0]["observed_values_sample"]) == {"active", "draft"}
+    # SearchResponse として再構成可能 (extra='forbid' が drift しない)
+    SearchResponse.model_validate(res)
+
+
 def test_mcp_tool_vault_get_note_missing(vault_index: VaultIndex) -> None:
     """存在しないパスでは NoteNotFoundError を送出する (旧 error dict から変更)."""
     fn = _fn(server_mod.vault_get_note)

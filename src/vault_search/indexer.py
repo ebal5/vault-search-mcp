@@ -477,10 +477,11 @@ class VaultIndex:
         # 「親 dict なので dotted leaf key を使え」の hint を付与する (Round 2 E2)。
         known_keys: list[str] | None = None
         object_keys: list[str] = []
+        key_infos: list[FrontmatterKeyInfo] = []
         if metadata_filter:
-            _key_infos = self.list_frontmatter_keys()
-            known_keys = [info.key for info in _key_infos if info.value_type != "object"]
-            object_keys = [info.key for info in _key_infos if info.value_type == "object"]
+            key_infos = self.list_frontmatter_keys()
+            known_keys = [info.key for info in key_infos if info.value_type != "object"]
+            object_keys = [info.key for info in key_infos if info.value_type == "object"]
         conditions = parse_metadata_filter(
             metadata_filter, known_keys=known_keys, object_keys=object_keys
         )
@@ -497,12 +498,17 @@ class VaultIndex:
         tier, entry = self._cache.get(query, filters)
         if entry is not None:
             sliced = entry.result[offset : offset + limit]
-            return {
+            result: dict[str, Any] = {
                 "tier": tier,
                 "total": entry.total,
                 "truncated": entry.total > self._MAX_RESULTS,
                 "results": sliced,
             }
+            if metadata_filter and entry.total == 0:
+                result["metadata_filter_diagnostics"] = self._build_metadata_filter_diagnostics(
+                    conditions, key_infos
+                )
+            return result
 
         # Tier 2: FTS5 — 同一接続で FETCH と COUNT を実行する。
         # 別接続に分けると WAL の snapshot が食い違い、削除競合で
@@ -526,12 +532,43 @@ class VaultIndex:
         self._cache.put(query, filters, results, total=total)
 
         sliced = results[offset : offset + limit]
-        return {
+        result = {
             "tier": 2,
             "total": total,
             "truncated": total > self._MAX_RESULTS,
             "results": sliced,
         }
+        if metadata_filter and total == 0:
+            result["metadata_filter_diagnostics"] = self._build_metadata_filter_diagnostics(
+                conditions, key_infos
+            )
+        return result
+
+    @staticmethod
+    def _build_metadata_filter_diagnostics(
+        conditions: list[MetadataCondition],
+        key_infos: list[FrontmatterKeyInfo],
+    ) -> list[dict[str, Any]]:
+        """Issue #80: 0 件 + metadata_filter 指定時の per-key 診断情報を組み立てる.
+
+        `key_infos` (``list_frontmatter_keys()`` の結果) をキー名で索引化し、
+        各 condition のキーを突き合わせて ``key_present_in_index`` /
+        ``value_type`` / ``observed_values_sample`` を返す。条件キーは parse 時点で
+        ``known_keys`` (= value_type が object 以外の FrontmatterKeyInfo) と
+        照合済みなので、ここに渡る cond.key は必ず info_by_key にヒットする。
+        不一致は validation 段階のバグなので ``KeyError`` を silently catch せず
+        surface させる (防衛 fallback は dead code になる)。
+        """
+        info_by_key = {info.key: info for info in key_infos}
+        return [
+            {
+                "key": cond.key,
+                "key_present_in_index": True,
+                "value_type": info_by_key[cond.key].value_type,
+                "observed_values_sample": list(info_by_key[cond.key].sample_values),
+            }
+            for cond in conditions
+        ]
 
     def _build_match_clause(
         self,
