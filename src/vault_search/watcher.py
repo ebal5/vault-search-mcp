@@ -105,7 +105,7 @@ class VaultWatcher:
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
         self._watcher_failure_count: int = 0
-        self._last_watcher_error_at: datetime | None = None
+        self._last_watcher_error_at: str | None = None
 
     def start(self) -> bool:
         """監視開始。watchdog が利用可能なら True."""
@@ -166,4 +166,4 @@ class VaultWatcher:
                 logger.exception("Failed to update index for %s", rel_path)
                 with self._lock:
                     self._watcher_failure_count += 1
-                    self._last_watcher_error_at = datetime.now(timezone.utc)
+                    self._last_watcher_error_at = datetime.now(timezone.utc).isoformat()

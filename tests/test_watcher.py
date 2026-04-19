@@ -301,8 +301,10 @@ def test_watcher_flush_records_failure(
 
     stats = watcher.failure_stats()
     assert stats["watcher_failure_count"] == 1
-    ts = stats["last_watcher_error_at"]
-    assert ts is not None
+    ts_str = stats["last_watcher_error_at"]
+    assert ts_str is not None
+    # str (isoformat "+00:00") を parse して時刻境界を確認
+    ts = datetime.fromisoformat(ts_str)
     assert before <= ts <= after
 
 

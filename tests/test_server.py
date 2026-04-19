@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -249,16 +248,16 @@ def test_mcp_tool_vault_reindex_includes_watcher_failures(
     """_watcher に failure 履歴があれば vault_reindex の戻りに反映される (#39)."""
     watcher = VaultWatcher(vault_index)
     # 内部状態を直接設定 (実 flush を待つと flaky になるため)
+    # last_watcher_error_at は str (isoformat "+00:00" 形式) で格納される
     with watcher._lock:
         watcher._watcher_failure_count = 2
-        watcher._last_watcher_error_at = datetime(2026, 4, 19, 12, 0, 0, tzinfo=timezone.utc)
+        watcher._last_watcher_error_at = "2026-04-19T12:00:00+00:00"
     monkeypatch.setattr(server_mod, "_watcher", watcher)
 
     fn = _fn(server_mod.vault_reindex)
     res = fn(False)
     assert res["watcher_failure_count"] == 2
-    # JSON 表現は Pydantic のデフォルト datetime 直列化 (ISO 8601)
-    assert res["last_watcher_error_at"] == "2026-04-19T12:00:00Z"
+    assert res["last_watcher_error_at"] == "2026-04-19T12:00:00+00:00"
 
 
 def test_main_stops_watcher_on_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,6 +288,38 @@ def test_main_stops_watcher_on_exception(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(server_mod.mcp, "run", _raise)
 
     with pytest.raises(RuntimeError, match="mcp dead"):
+        server_mod.main()
+
+    assert stop_calls == [1]
+
+
+def test_main_stops_watcher_when_start_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_watcher.start() が例外を起こしても stop() が呼ばれる (start() が try 内にあるため) (#39)."""
+    import sys as _sys
+
+    vault = tmp_path / "main_vault2"
+    vault.mkdir()
+    monkeypatch.setattr(_sys, "argv", ["vault-search-mcp", "--vault", str(vault)])
+
+    stop_calls: list[int] = []
+
+    class _FakeWatcher:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def start(self) -> bool:
+            raise OSError("inotify limit reached")
+
+        def stop(self) -> None:
+            stop_calls.append(1)
+
+    monkeypatch.setattr(server_mod, "VaultWatcher", _FakeWatcher)
+    # mcp.run は呼ばれないはずだが念のため
+    monkeypatch.setattr(server_mod.mcp, "run", lambda *_a, **_kw: None)
+
+    with pytest.raises(OSError, match="inotify limit"):
         server_mod.main()
 
     assert stop_calls == [1]

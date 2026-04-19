@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -30,10 +28,11 @@ class ReindexStats(BaseModel):
             "--no-watch で watcher 無効の場合と、一度も失敗していない場合はいずれも 0"
         ),
     )
-    last_watcher_error_at: datetime | None = Field(
+    last_watcher_error_at: str | None = Field(
         default=None,
         description=(
-            "VaultWatcher 最新の失敗時刻 (UTC, ISO 8601)。"
+            "VaultWatcher 最新の失敗時刻 (UTC, isoformat '+00:00' 形式。"
+            "例: '2026-04-19T12:00:00+00:00')。"
             "一度も失敗していない / watcher 無効の場合は null。"
             "watcher_failure_count が 0 でない場合の最新エラーのみ指す"
         ),

@@ -363,16 +363,16 @@ def main() -> None:
     stats = _index.build_index()
     logger.info("Initial index: %s", stats)
 
-    # ファイル監視開始
-    if not args.no_watch:
-        _watcher = VaultWatcher(_index)
-        _watcher.start()
-
     # MCP サーバー起動（stdio）
     # shutdown / 例外どちらの経路でも watcher.stop() で Observer スレッドを
     # 明示停止し、プロセス終了時のリソースリークを防ぐ (#39)。
+    # watcher.start() を try 内に置くことで、start() 自体が例外を投げた場合にも
+    # finally が実行され stop() が呼ばれることを保証する。
     logger.info("Starting MCP server (stdio)")
     try:
+        if not args.no_watch:
+            _watcher = VaultWatcher(_index)
+            _watcher.start()
         mcp.run(transport="stdio")
     finally:
         if _watcher is not None:
