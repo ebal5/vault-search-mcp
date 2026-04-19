@@ -220,16 +220,22 @@ def format_unknown_keys_message(
     allowed_sorted = sorted(known_keys)
     object_keys_set = set(object_keys)
     # 各 unknown のうち object key にマッチするものだけをヒント対象にする。
+    # 単数 / 複数で plural 文法を切り分ける (Round 3)。
     unknown_object_keys = sorted(name for name in unknowns if name in object_keys_set)
-    object_hint = (
-        (
-            f" Note: {', '.join(repr(k) for k in unknown_object_keys)} "
-            "is a parent dict (value_type='object') and not filterable; "
-            "use a dotted leaf key (e.g. 'meta.author')."
+    if not unknown_object_keys:
+        object_hint = ""
+    elif len(unknown_object_keys) == 1:
+        object_hint = (
+            f" Note: {unknown_object_keys[0]!r} is a parent dict "
+            f"(value_type='object') and not filterable; "
+            f"use a dotted leaf key (e.g. 'meta.author')."
         )
-        if unknown_object_keys
-        else ""
-    )
+    else:
+        keys_str = ", ".join(repr(k) for k in unknown_object_keys)
+        object_hint = (
+            f" Note: {keys_str} are parent dicts (value_type='object') and "
+            f"not filterable; use dotted leaf keys (e.g. 'meta.author')."
+        )
 
     if len(unknowns) == 1:
         ((name, suggestions),) = unknowns.items()
