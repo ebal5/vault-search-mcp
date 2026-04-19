@@ -18,6 +18,7 @@ import threading
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
+
+
+@dataclass(frozen=True)
+class MatchClause:
+    """``_build_match_clause`` の戻り値 (Issue #168).
+
+    position-based unpack で consumer が誤列参照する silent bug を避けるため、
+    field 名でアクセスさせる。将来 JOIN 追加 / hint 追加等で field が増えても
+    consumer 側の drift を構造的に防げる。
+    """
+
+    from_where: list[str]
+    params: list[Any]
+    is_fts: bool
 
 
 def _infer_value_type(value: Any) -> str:
@@ -577,11 +592,11 @@ class VaultIndex:
         tags: list[str] | None,
         folder: str | None,
         metadata_conditions: list[MetadataCondition] | None,
-    ) -> tuple[list[str], list[Any], bool] | None:
+    ) -> MatchClause | None:
         """検索 WHERE 句と params を組み立て、``_fts5_search`` と
         ``_count_matches`` で共有する.
 
-        返り値は ``(from_where_sql_parts, params, is_fts)``。
+        戻り値は :class:`MatchClause` (``from_where`` / ``params`` / ``is_fts``)。
         空クエリかつフィルタ無し (= 空結果) のケースでは ``None`` を返す。
         ``is_fts`` は FTS5 インデックスを経由するか (= ``ORDER BY rank`` /
         snippet が使える) を示す。
@@ -631,7 +646,7 @@ class VaultIndex:
                 sql_parts.append(fragment)
                 params.extend(fragment_params)
 
-        return sql_parts, params, bool(fts_terms)
+        return MatchClause(from_where=sql_parts, params=params, is_fts=bool(fts_terms))
 
     def _fts5_search(
         self,
@@ -662,9 +677,8 @@ class VaultIndex:
         )
         if built is None:
             return []
-        from_where, params, is_fts = built
 
-        if is_fts:
+        if built.is_fts:
             select = (
                 "SELECT n.path, n.title, n.folder, n.tags, n.created_at, n.modified_at,\n"
                 "       snippet(notes_fts, 1, '>>>', '<<<', '...', 64) AS snippet,\n"
@@ -679,8 +693,8 @@ class VaultIndex:
             )
             order = "ORDER BY n.file_mtime DESC"
 
-        sql = "\n".join([select, *from_where, order, "LIMIT ?"])
-        exec_params = [*params, limit]
+        sql = "\n".join([select, *built.from_where, order, "LIMIT ?"])
+        exec_params = [*built.params, limit]
 
         if conn is not None:
             rows = conn.execute(sql, exec_params).fetchall()
@@ -727,14 +741,13 @@ class VaultIndex:
         )
         if built is None:
             return 0
-        from_where, params, _is_fts = built
 
-        sql = "\n".join(["SELECT COUNT(*) AS c", *from_where])
+        sql = "\n".join(["SELECT COUNT(*) AS c", *built.from_where])
         if conn is not None:
-            row = conn.execute(sql, params).fetchone()
+            row = conn.execute(sql, built.params).fetchone()
         else:
             with self.connection() as c:
-                row = c.execute(sql, params).fetchone()
+                row = c.execute(sql, built.params).fetchone()
         return int(row["c"]) if row is not None else 0
 
     # ------------------------------------------------------------------
