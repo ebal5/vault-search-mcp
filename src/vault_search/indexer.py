@@ -75,33 +75,32 @@ def _collect_key_info(
         if v is None:
             continue
 
-        # note_count は常に +1 (空文字も含む)
+        # note_count は常に +1 (空文字も含む)。
+        # note_counts.keys() を「この走査で観測された key 全集合」の正準 source of
+        # truth として扱い、呼び出し側はこれを iterate する (Reviewer D6)。
         note_counts[key] = note_counts.get(key, 0) + 1
 
         # value_type 推論
         vtype = _infer_value_type(v)
         type_sets.setdefault(key, set()).add(vtype)
 
-        # sample_values への追加
-        # 親 dict (object) は sample_values を持たない → Counter エントリを作らないが
-        # value_counters に key が登録される必要はある (result イテレート用)
-        counter = value_counters.setdefault(key, Counter())
-
+        # sample_values の追加 — 値を持つ経路のみ Counter エントリを作る。
+        # 親 dict (object) は sample を持たないので value_counters に登録しない。
         if isinstance(v, dict):
-            # 親キーとして登録後、子を再帰 walk
+            # 親キーのサンプルは空。子を再帰 walk する。
             _collect_key_info(v, key, value_counters, type_sets, note_counts)
         elif isinstance(v, list):
-            # 配列全体の JSON 文字列表現を sample に入れる (要素別展開はしない)
+            # 配列全体の JSON 文字列表現を sample に入れる (要素別展開はしない)。
             sample_repr = json.dumps(v, ensure_ascii=False)
-            counter[sample_repr] += 1
+            value_counters.setdefault(key, Counter())[sample_repr] += 1
         elif isinstance(v, str):
-            # 空文字 / whitespace-only は sample から除外 (note_count は +1 済)
+            # 空文字 / whitespace-only は sample から除外 (note_count は +1 済)。
             if v.strip():
-                counter[v] += 1
+                value_counters.setdefault(key, Counter())[v] += 1
         else:
-            # _normalize_fm により scalar は str/list/dict/None に収束しているはず
-            # 念のため str 化
-            counter[str(v)] += 1
+            # _normalize_fm により scalar は str/list/dict/None に収束しているはず。
+            # 念のため str 化。
+            value_counters.setdefault(key, Counter())[str(v)] += 1
 
 
 # ---------------------------------------------------------------------------
@@ -786,9 +785,15 @@ class VaultIndex:
 
         初回呼出時に DB をスキャンしてキャッシュし、以降は書込み経路で
         invalidate されるまでキャッシュを返す (Issue #118 / #10)。
+
+        double-checked locking で並行初回呼出時の重複 DB scan を回避する
+        (本 PR で query コストが type 推論 + sample 集計に増大したため、
+        Reviewer A4 の指摘を踏まえ明示保護)。
         """
         if self._frontmatter_keys_cache is None:
-            self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
+            with self._lock:
+                if self._frontmatter_keys_cache is None:
+                    self._frontmatter_keys_cache = self._query_frontmatter_keys_from_db()
         return list(self._frontmatter_keys_cache)
 
     def _query_frontmatter_keys_from_db(self) -> list[FrontmatterKeyInfo]:
@@ -808,21 +813,27 @@ class VaultIndex:
                 continue
             _collect_key_info(fm, "", value_counters, type_sets, note_counts)
 
+        # note_counts を「観測された key 全集合」の正準とする (Reviewer D6)。
+        # value_counters は parent dict (object) key にはエントリを持たない。
         result: list[FrontmatterKeyInfo] = []
-        for key in sorted(value_counters.keys()):
+        for key in sorted(note_counts.keys()):
             types = type_sets[key]
             if len(types) == 1:
                 vtype = next(iter(types))
             else:
                 vtype = "mixed"
 
-            # top-5 頻度降順、同頻度は辞書順
-            counter = value_counters[key]
-            samples_sorted = sorted(
-                counter.items(),
-                key=lambda kv: (-kv[1], kv[0]),
-            )[:5]
-            samples = [v for v, _ in samples_sorted]
+            # top-5 頻度降順、同頻度は辞書順。
+            # parent dict (object) は value_counters に存在しないので samples=[]。
+            counter = value_counters.get(key)
+            if counter is None:
+                samples: list[str] = []
+            else:
+                samples_sorted = sorted(
+                    counter.items(),
+                    key=lambda kv: (-kv[1], kv[0]),
+                )[:5]
+                samples = [v for v, _ in samples_sorted]
 
             result.append(
                 FrontmatterKeyInfo(
