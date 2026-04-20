@@ -139,6 +139,36 @@ worktree 運用記述通り)。
 「`.venv` pth の指す先を確認するか、無条件で `rm .venv && uv sync`」を
 組み込むのが安全。
 
+### 既知の落とし穴: machine migration 後の working tree 不整合
+
+別マシンで作業履歴のあるセッションを引き継ぐと、working tree が HEAD と
+不整合な状態で現れることがある (2026-04-20 PR #209 で観測)。具体例:
+
+- 一部 tracked files が HEAD より**古い** 状態にリバートされている
+- 別の tracked files は origin/main の**新しい** commit 分まで進んでいる
+- `git status` は一律 `modified` と表示するため、作業中の変更と破損が区別
+  できない
+
+**検知手順** (セッション開始時の sanity check):
+
+```bash
+git status              # modified 表示の存在を確認
+git diff HEAD --stat    # ファイル別の ± 行数で「意図しない変更」を炙り出す
+git stash list          # 未処理の作業が stash に退避されていないか
+```
+
+3 点セットで「未コミット作業ゼロ」かつ「working tree が HEAD と乖離」が
+確認できた場合は破損と判断:
+
+```bash
+git checkout -- .       # tracked files を HEAD に合わせてリセット
+git rebase origin/main  # ブランチを最新 main に乗せ直す
+```
+
+**教訓**: `git status` 単独では不足。`git diff HEAD --stat` + `git stash
+list` を組み合わせて「未コミット作業」と「working tree 破損」を区別する
+のが必須。破損放置で rebase すると unstaged changes エラーが出て進まない。
+
 ## Red/Green vs Test/Refactor — prefix 選択ガイド
 
 commit prefix は「振る舞いが変わるか」で選ぶ:

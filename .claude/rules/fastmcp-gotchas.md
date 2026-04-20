@@ -14,6 +14,25 @@
 - List 戻り (`list[Model]`) も FastMCP に wrap される → envelope dict
   (`{"tags": [...]}`, `{"folders": [...]}`, `{"notes": [...]}`) に統一
 
+## docstring caching timing
+
+- `@mcp.tool()` は decoration 時点で `Tool.from_function` が `fn.__doc__` を
+  読んで description を**キャッシュ**する
+  (`site-packages/mcp/server/fastmcp/tools/base.py:66` —
+  `func_doc = description or fn.__doc__ or ""`)
+- docstring を runtime で書き換える decorator (placeholder 置換等) は
+  `@mcp.tool()` より**内側 (下)** に配置する必要がある。decorator chain は
+  内側が先に適用されるため、FastMCP が `__doc__` を読む時点で既に展開済みに
+  できる。外側 (上) だと未置換 docstring がキャッシュされる
+- 具体例: `server.py:_with_folder_description` — `{FOLDER_DESCRIPTION}`
+  placeholder を `_FOLDER_DESCRIPTION` 本文で runtime 置換する decorator。
+  `vault_search` / `vault_recent` で `@mcp.tool(...)` の**下** (`fn` に近い側)
+  に置かれている
+- **regression guard**: `tests/test_tool_annotations.py::
+  test_folder_docstring_contains_schema_description` が `inspect.getdoc()`
+  経路で `_FOLDER_DESCRIPTION` の存在を検証。FastMCP `tools/list` description
+  経路の直接 assert は未実装 (upgrade 耐性を上げたいなら追加候補)
+
 ## outputSchema の手動注入
 
 - `@mcp.tool()` に `output_schema` 引数がないため、dict 戻り型は generic な
