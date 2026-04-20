@@ -415,7 +415,7 @@ class VaultIndex:
             if not full_path.exists():
                 conn.execute("DELETE FROM notes WHERE path = ?", (rel_path,))
                 conn.commit()
-                self._invalidate_caches()
+                self._invalidate_caches(changed_paths={rel_path})
                 return True
 
             note = parse_note(full_path, self.vault_root)
@@ -425,11 +425,18 @@ class VaultIndex:
             mtime = full_path.stat().st_mtime
             self._upsert_note(conn, note, mtime)
             conn.commit()
-            self._invalidate_caches()
+            self._invalidate_caches(changed_paths={rel_path})
             return True
 
-    def _invalidate_caches(self) -> None:
+    def _invalidate_caches(self, changed_paths: set[str] | None = None) -> None:
         """書込み経路で tiered cache / frontmatter_keys cache / known_keys cache を同時に落とす.
+
+        ``changed_paths`` を渡した場合、tiered cache は該当 path を結果に含む
+        entry のみを drop する (Issue #31 の granular invalidation)。
+        ``None`` または省略時は tiered cache 全 entry を clear する。
+        frontmatter_keys / known_keys cache は granularity が取れないので常に
+        全 clear する (frontmatter 構造は note 間の aggregate 依存で、1 note の
+        変更が集合全体に波及しうる)。
 
         ``_frontmatter_keys_cache`` / ``_known_keys_cache`` の書込みは ``self._lock``
         下で行い、``list_frontmatter_keys()`` / ``known_keys_set()`` の snapshot
@@ -437,7 +444,7 @@ class VaultIndex:
         thread-safe。両 cache を同一箇所で落とすことで drift を構造的に防ぐ
         (Issue #185)。
         """
-        self._cache.invalidate()
+        self._cache.invalidate(changed_paths)
         with self._lock:
             self._frontmatter_keys_cache = None
             self._known_keys_cache = None
