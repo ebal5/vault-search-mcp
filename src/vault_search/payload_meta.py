@@ -37,7 +37,7 @@ import 時に 1 度だけ評価される純粋な定数のみを保持する。
 Option B (本 module 単独分離) で十分な現段階から、以下のいずれかが起きたら
 ``resources/`` package への昇格を検討する:
 
-1. 本 module の行数が 300 行を超える (現 ~180 行)
+1. 本 module の行数が 300 行を超える (現 ~220 行)
 2. 2 個目の resource (``warnings://`` / ``help://tools`` / ``stats://index`` 等)
    が静的 prose を追加し、schema 用と warnings 用の定数が混載する
 3. resource ごとの metadata が cross-reference を持ち始めて命名衝突する
@@ -46,6 +46,10 @@ Option B (本 module 単独分離) で十分な現段階から、以下のいず
 ``resources/__init__.py`` で ``build_*_payload`` を re-export する構造に
 する。現 import 経路 (`from .payload_meta import ...`) を
 `from .resources.schema_meta import ...` 等に書き換える。
+
+関連 watch item: #197 (``build_schema_payload`` signature 拡張方針、
+resource 数が増えた時の組立関数の形状判断) は本 tripwire と同時期に
+再評価するのが自然。
 
 ## 言語方針
 
