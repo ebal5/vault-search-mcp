@@ -17,9 +17,10 @@ Design notes
   except C0/C1-adjacent control characters. Empty string is valid because
   ``key == ""`` is a meaningful filter ("frontmatter key present but
   empty"). Length is capped to guard against runaway agent output.
-* ``ValidationError`` inherits from :class:`ValueError` so existing
-  ``except ValueError`` handlers continue to work, while callers who want
-  to distinguish validation failures can catch it specifically.
+* ``ValidationError`` (本 module で raise するが定義は ``exceptions.py``) は
+  ``ValueError`` と ``VaultSearchError`` を多重継承するため、既存の
+  ``except ValueError`` handler は引き続き動き、validation 固有の捕捉を
+  したい呼出側は ``except ValidationError`` で判別できる。
 """
 
 from __future__ import annotations
@@ -28,13 +29,12 @@ import difflib
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 
-from .exceptions import ErrorCode, VaultSearchError
+from .exceptions import ValidationError
 
 __all__ = [
     "IDENTIFIER_JSON_PATTERN",
     "IDENTIFIER_MAX_LEN",
     "LIMIT_MAX",
-    "ValidationError",
     "format_unknown_keys_message",
     "normalize_folder",
     "validate_identifier",
@@ -78,58 +78,6 @@ _DEFAULT_VALUE_MAX_LEN = 1024
 # runtime validation logic (used in mcp_contract.py for ``propertyNames``).
 IDENTIFIER_JSON_PATTERN = _IDENTIFIER_RE.pattern
 IDENTIFIER_MAX_LEN = _DEFAULT_IDENTIFIER_MAX_LEN
-
-
-class ValidationError(VaultSearchError, ValueError):
-    """Raised when an agent-supplied input fails validation.
-
-    Inherits from both :class:`VaultSearchError` and :class:`ValueError` so
-    code that catches ``ValueError`` keeps working. Catch ``ValidationError``
-    explicitly to distinguish input-validation failures from other value errors.
-
-    Parameters
-    ----------
-    message:
-        Human-readable description of the validation failure.
-    error_code:
-        Per-instance error code; defaults to ``"VALIDATION_ERROR"``.
-    hint:
-        Optional short guidance for self-correction (e.g. "see schema://tools").
-    did_you_mean:
-        Optional list of close-match candidates (from difflib). Populated for
-        single-unknown-key errors for backward compatibility; multi-key errors
-        expose per-key candidates via ``unknown_keys`` instead.
-    allowed:
-        Optional sorted list of all allowed values / keys.
-    unknown_keys:
-        Optional per-key close-match map for batched unknown-key reports
-        (``error_code="UNKNOWN_FRONTMATTER_KEY"`` from
-        :func:`~vault_search.filter.parse_metadata_filter`). Each entry maps an
-        unknown key to its suggestion tuple (empty tuple when no close match
-        exists). Single-key errors still populate this with one entry so agents
-        can inspect the structured form uniformly (#123).
-    """
-
-    error_code: ErrorCode = "VALIDATION_ERROR"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: ErrorCode = "VALIDATION_ERROR",
-        hint: str | None = None,
-        did_you_mean: Sequence[str] | None = None,
-        allowed: Sequence[str] | None = None,
-        unknown_keys: Mapping[str, Sequence[str]] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.hint = hint
-        self.did_you_mean: tuple[str, ...] = tuple(did_you_mean) if did_you_mean else ()
-        self.allowed: tuple[str, ...] = tuple(allowed) if allowed else ()
-        self.unknown_keys: dict[str, tuple[str, ...]] = (
-            {k: tuple(v) for k, v in unknown_keys.items()} if unknown_keys else {}
-        )
 
 
 def validate_identifier(

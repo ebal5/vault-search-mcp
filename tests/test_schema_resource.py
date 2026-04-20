@@ -638,11 +638,11 @@ def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
 
 
 def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
-    """payload["errors"] が ErrorCode の全値をカバーし、各エントリに必須フィールドを持つこと (#191).
+    """payload["errors"] が abstract を除く全 ErrorCode をカバーし、必須フィールドを持つこと.
 
-    error_code 単位 re-key 後も全 ErrorCode (VAULT_SEARCH_ERROR 含む) が
-    description / raised_by / example を持つことを確認する。
-    test_errors_covers_all_error_codes と合わせて exact-set + field-structure を両面保証。
+    #200 により ``VAULT_SEARCH_ERROR`` (abstract=True) は payload から除外される。
+    残りの具体 error (NOTE_NOT_FOUND / VALIDATION_ERROR / UNKNOWN_FRONTMATTER_KEY /
+    UNSUPPORTED_RANGE_OPERATOR) は description / raised_by / example を持つ。
     """
     from typing import get_args
 
@@ -653,7 +653,8 @@ def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
     assert "errors" in payload, f"'errors' key missing: keys={list(payload)}"
     errors = payload["errors"]
     assert isinstance(errors, dict), f"errors must be dict, got {type(errors).__name__}"
-    for code in get_args(ErrorCode):
+    expected_codes = set(get_args(ErrorCode)) - {"VAULT_SEARCH_ERROR"}
+    for code in expected_codes:
         assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
         entry = errors[code]
         assert isinstance(entry, dict), f"errors['{code}'] must be dict: {entry!r}"
@@ -664,11 +665,12 @@ def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
             )
 
 
-def test_errors_covers_all_error_codes(vault_index: VaultIndex) -> None:
-    """errors が ErrorCode Literal の全値をカバーすること (#191 drift guard).
+def test_errors_covers_concrete_error_codes(vault_index: VaultIndex) -> None:
+    """errors が ErrorCode Literal の具体値 (abstract 除く) を漏れなくカバーすること.
 
-    `typing.get_args(ErrorCode)` の全要素が payload["errors"] キー集合と一致
-    する。新 ErrorCode 追加時に _ERRORS 追加忘れを即検知する。
+    #200 方針: ``VAULT_SEARCH_ERROR`` は abstract フラグにより payload から外れる
+    が ErrorCode Literal には残る。新規具体 ErrorCode 追加時の ERROR_CATALOG
+    追加忘れを即検知するための drift guard。
     """
     from typing import get_args
 
@@ -678,38 +680,36 @@ def test_errors_covers_all_error_codes(vault_index: VaultIndex) -> None:
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     errors = payload["errors"]
 
-    declared_codes = set(get_args(ErrorCode))
+    concrete_codes = set(get_args(ErrorCode)) - {"VAULT_SEARCH_ERROR"}
     payload_codes = set(errors.keys())
-    missing = declared_codes - payload_codes
-    extra = payload_codes - declared_codes
+    missing = concrete_codes - payload_codes
+    extra = payload_codes - concrete_codes
     assert not missing, (
-        f"ErrorCode values missing from payload['errors']: {missing}\n"
-        f"declared in ErrorCode Literal but not documented"
+        f"concrete ErrorCode values missing from payload['errors']: {missing}\n"
+        f"add to ERROR_CATALOG in exceptions.py (non-abstract)"
     )
     assert not extra, (
-        f"payload['errors'] has codes not in ErrorCode Literal: {extra}\n"
-        f"either drifted key or missing from exceptions.ErrorCode"
+        f"payload['errors'] has codes not in concrete ErrorCode subset: {extra}\n"
+        f"either drifted key or abstract entry leaked through"
     )
 
 
 def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) -> None:
-    """errors[code]['raised_by'] が実クラス名と一致すること (全 5 ErrorCode をカバー).
+    """errors[code]['raised_by'] が実クラス名と一致すること (具体 error を pin).
 
-    #191 で error_code 単位に re-key された後も、どの Python 例外クラスから
-    raise されるかを agent に伝える必要がある。class の __name__ を live 参照
-    することで、exception class rename 時に即検知する。
-    ValidationError サブコード (UNKNOWN_FRONTMATTER_KEY / UNSUPPORTED_RANGE_OPERATOR /
-    VALIDATION_ERROR) はいずれも ValidationError から raise されることを pin する。
+    drift guard: どの Python 例外クラスから raise されるかを class の __name__
+    で live 参照。ValidationError サブコード (UNKNOWN_FRONTMATTER_KEY /
+    UNSUPPORTED_RANGE_OPERATOR / VALIDATION_ERROR) はいずれも ValidationError
+    から raise される。abstract な VAULT_SEARCH_ERROR は payload に含まれない。
     """
-    from vault_search.exceptions import NoteNotFoundError, VaultSearchError
+    from vault_search.exceptions import NoteNotFoundError
+    from vault_search.exceptions import ValidationError as VE
     from vault_search.resources import build_schema_payload
-    from vault_search.validation import ValidationError as VE
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     errors = payload["errors"]
 
     expected_raised_by = {
-        "VAULT_SEARCH_ERROR": VaultSearchError.__name__,
         "NOTE_NOT_FOUND": NoteNotFoundError.__name__,
         "VALIDATION_ERROR": VE.__name__,
         "UNKNOWN_FRONTMATTER_KEY": VE.__name__,

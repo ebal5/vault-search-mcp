@@ -31,8 +31,8 @@ from typing import Any
 import pytest
 
 from vault_search import server as server_mod
+from vault_search.exceptions import ValidationError
 from vault_search.indexer import VaultIndex
-from vault_search.validation import ValidationError
 
 
 # FastMCP Tool ラッパーから素の関数を取り出す (test_server.py と同じ流儀)

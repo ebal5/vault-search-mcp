@@ -16,7 +16,7 @@
        }
 
    不正演算子・不正キー名・不正値はすべて
-   :class:`~vault_search.validation.ValidationError` を送出する。
+   :class:`~vault_search.exceptions.ValidationError` を送出する。
    エラーメッセージは、エージェントがどのキー・どの演算子を
    どう直せばよいかを自己修正できるよう具体的に構成する。
 
@@ -37,8 +37,8 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
+from .exceptions import ValidationError
 from .validation import (
-    ValidationError,
     validate_identifier,
     validate_known_keys,
     validate_value,

@@ -18,8 +18,12 @@ from typing import get_args
 
 import pytest
 
-from vault_search.exceptions import ErrorCode, NoteNotFoundError, VaultSearchError
-from vault_search.validation import ValidationError
+from vault_search.exceptions import (
+    ErrorCode,
+    NoteNotFoundError,
+    ValidationError,
+    VaultSearchError,
+)
 
 
 class TestErrorCodeRegistry:

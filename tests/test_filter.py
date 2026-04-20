@@ -19,8 +19,8 @@ import sqlite3
 
 import pytest
 
+from vault_search.exceptions import ValidationError
 from vault_search.filter import MetadataCondition, build_sql_fragment, parse_metadata_filter
-from vault_search.validation import ValidationError
 
 
 @pytest.fixture
