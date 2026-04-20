@@ -5,7 +5,7 @@ SQLite FTS5 trigram + 3段キャッシュ (Tier 0-2)。
 
 ## Tech Stack
 
-- **Python** 3.10+ / uv
+- **Python** 3.11+ / uv (自分用のため最低版を絞り、`typing.NotRequired` 等の新 API を直接使う)
 - **Dependencies**: mcp, pyyaml, watchdog
 - **Dev**: pytest, pytest-asyncio
 - **Lint/Format**: ruff

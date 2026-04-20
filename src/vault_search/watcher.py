@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .indexer import VaultIndex
@@ -183,4 +183,4 @@ class VaultWatcher:
                 logger.exception("Failed to update index for %s", rel_path)
                 with self._lock:
                     self._watcher_failure_count += 1
-                    self._last_watcher_error_at = datetime.now(timezone.utc).isoformat()
+                    self._last_watcher_error_at = datetime.now(UTC).isoformat()
