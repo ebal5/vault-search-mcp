@@ -180,6 +180,8 @@ commit prefix は「振る舞いが変わるか」で選ぶ:
 
 ### 統合 PR の commit 粒度
 
+#### パターン A: 統合 TDD (責務が強く結合する場合)
+
 issue ごとに Red/Green/Refactor を分けると 4 issue × 3 commit = 12 commits
 となり review が破綻する。**1 つの責務として TDD 構成する**:
 
@@ -188,6 +190,50 @@ issue ごとに Red/Green/Refactor を分けると 4 issue × 3 commit = 12 comm
 - `Fix Round N`: review-loop 指摘対応 (round 1 commit)
 
 PR body の commit 説明節で「issue → commit hash」の対応を書く。
+
+**適合例**: PR #204 (resources.py の同一 dict に 4 issue 重畳)。テストも
+実装も互いに絡み合い、個別 TDD では同じ箇所を何度も書き直す冗長さが出た
+
+#### パターン B: issue 別 commit + 責務言語化 (issue が技術的に独立する場合)
+
+**適合例**: PR #206 (#168/#180/#181/#185/#190 の indexer.py hygiene)。
+同ファイル touch だが各 issue が別関数を触り TDD スタイルも様々
+(Refactor のみ / Red→Green / Docs のみ)。**個別 commit を保つことで
+Red/Green/Refactor prefix 規約と bisect 可能性が維持された**。
+
+- issue ごとに 1-3 commit (自然な TDD フェーズに応じて可変)
+- 合計が 10 commit を超える場合は統合 TDD (パターン A) への切替を検討
+- PR body で「責務を 1 行で言語化」し、各 issue の解決内容を短く列挙
+
+#### 判定フロー
+
+1. 各 issue の touch 範囲が重なるか確認 (同じ関数 / 同じ dict か)
+2. 重なる → パターン A (統合 TDD)
+3. 重ならない & 合計 ≤10 commit → パターン B (issue 別 commit)
+4. いずれでも合計 >15 commit なら個別 PR に戻すことを検討
+
+### 既知の落とし穴: auto-merge と branch 削除の race (2026-04-20)
+
+`gh pr merge --auto --rebase` 設定後、同 branch に追加 commit を push しようと
+したタイミングで auto-merge が先に完走すると、以下の race が起きる:
+
+1. リポジトリ設定で「merge 時に branch 自動削除」が有効だと branch が消える
+2. 遅れて届いた `git push` は削除済 branch を新規作成 (`[new branch]` メッセージ)
+3. PR は既に **merged** 状態なので、新規 push した commit は PR に反映されない
+4. `gh pr view <N>` で `state: MERGED` を確認するまで見逃しやすい
+
+**回避**:
+
+- **auto-merge 設定は review-loop 完了後にする**。review-loop で検出した
+  fix を全て同 PR に込めてから auto-merge を設定する
+- どうしても merge 後に追加修正が必要な場合は、`origin/main` から fresh
+  branch を切って `git cherry-pick <commit>` で移植 → 別 PR 起票
+- push 後に `[new branch]` メッセージが出たら「前の PR は merged 済み」の
+  signal として疑う
+
+**実例**: PR #206 で auto-merge 設定 → review-loop 起動 → finding 検出 →
+Simplify commit push 時に上記 race 発生。fresh branch 切って別 PR #207 で
+吸収して復旧。
 
 ### 並行 PR で同一 issue が独立実装された場合の rebase 戦略
 
