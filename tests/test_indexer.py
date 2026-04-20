@@ -837,6 +837,100 @@ def test_search_tier1_fuzzy_preserves_truncated(
     assert second["truncated"] is True, "tier=1 でも truncated が保持される"
 
 
+# ---------------------------------------------------------------------------
+# Issue #166: cache miss 時の COUNT(*) 別発行が 2x コスト regression。
+# 結果が cap 以内なら COUNT(*) を skip し、cap を超えた truncate 発生時のみ
+# COUNT(*) を発行する optimization の regression guard。
+# ---------------------------------------------------------------------------
+
+
+def test_search_under_cap_skips_count_query(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #166: 結果が cap 以内のとき ``_count_matches`` を呼ばない.
+
+    通常ケース (vault の大半) で FTS5/filter SQL が 1 回だけ評価される
+    ことを spy で検証する。2 回評価される regression (cache miss 時 2x) を
+    防ぐガード。
+    """
+    notes = {f"a_{i}.md": "---\ntags: [few]\n---\nbody\n" for i in range(3)}
+    _root, idx = vault_builder(notes)
+
+    count_calls = 0
+    original = idx._count_matches
+
+    def spy(*args: object, **kwargs: object) -> int:
+        nonlocal count_calls
+        count_calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(idx, "_count_matches", spy)
+
+    res = idx.search("", tags=["few"])
+    assert res["total"] == 3
+    assert res["truncated"] is False
+    assert count_calls == 0, "under-cap では COUNT(*) を発行しない"
+
+
+def test_search_over_cap_issues_count_query(
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #166: 結果が cap を超えたとき ``_count_matches`` で accurate total を取得する.
+
+    cap+1 件ある vault で ``_count_matches`` がちょうど 1 回呼ばれ、
+    truncated=True と accurate total が維持されることを確認する。
+    """
+    _root, idx, cap = bulk_vault_over_cap
+
+    count_calls = 0
+    original = idx._count_matches
+
+    def spy(*args: object, **kwargs: object) -> int:
+        nonlocal count_calls
+        count_calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(idx, "_count_matches", spy)
+
+    res = idx.search("", tags=["bulk-tag"], limit=10)
+    assert res["total"] == cap + 1
+    assert res["truncated"] is True
+    assert len(res["results"]) == 10
+    assert count_calls == 1, "over-cap でのみ COUNT(*) を発行する"
+
+
+def test_search_exactly_at_cap_skips_count_query(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #166: total == cap ちょうどのケースでも COUNT(*) を skip する.
+
+    境界判定が ``>= cap`` に劣化すると cap ちょうどで COUNT(*) が走る
+    regression が起きる。LIMIT を cap+1 にして「cap+1 件取れたときだけ
+    COUNT」の契約が守られることを pin する。
+    """
+    cap = VaultIndex._MAX_RESULTS
+    notes = {f"edge/note_{i:04d}.md": "---\ntags: [edge]\n---\nbody\n" for i in range(cap)}
+    _root, idx = vault_builder(notes)
+
+    count_calls = 0
+    original = idx._count_matches
+
+    def spy(*args: object, **kwargs: object) -> int:
+        nonlocal count_calls
+        count_calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(idx, "_count_matches", spy)
+
+    res = idx.search("", tags=["edge"])
+    assert res["total"] == cap
+    assert res["truncated"] is False
+    assert count_calls == 0, "exactly-at-cap でも COUNT(*) を発行しない"
+
+
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:
     """folder='Projects' が 'Projects Hermes' のような兄弟を拾わないこと."""
     # 兄弟フォルダに同一トークンを含むノートを置く。
