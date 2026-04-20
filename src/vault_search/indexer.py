@@ -551,22 +551,29 @@ class VaultIndex:
         # Tier 2: FTS5 — 同一接続で FETCH と COUNT を実行する。
         # 別接続に分けると WAL の snapshot が食い違い、削除競合で
         # `total < len(results)` のような非整合が発生しうる (PR #165 review A1)。
+        # Issue #166: LIMIT を ``_MAX_RESULTS + 1`` にして truncation 判定を
+        # 結果サイズから導く。cap 以内 (通常ケース) は 1 クエリで総数が確定し、
+        # cap を超えた場合のみ COUNT(*) を発行して accurate total を取得する。
         with self.connection() as conn:
             results = self._fts5_search(
                 query,
                 tags=tags,
                 folder=folder,
                 metadata_conditions=conditions,
-                limit=self._MAX_RESULTS,
+                limit=self._MAX_RESULTS + 1,
                 conn=conn,
             )
-            total = self._count_matches(
-                query,
-                tags=tags,
-                folder=folder,
-                metadata_conditions=conditions,
-                conn=conn,
-            )
+            if len(results) <= self._MAX_RESULTS:
+                total = len(results)
+            else:
+                results = results[: self._MAX_RESULTS]
+                total = self._count_matches(
+                    query,
+                    tags=tags,
+                    folder=folder,
+                    metadata_conditions=conditions,
+                    conn=conn,
+                )
         self._cache.put(query, filters, results, total=total)
 
         sliced = results[offset : offset + limit]
