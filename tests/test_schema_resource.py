@@ -781,6 +781,51 @@ def test_payload_has_errors_wire_format_note(vault_index: VaultIndex) -> None:
     )
 
 
+def test_payload_errors_entries_have_wire_prefix(vault_index: VaultIndex) -> None:
+    """各 error entry に共通の ``wire_prefix`` が付与される (#214).
+
+    entry に直接 dict access した agent が top-level ``errors_wire_format_note``
+    を skim しなくても FastMCP の wrap 形式を理解できるようにする。全 entry
+    共通の定数文字列で、``<tool>`` placeholder を含むことで template 形式を
+    明示する (agent が ``wire_prefix.replace('<tool>', name) + example`` を
+    構築できる)。
+    """
+    from typing import get_args
+
+    from vault_search.exceptions import ERROR_CATALOG, ErrorCode
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    errors = payload["errors"]
+
+    abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+    concrete_codes = set(get_args(ErrorCode)) - abstract_codes
+
+    prefixes: set[str] = set()
+    for code in concrete_codes:
+        entry = errors[code]
+        assert "wire_prefix" in entry, (
+            f"errors['{code}'] missing 'wire_prefix' (#214): {entry!r}"
+        )
+        prefix = entry["wire_prefix"]
+        assert isinstance(prefix, str) and prefix.strip(), (
+            f"errors['{code}']['wire_prefix'] must be non-empty str: {prefix!r}"
+        )
+        assert "Error executing tool" in prefix, (
+            f"wire_prefix must document FastMCP wrap shape: {prefix!r}"
+        )
+        assert "<tool>" in prefix, (
+            f"wire_prefix must expose '<tool>' placeholder so agent can "
+            f"construct wrapped message per tool name: {prefix!r}"
+        )
+        prefixes.add(prefix)
+
+    assert len(prefixes) == 1, (
+        f"wire_prefix must be a single shared constant across all entries, "
+        f"got {len(prefixes)} distinct values: {prefixes}"
+    )
+
+
 def test_resources_module_does_not_import_validation(vault_index: VaultIndex) -> None:
     """resources.py は例外階層を import しない (#201 dependency inversion).
 
