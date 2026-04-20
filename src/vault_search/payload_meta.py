@@ -89,7 +89,10 @@ from .schema_meta import FrontmatterKeyInfo
 # errors から abstract=True entry を除外 (VAULT_SEARCH_ERROR / #200 — agent
 # 視点の destructive subset 変更だが ErrorCode Literal には残るため minor
 # 扱い: agent が version<2.1 を cache していた場合のみ key 集合 diff が出る)。
-_SCHEMA_VERSION: str = "2.1"
+# 2.2: errors[code] に wire_prefix field 追加 (additive, #214) — entry 単独で
+# FastMCP wrap 形式を理解できるよう top-level errors_wire_format_note への
+# backreference を per-entry に置く。
+_SCHEMA_VERSION: str = "2.2"
 
 # payload["version"] の bumping policy。agent が cache invalidation 判断に使う。
 # version 2.0 はこのポリシーを確立した版であり、同時に 1.x からの破壊的変更

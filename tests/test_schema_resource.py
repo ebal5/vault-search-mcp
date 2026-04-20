@@ -804,9 +804,7 @@ def test_payload_errors_entries_have_wire_prefix(vault_index: VaultIndex) -> Non
     prefixes: set[str] = set()
     for code in concrete_codes:
         entry = errors[code]
-        assert "wire_prefix" in entry, (
-            f"errors['{code}'] missing 'wire_prefix' (#214): {entry!r}"
-        )
+        assert "wire_prefix" in entry, f"errors['{code}'] missing 'wire_prefix' (#214): {entry!r}"
         prefix = entry["wire_prefix"]
         assert isinstance(prefix, str) and prefix.strip(), (
             f"errors['{code}']['wire_prefix'] must be non-empty str: {prefix!r}"

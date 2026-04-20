@@ -44,8 +44,19 @@ from .schema_meta import FrontmatterKeyInfo
 __all__ = ["build_schema_payload"]
 
 
+# 全 error entry に付与する共通の wire-format prefix template (#214).
+#
+# entry に直接 dict access した agent が top-level errors_wire_format_note を
+# 経由せずに FastMCP の wrap 形式を理解できるようにするための backreference。
+# ``<tool>`` は呼び出し時の MCP tool 名 (例: vault_search) に置換される placeholder。
+# agent は ``wire_prefix.replace("<tool>", name) + example`` で期待 wire
+# message を構築できる。値は全 entry 共通の定数なので、将来の FastMCP wrap 形式
+# 変更時は本定数 1 箇所だけ更新する。
+_ERROR_WIRE_PREFIX_TEMPLATE: str = "Error executing tool <tool>: "
+
+
 def _serialize_error_catalog() -> dict[str, dict[str, str]]:
-    """``ERROR_CATALOG`` を agent-facing wire 形式に変換する (#199 / #200 / #201).
+    """``ERROR_CATALOG`` を agent-facing wire 形式に変換する (#199 / #200 / #201 / #214).
 
     * ``exception_class`` は live class 参照なので ``__name__`` に展開する
       (raised_by)
@@ -53,12 +64,16 @@ def _serialize_error_catalog() -> dict[str, dict[str, str]]:
       が agent の pattern-match 対象に混ざらないようにする (#200)
     * 戻り dict の key は ``ErrorCode`` Literal 値と一致する (string literal に
       統一、live class attr は参照しない #199)
+    * 各 entry に共通の ``wire_prefix`` を付与し、entry 単独で wire 形式を
+      理解可能にする (#214 — top-level ``errors_wire_format_note`` への
+      backreference)
     """
     return {
         code: {
             "raised_by": info["exception_class"].__name__,
             "description": info["description"],
             "example": info["example"],
+            "wire_prefix": _ERROR_WIRE_PREFIX_TEMPLATE,
         }
         for code, info in ERROR_CATALOG.items()
         if not info.get("abstract", False)
