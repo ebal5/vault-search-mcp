@@ -186,6 +186,40 @@ class TestTieredCache:
         assert cache.get("alpha", None) == (-1, None)
         assert cache.get("beta", None) == (-1, None)
 
+    def test_invalidate_granular_multi_path(self) -> None:
+        """Issue #31: changed_paths が複数要素の場合、いずれかとヒットする entry を drop."""
+        cache = TieredCache()
+        cache.put("q1", None, [{"path": "a.md"}], total=1)
+        cache.put("q2", None, [{"path": "b.md"}], total=1)
+        cache.put("q3", None, [{"path": "c.md"}], total=1)
+
+        cache.invalidate({"a.md", "c.md"})
+
+        assert cache.get("q1", None) == (-1, None)
+        assert cache.get("q3", None) == (-1, None)
+        # q2 は changed_paths と無関係
+        tier, entry = cache.get("q2", None)
+        assert tier == 0
+        assert entry is not None
+
+    def test_invalidate_granular_drops_fuzzy_source_entry(self) -> None:
+        """Issue #31: granular invalidate で drop された entry は Tier 1 fuzzy にも露出しない.
+
+        changed path を含む entry を drop した後、fuzzy score が threshold を
+        超える近隣クエリを投げても (= 旧実装なら Tier 1 hit になる) ミスになる。
+        granular drop が fuzzy 経路にも届くことを pin する。
+        """
+        cache = TieredCache(fuzzy_threshold=0.8)
+        # tokens: {"a","b","c","d"} — intersection/union=4/5=0.8 で次の query と fuzzy match
+        cache.put("a b c d", None, [{"path": "x.md"}], total=1)
+
+        cache.invalidate({"x.md"})
+
+        # fuzzy 対象 entry が消えたので miss (fuzzy で流用できる source がない)
+        tier, entry = cache.get("a b c d e", None)
+        assert tier == -1
+        assert entry is None
+
 
 # ---------------------------------------------------------------------------
 # VaultIndex — build / update / delete
@@ -428,6 +462,36 @@ def test_cache_granular_invalidate_preserves_unrelated_entries(
     res_beta_after = idx.search("beta")
     assert res_alpha_after["tier"] == 2, "a.md を含む alpha キャッシュは drop される"
     assert res_beta_after["tier"] == 0, "b.md のみの beta キャッシュは granular で残る"
+
+
+def test_cache_granular_invalidate_on_file_deletion(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #31: update_single が DELETE 経路でも granular invalidate を呼ぶ.
+
+    存在しないパスを update_single に渡す (= ファイル削除検知) と、
+    そのパスを結果に含む cache entry が drop される。無関係な entry は残る。
+    """
+    root, idx = vault_builder(
+        {
+            "a.md": "# A\n\nalpha content.\n",
+            "b.md": "# B\n\nbeta content.\n",
+        }
+    )
+    idx.search("alpha")  # a.md を含む entry を cache
+    idx.search("beta")  # b.md を含む entry を cache
+
+    # a.md を物理削除 → update_single で DELETE 経路が走る
+    (root / "a.md").unlink()
+    assert idx.update_single("a.md") is True
+
+    res_alpha = idx.search("alpha")
+    res_beta = idx.search("beta")
+    # a.md を含む alpha cache は drop、b.md のみの beta cache は残る
+    assert res_alpha["tier"] == 2
+    assert res_beta["tier"] == 0
+    # 削除後の alpha 検索結果は空
+    assert res_alpha["results"] == []
 
 
 def test_search_empty_query_returns_empty(vault_index: VaultIndex) -> None:

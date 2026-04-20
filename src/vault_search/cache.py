@@ -121,6 +121,12 @@ class TieredCache:
         ``len(result)`` が内部 cap (``_MAX_RESULTS``) で truncate された場合
         でも ``total`` は実件数を保持するため、ページング終端判定は
         ``entry.total`` を見ること (#17)。
+
+        **Precondition (#31)**: ``result`` の各要素は rel-path を ``"path"`` キー
+        で含むこと。含まれない要素は ``entry.paths`` から silent に抜け、
+        ``invalidate(changed_paths)`` での granular drop が効かなくなる
+        (そのエントリはいかなる changed_paths でも drop されず TTL まで残る)。
+        ``VaultIndex.search`` / ``recent_notes`` は常に ``path`` を含めて呼ぶ。
         """
         key = self._cache_key(query, filters)
         tokens = self._tokenize(query)
@@ -147,7 +153,9 @@ class TieredCache:
         local な文字修正で既存マッチの変動で足りる前提で、hit rate とのトレード
         オフとして受容する設計 (`.claude/rules/fastmcp-gotchas.md` 相当の
         index-time trust 境界と同じく、新規マッチ検知は build_index の
-        full rebuild 経路に委ねる)。
+        full rebuild 経路に委ねる)。Tier 1 fuzzy hit も同じ限界を継承する:
+        別クエリの cache entry を fuzzy で流用する場合、その entry の ``paths``
+        に含まれない新規マッチは返されない。
         """
         with self._lock:
             if changed_paths is None:
