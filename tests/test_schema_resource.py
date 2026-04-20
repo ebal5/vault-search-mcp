@@ -887,3 +887,48 @@ def test_frontmatter_key_info_schema_pins_value_type_enum(vault_index: VaultInde
 # `payload == expected` の strict 等値で完全カバーしているため、新 top-level
 # keys 専用の重複テストは設けない (C-R5)。新 keys は build_schema_payload に
 # 追加された時点で expected も自動的に変わるため drift しない設計。
+
+
+def test_static_payload_metadata_lives_in_payload_meta_module() -> None:
+    """schema://tools payload の静的メタデータは payload_meta.py に集約される (#195).
+
+    resources.py は runtime 組み立て (build_schema_payload /
+    _serialize_error_catalog) に専念し、静的な prose / policy 文字列は
+    別 module に分離する。これにより「resource 組立 logic の変更」と
+    「agent-facing 文言の微調整」の git diff が混ざらない。
+
+    再統合による後退を防ぐため、以下を構造的に assert する:
+
+    * ``payload_meta`` module が存在し、5 定数を export する
+    * ``resources.py`` source text が静的 prose の本体を含まない
+      (sentinel 部分文字列で検知)
+    """
+    from pathlib import Path
+
+    from vault_search import payload_meta
+
+    expected_constants = (
+        "_SCHEMA_VERSION",
+        "_VERSION_POLICY",
+        "_OVERVIEW",
+        "_RECOMMENDED_FLOW",
+        "_ERRORS_WIRE_FORMAT_NOTE",
+    )
+    missing = [name for name in expected_constants if not hasattr(payload_meta, name)]
+    assert not missing, f"payload_meta is missing constants: {missing}"
+
+    source_path = (
+        Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    # _OVERVIEW の冒頭 / _VERSION_POLICY の冒頭 / _ERRORS_WIRE_FORMAT_NOTE の冒頭 —
+    # いずれも resources.py に直接書かれていれば現れる。
+    for sentinel in (
+        "vault-search-mcp は Obsidian Vault",
+        "additive changes (adding new top-level keys",
+        "FastMCP は全ての例外を",
+    ):
+        assert sentinel not in source, (
+            f"resources.py still contains static payload metadata "
+            f"(sentinel: {sentinel!r}). Move it to payload_meta.py (#195)."
+        )
