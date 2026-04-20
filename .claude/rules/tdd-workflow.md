@@ -621,6 +621,44 @@ worktree に入る方式を推奨:
 - **shutdown 順**: teammate 全員 idle 確認 → `shutdown_request` →
   `teammate_terminated` 通知 → `TeamDelete`
 
+## review-loop のモデル選定 (実験中: Sonnet 全視点 vs Sonnet+Opus)
+
+**2026-04-20 時点で実験中**。現状 2 方針を並走させ、将来サンプルが揃った段階で
+片方に絞る判定を行う。
+
+### 方針 A: Sonnet+Opus 混成 (従来、`.claude/skills/review-loop/SKILL.md` 規定値)
+
+Architecture 視点 (D) のみ Opus、A/B/C は Sonnet。層越え・結合度の抽象判断で
+Opus の推論力が効く前提。
+
+### 方針 B: Sonnet 全視点 (実験中、低コスト仮説)
+
+A/B/C/D 全て Sonnet。PR #204 / #209 / #213 の 3 連続で「3 Round で CONVERGED」が
+再現しており、方針 A 比でコスト削減見込み (R1 の 4 並列で Opus 1→0)。
+
+### 判定基準
+
+現時点では **同一 PR に Sonnet 単独 と Sonnet+Opus 混成 の両方を並行実行し、
+findings の重なり・独立性を観察する実験を数回は積む** 必要がある。以下のような
+メトリクスを記録する:
+
+- 方針 B で見逃された方針 A 固有の finding (スコア ≥5) の数
+- 方針 A で余計に出た低価値 finding (追認や重複) の数
+- Round 2 以降の収束速度差
+
+定量的な差が見えなければ、コスト面から方針 B (Sonnet 全視点) を default 化する。
+逆に Opus D が毎回ユニークな ≥6 を拾うなら方針 A を維持する。
+
+**現状の暫定運用**: 既定は方針 A (SKILL.md 通り)。明示的に「Sonnet で全視点」と
+user が指示した場合のみ方針 B を採用し、事例を蓄積する。事例ログは本節の下に
+「## review-loop 実験ログ」として追記していく (未着手)。
+
+### 他モデル構成の確立済み運用 (変更対象外)
+
+`## サブエージェントへの delegate` § 「モデル指定指針」に記載の Refactor 計画
+評価 (Opus) 等は本実験の対象外。実装は Sonnet、設計評価は Opus の 2 段構成は
+複数 PR で効果確認済み (PR #96 での NO-GO 実績等)。
+
 ## commit メッセージの prefix 規約
 
 - `Red:` — 失敗テスト追加
