@@ -249,14 +249,22 @@ class TestErrorCatalog:
         )
 
     def test_concrete_entries_are_not_abstract(self) -> None:
-        """具体 error は abstract フラグが False / 未設定."""
+        """具体 error は abstract フラグが False / 未設定.
+
+        本 test は「VAULT_SEARCH_ERROR を除いた全 entry が concrete」ではなく
+        「abstract=True の entry と concrete entry の集合が整合している」を
+        pin する。CATALOG に新規 abstract code を追加した場合、本 test は
+        false-positive せず (abstract entry は単にスキップされ) 、代わりに
+        ``test_vault_search_error_entry_is_abstract`` 等の該当 test が
+        abstract 集合の変化を検知する。
+        """
         from vault_search.exceptions import ERROR_CATALOG
 
         for code, info in ERROR_CATALOG.items():
-            if code == "VAULT_SEARCH_ERROR":
+            if info.get("abstract", False):
                 continue
             assert not info.get("abstract", False), (
-                f"{code}: concrete error must not be marked abstract"
+                f"{code}: concrete error must not be marked abstract (loop invariant)"
             )
 
     def test_error_catalog_keys_subset_of_error_code_literal(self) -> None:
@@ -328,11 +336,23 @@ class TestValidationErrorLocation:
         assert "ValidationError" in exceptions.__all__
 
     def test_validation_module_does_not_re_export_validation_error(self) -> None:
-        """validation.py が ValidationError を再エクスポートしない (#201 regression).
+        """validation.py が ValidationError を星 import 経路で再エクスポートしない.
 
-        本 PR で ValidationError は exceptions.py に移動した。validation.py
-        側が後から ``__all__`` に追加し直すと import site が silent に
-        divergent になるため、validation 側で公開されないことを pin する。
+        本 PR で ValidationError は exceptions.py に移動した。validation.py 内部
+        では raise のため import しており ``val_mod.ValidationError`` の attribute
+        access は成功するが (現状は exceptions から import した同一 class
+        オブジェクト)、``__all__`` に載せると ``from vault_search.validation
+        import *`` 経路で再エクスポート扱いになる。新規コードが ``from .validation``
+        経由で import し始めると依存方向が再び逆転するため、``__all__`` に
+        含まれないことを pin する (#201 regression guard)。
+
+        **注**: ``from vault_search.validation import ValidationError`` 形式の
+        直接 import は現状成功する (validation が exceptions から re-import
+        しているため、両者は同一 object)。これは意図的な許容範囲であり、
+        本 test はあくまで star-import 経路での再エクスポート禁止を guard
+        する。星以外の直接 import を禁止したい場合は
+        ``test_resources_module_does_not_import_validation`` のような module
+        固有の AST guard を追加する。
         """
         from vault_search import validation as val_mod
 

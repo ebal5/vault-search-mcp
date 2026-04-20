@@ -117,7 +117,8 @@ class ExceptionInfo(TypedDict):
 
     ``exception_class`` は live class 参照で、``raised_by`` の drift guard として
     機能する。JSON serializable ではないため wire payload に入れる際は
-    ``resources.build_schema_payload`` が ``exception_class.__name__`` に展開する。
+    ``resources._serialize_error_catalog()`` が ``exception_class.__name__`` に
+    展開する (``build_schema_payload`` が内部で呼出す)。
 
     .. warning::
        ``ERROR_CATALOG`` を ``json.dumps`` に直接渡すと ``exception_class`` が

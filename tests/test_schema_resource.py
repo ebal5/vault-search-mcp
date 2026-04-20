@@ -705,8 +705,15 @@ def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) 
     UNSUPPORTED_RANGE_OPERATOR / VALIDATION_ERROR) はいずれも ValidationError
     から raise される。abstract な VAULT_SEARCH_ERROR は payload に含まれない。
 
-    set equality で先に key 集合を pin することで、2 個目の abstract code が
-    追加された際に expected_raised_by との乖離を即検知する (Round 1 C2 対応)。
+    set equality で key 集合を先に pin することで、以下を検知する
+    (Round 1 C2 対応):
+    - abstract entry が ``_serialize_error_catalog`` を leak して payload に
+      混入 (payload に expected 外の key が出る)
+    - CATALOG に新規 concrete code が追加された際の expected_raised_by 更新漏れ
+      (payload に expected 外の key が出る)
+    新規 abstract code の追加自体は payload に反映されないため本 assertion
+    では検知しない (abstract exclusion の整合性は
+    ``test_payload_errors_excludes_abstract_vault_search_error`` 等が担う)。
     """
     from vault_search.exceptions import NoteNotFoundError
     from vault_search.exceptions import ValidationError as VE
