@@ -295,7 +295,10 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     watcher_stats: dict[str, Any] = {}
     if _watcher is not None:
         watcher_stats.update(_watcher.failure_stats())
-        watcher_stats["watcher_active"] = True
+        # _watcher is not None だけでは不足 — main() は start() の返り値に関わらず
+        # assign するため、watchdog 未インストールや inotify 上限で start() が
+        # False を返しても _watcher は残る。実際の監視状態は is_active() で判定 (#173)。
+        watcher_stats["watcher_active"] = _watcher.is_active()
     return ReindexStats(**stats, **watcher_stats).model_dump(mode="json")
 
 

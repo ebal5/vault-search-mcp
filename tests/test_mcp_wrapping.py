@@ -212,6 +212,9 @@ def test_vault_reindex_watcher_active_true_when_watcher_running(
     """
 
     class _StubWatcher:
+        def is_active(self) -> bool:
+            return True
+
         def failure_stats(self) -> dict[str, Any]:
             return {"watcher_failure_count": 0, "last_watcher_error_at": None}
 
@@ -220,6 +223,36 @@ def test_vault_reindex_watcher_active_true_when_watcher_running(
     assert structured["watcher_active"] is True
     assert structured["watcher_failure_count"] == 0
     assert structured["last_watcher_error_at"] is None
+
+
+def test_vault_reindex_watcher_active_false_when_start_failed(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#173 review fix: watcher 生成後 start() が False を返したら watcher_active=False.
+
+    server.py の main() は ``_watcher = VaultWatcher(_index); _watcher.start()``
+    と unconditionally に assign する。watchdog 部分欠落 (#172) や inotify 上限等で
+    ``start()`` が False を返した場合でも ``_watcher is not None`` は True に残るため、
+    ``watcher_active = _watcher is not None`` で wire すると #173 の目的
+    (「watcher_failure_count=0 の曖昧さ解消」) が破綻する。
+
+    VaultWatcher.is_active() を介して実際の監視状態をチェックすべき。
+    """
+
+    class _NotStartedWatcher:
+        """start() が False を返した watcher を模擬 (observer 未起動)."""
+
+        def is_active(self) -> bool:
+            return False
+
+        def failure_stats(self) -> dict[str, Any]:
+            return {"watcher_failure_count": 0, "last_watcher_error_at": None}
+
+    monkeypatch.setattr(server_mod, "_watcher", _NotStartedWatcher())
+    _content, structured = _call_tool("vault_reindex", {})
+    assert structured["watcher_active"] is False, (
+        f"watcher_active should be False when start() returned False: {structured!r}"
+    )
 
 
 def test_vault_reindex_watcher_failure_description_mentions_recovery() -> None:

@@ -339,12 +339,14 @@ def test_watchdog_available_implies_observer_importable() -> None:
     """
     import vault_search.watcher as w
 
-    if w._WATCHDOG_AVAILABLE:
-        assert hasattr(w, "Observer"), (
-            "_WATCHDOG_AVAILABLE=True なのに Observer が module attribute に無い. "
-            "start() 内の lazy import に頼っている可能性: "
-            "`from watchdog.observers import Observer` を module-level try/except に含めること"
-        )
+    # watchdog は pyproject.toml の hard dep なので CI / dev 環境では常に True。
+    # `if` で skip せず assert で CI の guard を強制する (review suggestion)。
+    assert w._WATCHDOG_AVAILABLE, "watchdog is a hard dep; expected _WATCHDOG_AVAILABLE=True"
+    assert hasattr(w, "Observer"), (
+        "_WATCHDOG_AVAILABLE=True なのに Observer が module attribute に無い. "
+        "start() 内の lazy import に頼っている可能性: "
+        "`from watchdog.observers import Observer` を module-level try/except に含めること"
+    )
 
 
 def test_watcher_stop_safe_when_observer_not_started(vault: Path, index: VaultIndex) -> None:
