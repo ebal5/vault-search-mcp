@@ -223,10 +223,10 @@ def test_vault_reindex_watcher_active_true_when_watcher_running(
 
 
 def test_vault_reindex_watcher_failure_description_mentions_recovery() -> None:
-    """#175: ``watcher_failure_count`` description にリカバリ手順 (vault_reindex(force=True)) が載る.
+    """#175: ``watcher_failure_count`` description にリカバリ手順を記載する.
 
     エージェントが ``watcher_failure_count > 0`` を観測した際の次アクションを
-    schema 経由で発見できることを保証する。
+    (``vault_reindex(force=True)``) schema 経由で発見できることを保証する。
     """
     schema = _get_tool_output_schema("vault_reindex")
     props = schema.get("properties", {})
