@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -295,9 +295,9 @@ def test_watcher_flush_records_failure(
     monkeypatch.setattr(index, "update_single", _raise)
     watcher._pending["note.md"] = time.monotonic()
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     watcher._flush()
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     stats = watcher.failure_stats()
     assert stats["watcher_failure_count"] == 1
