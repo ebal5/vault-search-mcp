@@ -325,6 +325,28 @@ def test_watcher_flush_accumulates_multiple_failures(
     assert stats["watcher_failure_count"] == 2
 
 
+def test_watchdog_available_implies_observer_importable() -> None:
+    """#172: ``_WATCHDOG_AVAILABLE=True`` は Observer の import 成功も含意する.
+
+    現行の watcher.py は module-level try/except で ``watchdog.events`` のみ
+    import していた。``watchdog.observers`` が欠落した部分的 sdist インストール
+    では ``_WATCHDOG_AVAILABLE=True`` なのに ``start()`` 内の lazy import が
+    ``ImportError`` を投げ、``main()`` の graceful fallback を迂回する。
+
+    モジュールレベルで Observer も同じ try/except に含めることで、フラグの
+    意味論と実挙動が一致する。このテストは ``_WATCHDOG_AVAILABLE=True`` なら
+    Observer が module attribute として露出していることを要求する。
+    """
+    import vault_search.watcher as w
+
+    if w._WATCHDOG_AVAILABLE:
+        assert hasattr(w, "Observer"), (
+            "_WATCHDOG_AVAILABLE=True なのに Observer が module attribute に無い. "
+            "start() 内の lazy import に頼っている可能性: "
+            "`from watchdog.observers import Observer` を module-level try/except に含めること"
+        )
+
+
 def test_watcher_stop_safe_when_observer_not_started(vault: Path, index: VaultIndex) -> None:
     """``stop()`` が ``observer.start()`` 未呼び出し状態でも安全に完了する (#39).
 

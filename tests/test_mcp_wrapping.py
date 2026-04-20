@@ -175,15 +175,65 @@ def test_vault_reindex_structured_content_not_wrapped(vault_index: VaultIndex) -
     ReindexStats (Pydantic) 戻り型のままだと FastMCP のバージョン依存で
     wrap_output の挙動が変わる (silent regression 導線)。dict 統一後は
     wrap が発生しないことを保証する。
+
+    Issue #39 で追加された ``watcher_failure_count`` / ``last_watcher_error_at``
+    および Issue #173 で追加された ``watcher_active`` も MCP wire に乗っている
+    ことを issubset で検証する (#176)。これらが ``model_dump(exclude=...)`` 等で
+    silent に除外されても検知できるようにする。
     """
     _content, structured = _call_tool("vault_reindex", {})
     assert isinstance(structured, dict)
     assert "result" not in structured, f"vault_reindex wrap drift: keys={list(structured.keys())}"
-    assert {"added", "updated", "deleted", "skipped", "errors"}.issubset(structured.keys()), (
-        f"vault_reindex missing ReindexStats keys: {structured!r}"
-    )
+    assert {
+        "added",
+        "updated",
+        "deleted",
+        "skipped",
+        "errors",
+        "watcher_failure_count",
+        "last_watcher_error_at",
+        "watcher_active",
+    }.issubset(structured.keys()), f"vault_reindex missing ReindexStats keys: {structured!r}"
+    # 値の型も確認 — fixture では watcher 未設定なので default 値で wire に乗るはず
+    assert isinstance(structured["watcher_failure_count"], int)
+    assert structured["last_watcher_error_at"] is None
+    assert structured["watcher_active"] is False
     schema = _get_tool_output_schema("vault_reindex")
     jsonschema.validate(structured, schema)
+
+
+def test_vault_reindex_watcher_active_true_when_watcher_running(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#173: ``_watcher`` が設定されていれば ``watcher_active=True`` が返る.
+
+    ``watcher_failure_count=0`` は「watcher 未起動」と「起動しているが失敗ゼロ」を
+    区別できないため、``watcher_active`` bool フィールドで明示する。
+    """
+
+    class _StubWatcher:
+        def failure_stats(self) -> dict[str, Any]:
+            return {"watcher_failure_count": 0, "last_watcher_error_at": None}
+
+    monkeypatch.setattr(server_mod, "_watcher", _StubWatcher())
+    _content, structured = _call_tool("vault_reindex", {})
+    assert structured["watcher_active"] is True
+    assert structured["watcher_failure_count"] == 0
+    assert structured["last_watcher_error_at"] is None
+
+
+def test_vault_reindex_watcher_failure_description_mentions_recovery() -> None:
+    """#175: ``watcher_failure_count`` description にリカバリ手順 (vault_reindex(force=True)) が載る.
+
+    エージェントが ``watcher_failure_count > 0`` を観測した際の次アクションを
+    schema 経由で発見できることを保証する。
+    """
+    schema = _get_tool_output_schema("vault_reindex")
+    props = schema.get("properties", {})
+    desc = props.get("watcher_failure_count", {}).get("description", "")
+    assert "vault_reindex" in desc and "force=True" in desc, (
+        f"watcher_failure_count description lacks recovery hint: {desc!r}"
+    )
 
 
 def test_vault_stats_structured_content_not_wrapped(vault_index: VaultIndex) -> None:
