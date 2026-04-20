@@ -405,10 +405,11 @@ def test_payload_has_version_key(vault_index: VaultIndex) -> None:
 
     schema://tools resource payload 自身のバージョン (各 tool 契約のバージョン
     ではない)。agent が改変検知のために pin する対象。定数を直接 import して
-    test 側にリテラルを置かないことで drift する唯一の SoT を resources.py に
-    一本化する。
+    test 側にリテラルを置かないことで drift する唯一の SoT を payload_meta.py
+    に一本化する (#195 で resources.py から分離)。
     """
-    from vault_search.resources import _SCHEMA_VERSION, build_schema_payload
+    from vault_search.payload_meta import _SCHEMA_VERSION
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert payload.get("version") == _SCHEMA_VERSION, (
@@ -887,3 +888,56 @@ def test_frontmatter_key_info_schema_pins_value_type_enum(vault_index: VaultInde
 # `payload == expected` の strict 等値で完全カバーしているため、新 top-level
 # keys 専用の重複テストは設けない (C-R5)。新 keys は build_schema_payload に
 # 追加された時点で expected も自動的に変わるため drift しない設計。
+
+
+def test_static_payload_metadata_lives_in_payload_meta_module() -> None:
+    """schema://tools payload の静的メタデータは payload_meta.py に集約される (#195).
+
+    resources.py は runtime 組み立て (build_schema_payload /
+    _serialize_error_catalog) に専念し、payload 構築に使う module-level 定数は
+    別 module に分離する。これにより「resource 組立 logic の変更」と
+    「agent-facing 文言 / derived schema の微調整」の git diff が混ざらない。
+
+    再統合による後退を防ぐため、AST 経由で以下を構造的に assert する:
+
+    * ``payload_meta`` module が 6 定数を export する
+    * ``resources.py`` の module-level ``Assign`` / ``AnnAssign`` target に
+      これらの識別子が現れない — `_SCHEMA_VERSION = "2.2"` 型の
+      「緊急対応」による書き戻しを識別子レベルで検知する
+      (prose 本文 sentinel 方式は小改変で回避可能なため AST に格上げ)
+    """
+    import ast
+    from pathlib import Path
+
+    from vault_search import payload_meta
+
+    expected_constants = (
+        "_SCHEMA_VERSION",
+        "_VERSION_POLICY",
+        "_OVERVIEW",
+        "_RECOMMENDED_FLOW",
+        "_ERRORS_WIRE_FORMAT_NOTE",
+        "_FRONTMATTER_KEY_INFO_SCHEMA",
+    )
+    missing = [name for name in expected_constants if not hasattr(payload_meta, name)]
+    assert not missing, f"payload_meta is missing constants: {missing}"
+
+    source_path = Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    forbidden = set(expected_constants)
+    offenders: list[str] = []
+    for node in tree.body:
+        # module-level のみ検査 (関数 / クラス内スコープは無関係)
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id in forbidden:
+                offenders.append(f"AnnAssign {node.target.id} at line {node.lineno}")
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in forbidden:
+                    offenders.append(f"Assign {target.id} at line {node.lineno}")
+    assert not offenders, (
+        "resources.py must not define payload-metadata constants at module level "
+        "(#195). Move them to payload_meta.py.\n"
+        f"Offending assignments: {offenders}"
+    )
