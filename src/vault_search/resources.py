@@ -4,10 +4,14 @@
 serialize する責務は本 module が担う (Issue #184)。``schema://tools`` resource
 handler は本 module の関数を呼び出すだけ。
 
-静的メタデータ (version / overview / recommended_flow / errors_wire_format_note
-等) は ``payload_meta.py`` に分離した (Issue #195)。本 module は runtime 組立
-(``build_schema_payload`` / ``_serialize_error_catalog``) と、model 由来の
-derived schema (``_FRONTMATTER_KEY_INFO_SCHEMA``) のみを保持する。
+Payload の top-level に直接乗る module-level 定数 (``_SCHEMA_VERSION`` /
+``_OVERVIEW`` / ``_RECOMMENDED_FLOW`` / ``_ERRORS_WIRE_FORMAT_NOTE`` /
+``_VERSION_POLICY`` / ``_FRONTMATTER_KEY_INFO_SCHEMA``) は ``payload_meta.py``
+に分離した (Issue #195)。本 module は組立 entry point (``build_schema_payload``)
+と、wire 形式への transformer (``_serialize_error_catalog``) のみを保持する。
+
+言語方針 (ja-JP 固定) / prose の drift guard 方針 / Option A (package 化)
+移行 tripwire は ``payload_meta.py`` の module docstring が単一 SoT。
 
 ## Read-only 契約
 
@@ -29,6 +33,7 @@ from .exceptions import ERROR_CATALOG
 from .mcp_contract import TOOL_ENTRIES
 from .payload_meta import (
     _ERRORS_WIRE_FORMAT_NOTE,
+    _FRONTMATTER_KEY_INFO_SCHEMA,
     _OVERVIEW,
     _RECOMMENDED_FLOW,
     _SCHEMA_VERSION,
@@ -58,11 +63,6 @@ def _serialize_error_catalog() -> dict[str, dict[str, str]]:
         for code, info in ERROR_CATALOG.items()
         if not info.get("abstract", False)
     }
-
-
-# Pydantic v2 は同一モデルに対する model_json_schema() を内部キャッシュするが、
-# ここでも import 時に 1 度だけ評価して以降 dict instance を共有する。
-_FRONTMATTER_KEY_INFO_SCHEMA: dict[str, Any] = FrontmatterKeyInfo.model_json_schema()
 
 
 def build_schema_payload(

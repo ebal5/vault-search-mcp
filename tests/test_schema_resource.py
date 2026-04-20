@@ -894,16 +894,19 @@ def test_static_payload_metadata_lives_in_payload_meta_module() -> None:
     """schema://tools payload の静的メタデータは payload_meta.py に集約される (#195).
 
     resources.py は runtime 組み立て (build_schema_payload /
-    _serialize_error_catalog) に専念し、静的な prose / policy 文字列は
+    _serialize_error_catalog) に専念し、payload 構築に使う module-level 定数は
     別 module に分離する。これにより「resource 組立 logic の変更」と
-    「agent-facing 文言の微調整」の git diff が混ざらない。
+    「agent-facing 文言 / derived schema の微調整」の git diff が混ざらない。
 
-    再統合による後退を防ぐため、以下を構造的に assert する:
+    再統合による後退を防ぐため、AST 経由で以下を構造的に assert する:
 
-    * ``payload_meta`` module が存在し、5 定数を export する
-    * ``resources.py`` source text が静的 prose の本体を含まない
-      (sentinel 部分文字列で検知)
+    * ``payload_meta`` module が 6 定数を export する
+    * ``resources.py`` の module-level ``Assign`` / ``AnnAssign`` target に
+      これらの識別子が現れない — `_SCHEMA_VERSION = "2.2"` 型の
+      「緊急対応」による書き戻しを識別子レベルで検知する
+      (prose 本文 sentinel 方式は小改変で回避可能なため AST に格上げ)
     """
+    import ast
     from pathlib import Path
 
     from vault_search import payload_meta
@@ -914,20 +917,27 @@ def test_static_payload_metadata_lives_in_payload_meta_module() -> None:
         "_OVERVIEW",
         "_RECOMMENDED_FLOW",
         "_ERRORS_WIRE_FORMAT_NOTE",
+        "_FRONTMATTER_KEY_INFO_SCHEMA",
     )
     missing = [name for name in expected_constants if not hasattr(payload_meta, name)]
     assert not missing, f"payload_meta is missing constants: {missing}"
 
     source_path = Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
-    source = source_path.read_text(encoding="utf-8")
-    # _OVERVIEW の冒頭 / _VERSION_POLICY の冒頭 / _ERRORS_WIRE_FORMAT_NOTE の冒頭 —
-    # いずれも resources.py に直接書かれていれば現れる。
-    for sentinel in (
-        "vault-search-mcp は Obsidian Vault",
-        "additive changes (adding new top-level keys",
-        "FastMCP は全ての例外を",
-    ):
-        assert sentinel not in source, (
-            f"resources.py still contains static payload metadata "
-            f"(sentinel: {sentinel!r}). Move it to payload_meta.py (#195)."
-        )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    forbidden = set(expected_constants)
+    offenders: list[str] = []
+    for node in tree.body:
+        # module-level のみ検査 (関数 / クラス内スコープは無関係)
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id in forbidden:
+                offenders.append(f"AnnAssign {node.target.id} at line {node.lineno}")
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in forbidden:
+                    offenders.append(f"Assign {target.id} at line {node.lineno}")
+    assert not offenders, (
+        "resources.py must not define payload-metadata constants at module level "
+        "(#195). Move them to payload_meta.py.\n"
+        f"Offending assignments: {offenders}"
+    )

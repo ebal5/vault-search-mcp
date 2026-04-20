@@ -1,16 +1,51 @@
-"""``schema://tools`` payload の静的メタデータ定数 (Issue #195).
+"""``schema://tools`` payload の module-level 定数 (Issue #195).
 
-``resources.py`` から静的 prose / policy 文字列を分離する軽量 module。
-runtime 組立 (``build_schema_payload`` / ``_serialize_error_catalog``) は
-``resources.py`` 側に残し、本 module は import 時に 1 度だけ評価される
-純粋な定数のみを保持する。
+``resources.py`` から「payload に直接乗せる module-level 定数」を分離する
+軽量 module。runtime 組立 (``build_schema_payload``) と transformer
+(``_serialize_error_catalog``) は ``resources.py`` 側に残し、本 module は
+import 時に 1 度だけ評価される純粋な定数のみを保持する。
 
-この分離の目的:
+収めるもの:
 
-* 「payload 組立 logic の変更」と「agent-facing 文言の微調整」の git diff を分離
-* 将来の resource 追加 (``warnings://`` / ``help://tools`` 等) で ``resources.py``
-  が雪だるま式に育つのを防ぐ
+* 静的 prose / policy (``_OVERVIEW`` / ``_VERSION_POLICY`` /
+  ``_ERRORS_WIRE_FORMAT_NOTE``)
+* schema 版数 (``_SCHEMA_VERSION``)
+* literal dict (``_RECOMMENDED_FLOW``)
+* model 由来 derived schema (``_FRONTMATTER_KEY_INFO_SCHEMA``) —
+  ``FrontmatterKeyInfo.model_json_schema()`` を import 時に 1 度評価して
+  以降 share する
+
+共通契約: **payload の top-level に直接出る module-level 定数は本 module に置く**。
+新しく model 由来の導出定数を追加する場合もここに置く (``resources.py`` の
+``build_schema_payload`` 本文からは ``from .payload_meta import ...`` で読む)。
+
+収めないもの:
+
+* runtime 毎に evaluate する値 (``_serialize_error_catalog()`` の戻り)
+* 組立 entry point (``build_schema_payload``)
+
+## 分離の目的
+
+* 「payload 組立 logic の変更」と「agent-facing 文言 / derived schema の
+  微調整」の git diff を分離
+* 将来の resource 追加 (``warnings://`` / ``help://tools`` 等) で
+  ``resources.py`` が雪だるま式に育つのを防ぐ
 * overview の 1 文字修正が serialization 実装の diff に混ざらない
+
+## Option A (resources/ package 化) への移行 tripwire
+
+Option B (本 module 単独分離) で十分な現段階から、以下のいずれかが起きたら
+``resources/`` package への昇格を検討する:
+
+1. 本 module の行数が 300 行を超える (現 ~180 行)
+2. 2 個目の resource (``warnings://`` / ``help://tools`` / ``stats://index`` 等)
+   が静的 prose を追加し、schema 用と warnings 用の定数が混載する
+3. resource ごとの metadata が cross-reference を持ち始めて命名衝突する
+
+移行時は ``resources/{schema_meta,warnings_meta,...}.py`` に分割し、
+``resources/__init__.py`` で ``build_*_payload`` を re-export する構造に
+する。現 import 経路 (`from .payload_meta import ...`) を
+`from .resources.schema_meta import ...` 等に書き換える。
 
 ## 言語方針
 
@@ -33,14 +68,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = [
-    "_ERRORS_WIRE_FORMAT_NOTE",
-    "_OVERVIEW",
-    "_RECOMMENDED_FLOW",
-    "_SCHEMA_VERSION",
-    "_VERSION_POLICY",
-]
-
+from .schema_meta import FrontmatterKeyInfo
 
 # ---------------------------------------------------------------------------
 # schema://tools payload の top-level metadata 定数 (#38 / #179 / #195)
@@ -180,3 +208,10 @@ _ERRORS_WIRE_FORMAT_NOTE: str = (
     "基底例外 VaultSearchError (ErrorCode Literal には含まれるが abstract) は"
     "本 payload に含まれない。"
 )
+
+
+# Pydantic v2 は同一モデルに対する model_json_schema() を内部キャッシュするが、
+# ここでも import 時に 1 度だけ評価して以降 dict instance を共有する。
+# agent が value_type の許容値 enum を先に読んでから frontmatter_keys を解釈する
+# ため、payload 上も frontmatter_keys より前に置かれる。
+_FRONTMATTER_KEY_INFO_SCHEMA: dict[str, Any] = FrontmatterKeyInfo.model_json_schema()
