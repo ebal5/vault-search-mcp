@@ -723,6 +723,87 @@ def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) 
         )
 
 
+def test_payload_errors_excludes_abstract_vault_search_error(
+    vault_index: VaultIndex,
+) -> None:
+    """VAULT_SEARCH_ERROR は abstract として payload['errors'] から除外される (#200).
+
+    ``VaultSearchError`` は base class で agent へ直接送出されないため、
+    agent 向け pattern-match を汚染しないよう payload から除く。ただし
+    ``ErrorCode`` Literal には値として残るため raise fallback では使える。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    errors = payload["errors"]
+    assert "VAULT_SEARCH_ERROR" not in errors, (
+        f"payload['errors'] must not include abstract VAULT_SEARCH_ERROR: keys={sorted(errors)}"
+    )
+
+
+def test_payload_has_errors_wire_format_note(vault_index: VaultIndex) -> None:
+    """payload top-level に共通の wire-format wrap note が載る (#202).
+
+    FastMCP が全例外を ``Error executing tool <tool>: <message>`` で包む挙動
+    は errors 全体に適用される — 以前は ValidationError description にだけ
+    書かれていたため entry 間で情報量が不均一だった。top-level に吊ることで
+    共通化し、各 entry の description は error 固有の意味に集中させる。
+    """
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    assert "errors_wire_format_note" in payload, (
+        f"top-level 'errors_wire_format_note' missing: keys={list(payload)}"
+    )
+    note = payload["errors_wire_format_note"]
+    assert isinstance(note, str) and note.strip(), f"note must be non-empty str: {note!r}"
+    assert "Error executing tool" in note, (
+        "wire-format note must document the FastMCP wrap prefix explicitly"
+    )
+
+
+def test_resources_module_does_not_import_validation(vault_index: VaultIndex) -> None:
+    """resources.py は例外階層を import しない (#201 dependency inversion).
+
+    ``build_schema_payload`` は ``exceptions.ERROR_CATALOG`` 経由で描写情報を
+    得る。例外クラスを直接参照すると resources layer が例外階層の shape に
+    結合してしまう — これを AST レベルで禁止する。
+    """
+    import ast
+    from pathlib import Path
+
+    source_path = Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    forbidden_modules = {"vault_search.validation", ".validation"}
+    forbidden_names = {
+        "NoteNotFoundError",
+        "VaultSearchError",
+        "ValidationError",
+    }
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            rel_module = f".{module}" if node.level else module
+            if rel_module in forbidden_modules or module == "vault_search.validation":
+                offenders.append(f"ImportFrom {rel_module}: {[a.name for a in node.names]}")
+            if module in {"vault_search.exceptions", "exceptions"} or (
+                node.level and module == "exceptions"
+            ):
+                imported = {a.name for a in node.names}
+                bad = imported & forbidden_names
+                if bad:
+                    offenders.append(
+                        f"ImportFrom exceptions: {sorted(bad)} (use ERROR_CATALOG instead)"
+                    )
+    assert not offenders, (
+        "resources.py must not import exception classes directly (#201). "
+        "Use ERROR_CATALOG from vault_search.exceptions instead.\n"
+        f"Offending imports: {offenders}"
+    )
+
+
 def test_payload_has_frontmatter_key_info_schema(vault_index: VaultIndex) -> None:
     """payload に FrontmatterKeyInfo の JSON Schema が含まれること (#179).
 
