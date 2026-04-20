@@ -405,10 +405,11 @@ def test_payload_has_version_key(vault_index: VaultIndex) -> None:
 
     schema://tools resource payload 自身のバージョン (各 tool 契約のバージョン
     ではない)。agent が改変検知のために pin する対象。定数を直接 import して
-    test 側にリテラルを置かないことで drift する唯一の SoT を resources.py に
-    一本化する。
+    test 側にリテラルを置かないことで drift する唯一の SoT を payload_meta.py
+    に一本化する (#195 で resources.py から分離)。
     """
-    from vault_search.resources import _SCHEMA_VERSION, build_schema_payload
+    from vault_search.payload_meta import _SCHEMA_VERSION
+    from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert payload.get("version") == _SCHEMA_VERSION, (
@@ -917,9 +918,7 @@ def test_static_payload_metadata_lives_in_payload_meta_module() -> None:
     missing = [name for name in expected_constants if not hasattr(payload_meta, name)]
     assert not missing, f"payload_meta is missing constants: {missing}"
 
-    source_path = (
-        Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
-    )
+    source_path = Path(__file__).resolve().parent.parent / "src" / "vault_search" / "resources.py"
     source = source_path.read_text(encoding="utf-8")
     # _OVERVIEW の冒頭 / _VERSION_POLICY の冒頭 / _ERRORS_WIRE_FORMAT_NOTE の冒頭 —
     # いずれも resources.py に直接書かれていれば現れる。
