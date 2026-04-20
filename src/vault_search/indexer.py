@@ -330,7 +330,9 @@ class VaultIndex:
                 )
                 stats["deleted"] = len(deleted_paths)
 
-            # 追加・更新
+            # 追加・更新 — 差分 rebuild では UPSERT した path を収集し
+            # granular invalidate に渡す (#219)。
+            touched: set[str] = set(deleted_paths)
             for rel_path, mtime in current_files.items():
                 if not force and rel_path in existing:
                     if existing[rel_path] >= mtime:
@@ -344,6 +346,7 @@ class VaultIndex:
                     continue
 
                 self._upsert_note(conn, note, mtime)
+                touched.add(rel_path)
 
                 if rel_path in existing:
                     stats["updated"] += 1
@@ -352,7 +355,9 @@ class VaultIndex:
 
             conn.commit()
 
-            self._invalidate_caches()
+            # force=True は全件再構築なので全 clear。force=False は touched 集合
+            # を渡して unrelated query の Tier 0/1 cache を温存する (#219)。
+            self._invalidate_caches(changed_paths=None if force else touched)
 
             logger.info(
                 "Index built: added=%d updated=%d deleted=%d skipped=%d errors=%d",
