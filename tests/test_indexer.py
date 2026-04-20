@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from vault_search.cache import TieredCache
+from vault_search.exceptions import ValidationError
 from vault_search.indexer import VaultIndex
-from vault_search.validation import ValidationError
 
 # ---------------------------------------------------------------------------
 # TieredCache

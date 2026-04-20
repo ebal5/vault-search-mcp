@@ -18,8 +18,12 @@ from typing import get_args
 
 import pytest
 
-from vault_search.exceptions import ErrorCode, NoteNotFoundError, VaultSearchError
-from vault_search.validation import ValidationError
+from vault_search.exceptions import (
+    ErrorCode,
+    NoteNotFoundError,
+    ValidationError,
+    VaultSearchError,
+)
 
 
 class TestErrorCodeRegistry:
@@ -198,3 +202,161 @@ class TestValidationErrorStructured:
         """str(err) には message が含まれる (従来挙動維持)."""
         err = ValidationError("something went wrong")
         assert "something went wrong" in str(err)
+
+
+class TestErrorCatalog:
+    """``ERROR_CATALOG`` は error_code → metadata の単一 source of truth (#199/#200/#201).
+
+    ``resources.py`` の ``_ERRORS`` がローカルに保持していた
+    (``description`` / ``example`` / ``raised_by``) 情報を ``exceptions.py``
+    に集約する。resources.py は本 CATALOG を参照して wire 形式に serialize
+    するだけで、自身では例外階層を import しない (依存方向を正す #201)。
+
+    Red フェーズ: 以下はまだ実装されていない。CATALOG 追加前に FAIL する。
+    """
+
+    def test_error_catalog_is_public_export(self) -> None:
+        """ERROR_CATALOG が exceptions module の __all__ に含まれる."""
+        from vault_search import exceptions
+
+        assert "ERROR_CATALOG" in exceptions.__all__
+        assert hasattr(exceptions, "ERROR_CATALOG")
+
+    def test_error_catalog_entries_have_required_fields(self) -> None:
+        """各 entry は exception_class / description / example を必ず持つ."""
+        from vault_search.exceptions import ERROR_CATALOG, VaultSearchError
+
+        assert len(ERROR_CATALOG) > 0, "CATALOG must not be empty"
+        for code, info in ERROR_CATALOG.items():
+            assert "exception_class" in info, f"{code}: missing exception_class"
+            assert "description" in info, f"{code}: missing description"
+            assert "example" in info, f"{code}: missing example"
+            assert issubclass(info["exception_class"], VaultSearchError), (
+                f"{code}: exception_class must subclass VaultSearchError"
+            )
+            assert isinstance(info["description"], str) and info["description"].strip()
+            assert isinstance(info["example"], str) and info["example"].strip()
+
+    def test_vault_search_error_entry_is_abstract(self) -> None:
+        """VAULT_SEARCH_ERROR entry は abstract=True で payload から除外される (#200)."""
+        from vault_search.exceptions import ERROR_CATALOG
+
+        assert "VAULT_SEARCH_ERROR" in ERROR_CATALOG
+        entry = ERROR_CATALOG["VAULT_SEARCH_ERROR"]
+        assert entry.get("abstract") is True, (
+            "VAULT_SEARCH_ERROR must be marked abstract=True so build_schema_payload "
+            "excludes it from the agent-facing errors section."
+        )
+
+    def test_concrete_entries_are_not_abstract(self) -> None:
+        """具体 error は abstract フラグが False / 未設定.
+
+        本 test は「VAULT_SEARCH_ERROR を除いた全 entry が concrete」ではなく
+        「abstract=True の entry と concrete entry の集合が整合している」を
+        pin する。CATALOG に新規 abstract code を追加した場合、本 test は
+        false-positive せず (abstract entry は単にスキップされ) 、代わりに
+        ``test_vault_search_error_entry_is_abstract`` 等の該当 test が
+        abstract 集合の変化を検知する。
+        """
+        from vault_search.exceptions import ERROR_CATALOG
+
+        for code, info in ERROR_CATALOG.items():
+            if info.get("abstract", False):
+                continue
+            assert not info.get("abstract", False), (
+                f"{code}: concrete error must not be marked abstract (loop invariant)"
+            )
+
+    def test_error_catalog_keys_subset_of_error_code_literal(self) -> None:
+        """CATALOG の key は全て ErrorCode Literal の値."""
+        from vault_search.exceptions import ERROR_CATALOG, ErrorCode
+
+        declared = set(get_args(ErrorCode))
+        catalog_keys = set(ERROR_CATALOG.keys())
+        extra = catalog_keys - declared
+        assert not extra, f"CATALOG has codes not in ErrorCode Literal: {extra}"
+
+    def test_error_catalog_covers_all_concrete_error_codes(self) -> None:
+        """全 ErrorCode (abstract 除く) が CATALOG に含まれる.
+
+        exclusion set は CATALOG の ``abstract=True`` entry から動的に導出する
+        ため、2 個目の abstract code が追加された場合も自動追随する (hardcode
+        しない)。
+        """
+        from vault_search.exceptions import ERROR_CATALOG, ErrorCode
+
+        declared = set(get_args(ErrorCode))
+        abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+        concrete_codes = declared - abstract_codes
+        missing = concrete_codes - set(ERROR_CATALOG.keys())
+        assert not missing, f"concrete ErrorCode values missing from CATALOG: {missing}"
+
+    def test_catalog_exception_class_error_code_in_registry(self) -> None:
+        """各 entry の exception_class.error_code が ErrorCode Literal の値.
+
+        本 test は「exception_class の class-level error_code が Literal の値」
+        だけを pin する軽量 drift guard。CATALOG key と class-level error_code
+        の一致は意図的に要求しない: サブコード (UNKNOWN_FRONTMATTER_KEY /
+        UNSUPPORTED_RANGE_OPERATOR) は ValidationError の kwarg 上書きで emit
+        されるため class-level error_code (VALIDATION_ERROR) とは一致しない。
+        CATALOG key と Literal の包含関係は
+        ``test_error_catalog_keys_subset_of_error_code_literal`` が検証する。
+        """
+        from vault_search.exceptions import ERROR_CATALOG
+
+        registry = set(get_args(ErrorCode))
+        for code, info in ERROR_CATALOG.items():
+            cls = info["exception_class"]
+            assert cls.error_code in registry, (
+                f"{code}: exception_class.error_code={cls.error_code!r} not in ErrorCode"
+            )
+
+
+class TestValidationErrorLocation:
+    """``ValidationError`` は ``exceptions.py`` に配置される (#201).
+
+    validation.py に置いたままだと resources.py / filter.py 等が
+    ``from .validation import ValidationError`` する必要があり、
+    例外階層の定義責務が 2 module に分散する。
+
+    Red: 現状 ValidationError は validation.py にあり、
+    ``from vault_search.exceptions import ValidationError`` は ImportError。
+    """
+
+    def test_validation_error_importable_from_exceptions(self) -> None:
+        """exceptions module から ValidationError を import できる."""
+        from vault_search.exceptions import ValidationError as VE_from_exceptions
+
+        assert VE_from_exceptions is ValidationError
+
+    def test_validation_error_in_exceptions_all(self) -> None:
+        """exceptions.__all__ に ValidationError が含まれる."""
+        from vault_search import exceptions
+
+        assert "ValidationError" in exceptions.__all__
+
+    def test_validation_module_does_not_re_export_validation_error(self) -> None:
+        """validation.py が ValidationError を星 import 経路で再エクスポートしない.
+
+        本 PR で ValidationError は exceptions.py に移動した。validation.py 内部
+        では raise のため import しており ``val_mod.ValidationError`` の attribute
+        access は成功するが (現状は exceptions から import した同一 class
+        オブジェクト)、``__all__`` に載せると ``from vault_search.validation
+        import *`` 経路で再エクスポート扱いになる。新規コードが ``from .validation``
+        経由で import し始めると依存方向が再び逆転するため、``__all__`` に
+        含まれないことを pin する (#201 regression guard)。
+
+        **注**: ``from vault_search.validation import ValidationError`` 形式の
+        直接 import は現状成功する (validation が exceptions から re-import
+        しているため、両者は同一 object)。これは意図的な許容範囲であり、
+        本 test はあくまで star-import 経路での再エクスポート禁止を guard
+        する。星以外の直接 import を禁止したい場合は
+        ``test_resources_module_does_not_import_validation`` のような module
+        固有の AST guard を追加する。
+        """
+        from vault_search import validation as val_mod
+
+        assert "ValidationError" not in val_mod.__all__, (
+            "ValidationError must not be re-exported from validation.py; "
+            f"got __all__={val_mod.__all__}"
+        )

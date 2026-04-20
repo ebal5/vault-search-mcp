@@ -508,7 +508,7 @@ def test_vault_search_mcp_returns_all_fields(vault_index: VaultIndex) -> None:
 
 def test_vault_search_rejects_negative_limit(vault_index: VaultIndex) -> None:
     """limit が負値のとき ValidationError (ValueError 派生) を投げる."""
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises((ValueError, ValidationError)):
@@ -517,7 +517,7 @@ def test_vault_search_rejects_negative_limit(vault_index: VaultIndex) -> None:
 
 def test_vault_search_rejects_zero_limit(vault_index: VaultIndex) -> None:
     """limit=0 は ValidationError。意味のない呼び出しを早期に弾く."""
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises((ValueError, ValidationError)):
@@ -526,7 +526,7 @@ def test_vault_search_rejects_zero_limit(vault_index: VaultIndex) -> None:
 
 def test_vault_search_rejects_negative_offset(vault_index: VaultIndex) -> None:
     """offset が負値のとき ValidationError."""
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises((ValueError, ValidationError)):
@@ -535,7 +535,7 @@ def test_vault_search_rejects_negative_offset(vault_index: VaultIndex) -> None:
 
 def test_vault_search_rejects_limit_above_max(vault_index: VaultIndex) -> None:
     """limit > 500 は ValidationError。内部 _MAX_RESULTS 超えは silent truncate を避ける."""
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises((ValueError, ValidationError)):
@@ -554,7 +554,7 @@ def test_vault_recent_accepts_offset_parameter(vault_index: VaultIndex) -> None:
 
 def test_vault_recent_rejects_negative_offset(vault_index: VaultIndex) -> None:
     """vault_recent も offset 負値を拒否."""
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_recent)
     with pytest.raises((ValueError, ValidationError)):
@@ -684,7 +684,7 @@ def test_mcp_tool_vault_search_unknown_key_raises_validation_error(
     conftest の SAMPLE_NOTES には 'priority' キーが存在するため、'priorty' という
     typo に対して did_you_mean に 'priority' が含まれることを確認する。
     """
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises(ValidationError) as exc_info:
@@ -705,7 +705,7 @@ def test_mcp_tool_vault_search_unknown_key_did_you_mean_is_sequence(
     difflib は候補を返さない → did_you_mean == ()。
     一方 allowed には vault の known_keys が入るため len > 0 になる。
     """
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     fn = _fn(server_mod.vault_search)
     with pytest.raises(ValidationError) as exc_info:

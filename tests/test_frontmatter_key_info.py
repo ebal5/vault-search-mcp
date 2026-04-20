@@ -371,7 +371,7 @@ def test_object_key_rejected_from_metadata_filter(
     object 型は filter 不可なので、親キー名で filter を試みると silent 0 件ではなく
     UNKNOWN_FRONTMATTER_KEY ValidationError で agent に誤用を通知する。
     """
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     assert FrontmatterKeyInfo is not None, "FrontmatterKeyInfo が schema_meta.py に未定義"
 
@@ -413,7 +413,7 @@ def test_object_key_filter_error_message_has_dotted_leaf_hint(
     (fastmcp-gotchas.md) ため、`str(err)` に agent が self-correct できるヒントを
     埋める必要がある。
     """
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     _root, idx = vault_builder({"nested.md": "---\nmeta:\n  author: foo\n---\nbody\n"})
 
@@ -445,7 +445,7 @@ def test_object_key_multi_error_message_uses_plural_grammar(
     verb) が生じる。agent の batch hallucination は MCP 運用で主要シナリオなので
     文法整合性を pin する。
     """
-    from vault_search.validation import ValidationError
+    from vault_search.exceptions import ValidationError
 
     _root, idx = vault_builder(
         {

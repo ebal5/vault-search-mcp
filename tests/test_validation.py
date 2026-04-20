@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from vault_search.exceptions import ValidationError
 from vault_search.validation import (
-    ValidationError,
     validate_identifier,
     validate_value,
 )
