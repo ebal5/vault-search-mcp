@@ -117,6 +117,75 @@ class TestTieredCache:
         assert len(entry.result) == 2
         assert entry.total == 1234
 
+    def test_entry_records_result_paths(self) -> None:
+        """Issue #31: put した result の path 集合が entry.paths に記録される."""
+        cache = TieredCache()
+        cache.put(
+            "q",
+            None,
+            [{"path": "a.md", "title": "A"}, {"path": "sub/b.md", "title": "B"}],
+            total=2,
+        )
+        _, entry = cache.get("q", None)
+        assert entry is not None
+        assert entry.paths == frozenset({"a.md", "sub/b.md"})
+
+    def test_entry_paths_empty_for_zero_result(self) -> None:
+        """Issue #31: result が空の entry は paths も空 (境界値)."""
+        cache = TieredCache()
+        cache.put("q", None, [], total=0)
+        _, entry = cache.get("q", None)
+        assert entry is not None
+        assert entry.paths == frozenset()
+
+    def test_invalidate_granular_drops_only_entries_covering_changed(self) -> None:
+        """Issue #31: ``invalidate({changed})`` は changed path を含む entry のみ drop."""
+        cache = TieredCache()
+        cache.put("alpha", None, [{"path": "a.md"}, {"path": "b.md"}], total=2)
+        cache.put("beta", None, [{"path": "c.md"}], total=1)
+        cache.put("gamma", None, [{"path": "b.md"}, {"path": "d.md"}], total=2)
+
+        cache.invalidate({"b.md"})
+
+        # "alpha" と "gamma" は b.md を含むため drop
+        assert cache.get("alpha", None) == (-1, None)
+        assert cache.get("gamma", None) == (-1, None)
+        # "beta" は b.md と無関係なので残る
+        tier, entry = cache.get("beta", None)
+        assert tier == 0
+        assert entry is not None
+
+    def test_invalidate_granular_empty_set_is_noop(self) -> None:
+        """Issue #31: 空 set 指定は何も drop しない (changed path ゼロ)."""
+        cache = TieredCache()
+        cache.put("q", None, [{"path": "a.md"}], total=1)
+        cache.invalidate(set())
+        tier, entry = cache.get("q", None)
+        assert tier == 0
+        assert entry is not None
+
+    def test_invalidate_no_args_clears_all(self) -> None:
+        """Issue #31: 引数なし (= None) で従来通り全クリア."""
+        cache = TieredCache()
+        cache.put("alpha", None, [{"path": "a.md"}], total=1)
+        cache.put("beta", None, [{"path": "b.md"}], total=1)
+
+        cache.invalidate()
+
+        assert cache.get("alpha", None) == (-1, None)
+        assert cache.get("beta", None) == (-1, None)
+
+    def test_invalidate_none_explicit_clears_all(self) -> None:
+        """Issue #31: ``invalidate(None)`` を明示しても全クリア."""
+        cache = TieredCache()
+        cache.put("alpha", None, [{"path": "a.md"}], total=1)
+        cache.put("beta", None, [{"path": "b.md"}], total=1)
+
+        cache.invalidate(None)
+
+        assert cache.get("alpha", None) == (-1, None)
+        assert cache.get("beta", None) == (-1, None)
+
 
 # ---------------------------------------------------------------------------
 # VaultIndex — build / update / delete
@@ -326,6 +395,39 @@ def test_cache_invalidated_on_update(vault_index: VaultIndex, tmp_vault: Path) -
     res = vault_index.search("obsidian")
     # キャッシュ無効化されているので Tier 2
     assert res["tier"] == 2
+
+
+def test_cache_granular_invalidate_preserves_unrelated_entries(
+    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+) -> None:
+    """Issue #31: 1 ファイル更新で unrelated クエリの cache が残る.
+
+    ``a.md`` のみ "alpha" を含み、``b.md`` のみ "beta" を含む。``a.md`` の編集は
+    "beta" cache に影響せず Tier 0 を保つ。逆に "alpha" cache は ``a.md`` を
+    結果に含むので drop される (Tier 2 再実行)。
+    """
+    root, idx = vault_builder(
+        {
+            "a.md": "# A\n\nalpha content here.\n",
+            "b.md": "# B\n\nbeta content here.\n",
+        }
+    )
+    # 初回実行: 両方 Tier 2
+    res_alpha = idx.search("alpha")
+    res_beta = idx.search("beta")
+    assert res_alpha["tier"] == 2
+    assert res_beta["tier"] == 2
+    assert {r["path"] for r in res_alpha["results"]} == {"a.md"}
+    assert {r["path"] for r in res_beta["results"]} == {"b.md"}
+
+    # a.md を編集 → "alpha" cache (a.md を含む) は drop、"beta" cache (b.md のみ) は残存
+    (root / "a.md").write_text("# A updated\n\nalpha content updated.\n", encoding="utf-8")
+    idx.update_single("a.md")
+
+    res_alpha_after = idx.search("alpha")
+    res_beta_after = idx.search("beta")
+    assert res_alpha_after["tier"] == 2, "a.md を含む alpha キャッシュは drop される"
+    assert res_beta_after["tier"] == 0, "b.md のみの beta キャッシュは granular で残る"
 
 
 def test_search_empty_query_returns_empty(vault_index: VaultIndex) -> None:
