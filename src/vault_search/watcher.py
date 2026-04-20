@@ -24,11 +24,17 @@ try:
         FileSystemEvent,
         FileSystemEventHandler,
     )
+    from watchdog.observers import Observer
 
     _WATCHDOG_AVAILABLE = True
 except ImportError:  # pragma: no cover - watchdog is a hard dep but keep guard for sdist installs
+    # `watchdog.events` と `watchdog.observers` のどちらが欠けても利用不可扱い (#172)。
+    # 旧実装は events のみ check し、Observer は start() 内で lazy import していたため
+    # 部分的 sdist インストールで `_WATCHDOG_AVAILABLE=True` でも start() が
+    # ImportError を投げ、main() の graceful fallback (return False) を迂回した。
     _WATCHDOG_AVAILABLE = False
     FileSystemEventHandler = object  # type: ignore[assignment,misc]
+    Observer = None  # type: ignore[assignment,misc]
 
 
 class VaultEventHandler(FileSystemEventHandler):  # type: ignore[misc]
@@ -112,8 +118,6 @@ class VaultWatcher:
         if not _WATCHDOG_AVAILABLE:
             logger.warning("watchdog not installed — file watching disabled")
             return False
-
-        from watchdog.observers import Observer
 
         handler = VaultEventHandler(self._index, self._schedule_update)
         self._observer = Observer()

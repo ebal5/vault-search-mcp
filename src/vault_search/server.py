@@ -281,13 +281,21 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
     Returns:
         dict: ReindexStats に相当する flat JSON
             (``added`` / ``updated`` / ``deleted`` / ``skipped`` / ``errors`` /
-            ``watcher_failure_count`` / ``last_watcher_error_at``)。
-            末尾 2 つは VaultWatcher が差分更新で失敗した累計 (#39) を返す。
+            ``watcher_failure_count`` / ``last_watcher_error_at`` /
+            ``watcher_active``)。
+            ``watcher_failure_count`` / ``last_watcher_error_at`` は
+            VaultWatcher が差分更新で失敗した累計 (#39) を返す。
             ``--no-watch`` で watcher 無効の場合と起動以降失敗ゼロの場合は
             それぞれ ``0`` / ``null``。
+            ``watcher_active`` (#173) は watcher 起動中かを bool で示し、
+            ``watcher_failure_count=0`` が「未起動」と「失敗ゼロ」どちらかを
+            区別できるようにする。
     """
     stats = _get_index().build_index(force=force)
-    watcher_stats = _watcher.failure_stats() if _watcher is not None else {}
+    watcher_stats: dict[str, Any] = {}
+    if _watcher is not None:
+        watcher_stats.update(_watcher.failure_stats())
+        watcher_stats["watcher_active"] = True
     return ReindexStats(**stats, **watcher_stats).model_dump(mode="json")
 
 

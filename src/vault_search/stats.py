@@ -25,7 +25,9 @@ class ReindexStats(BaseModel):
             "VaultWatcher が差分更新で失敗した累計件数 (プロセス起動以降)。"
             "0 より大きいとき、watcher が監視している Vault の一部が"
             "インデックスと drift している可能性がある。"
-            "--no-watch で watcher 無効の場合と、一度も失敗していない場合はいずれも 0"
+            "--no-watch で watcher 無効の場合と、一度も失敗していない場合はいずれも 0。"
+            "リカバリ: `vault_reindex(force=True)` を呼ぶことでインデックスを"
+            "完全再構築できる"
         ),
     )
     last_watcher_error_at: str | None = Field(
@@ -35,6 +37,16 @@ class ReindexStats(BaseModel):
             "例: '2026-04-19T12:00:00+00:00')。"
             "一度も失敗していない / watcher 無効の場合は null。"
             "watcher_failure_count が 0 でない場合の最新エラーのみ指す"
+        ),
+    )
+    watcher_active: bool = Field(
+        default=False,
+        description=(
+            "VaultWatcher が起動中であれば true。"
+            "--no-watch オプション指定時または watchdog 未インストール時は false。"
+            "true でも watcher_failure_count が 0 より大きければ drift の可能性がある。"
+            "watcher_failure_count=0 のみでは「未起動」と「失敗ゼロ」を区別できないため、"
+            "watcher 有効性の判定にはこのフィールドを参照する"
         ),
     )
 
