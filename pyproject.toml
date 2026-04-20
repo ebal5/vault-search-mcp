@@ -39,3 +39,6 @@ select = ["E", "F", "I", "W", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "slow: 遅いテスト (bulk vault 構築等)。CI で `-m 'not slow'` で skip 可能 (#169)",
+]
