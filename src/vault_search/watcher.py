@@ -107,6 +107,7 @@ class VaultWatcher:
         self._index = index
         self._debounce_sec = debounce_sec
         self._observer: Any = None
+        self._started: bool = False
         self._pending: dict[str, float] = {}
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
@@ -124,8 +125,18 @@ class VaultWatcher:
         self._observer.schedule(handler, str(self._index.vault_root), recursive=True)
         self._observer.daemon = True
         self._observer.start()
+        self._started = True
         logger.info("File watcher started: %s", self._index.vault_root)
         return True
+
+    def is_active(self) -> bool:
+        """Observer が実際に起動済みかを返す (#173 review fix).
+
+        ``server.main()`` は ``_watcher = VaultWatcher(_index); _watcher.start()``
+        と assign するため、``start()`` が False を返しても ``_watcher`` は None に
+        ならない。``watcher_active`` wire には本 method を使って実状態を反映する。
+        """
+        return self._started
 
     def stop(self) -> None:
         if self._observer:
@@ -133,6 +144,7 @@ class VaultWatcher:
             if self._observer.is_alive():
                 self._observer.join(timeout=5)
             self._observer = None
+        self._started = False
 
     def _schedule_update(self, rel_path: str) -> None:
         """デバウンス付きインデックス更新スケジューリング."""
