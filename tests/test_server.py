@@ -289,6 +289,53 @@ def test_mcp_tool_vault_reindex_includes_watcher_failures(
     assert res["last_watcher_error_at"] == "2026-04-19T12:00:00+00:00"
 
 
+def test_vault_reindex_does_not_mutate_build_index_return(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``vault_reindex`` は ``build_index()`` の戻り dict を in-place 変更しない (#174).
+
+    現状 ``build_index()`` は毎回新しい dict を返すため実害はないが、将来
+    キャッシュや共有オブジェクトを返すように変更された場合 ``stats.update()``
+    がそれを破壊する。watcher の failure stats をマージする際は dict spread で
+    非破壊的に merge すべき (Issue #174)。
+
+    verification: 呼び出し後に indexer が返したオリジナル dict のキーセットが
+    増えていないこと — つまり watcher 側のキー (watcher_failure_count /
+    last_watcher_error_at) が混入していないことを確認する。
+    """
+    idx = server_mod._get_index()
+    original_build_index = idx.build_index
+    captured_returns: list[dict[str, int]] = []
+
+    def capturing_build_index(*, force: bool = False) -> dict[str, int]:
+        stats = original_build_index(force=force)
+        captured_returns.append(stats)
+        return stats
+
+    monkeypatch.setattr(idx, "build_index", capturing_build_index)
+
+    watcher = VaultWatcher(idx)
+    with watcher._lock:
+        watcher._watcher_failure_count = 3
+        watcher._last_watcher_error_at = "2026-04-19T13:00:00+00:00"
+    monkeypatch.setattr(server_mod, "_watcher", watcher)
+
+    fn = _fn(server_mod.vault_reindex)
+    fn(False)
+
+    assert len(captured_returns) == 1, "build_index は 1 回だけ呼ばれる想定"
+    stats = captured_returns[0]
+    # build_index が返した dict に watcher 由来のキーが混入していないこと
+    assert "watcher_failure_count" not in stats, (
+        "vault_reindex が build_index() 戻り dict を in-place 変更している (#174). "
+        "watcher stats は dict spread で非破壊的にマージすべき。"
+    )
+    assert "last_watcher_error_at" not in stats, (
+        "vault_reindex が build_index() 戻り dict を in-place 変更している (#174). "
+        "watcher stats は dict spread で非破壊的にマージすべき。"
+    )
+
+
 def test_main_stops_watcher_on_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """mcp.run() が例外を起こしても _watcher.stop() が呼ばれる (#39 try/finally)."""
     import sys as _sys
