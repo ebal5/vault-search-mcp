@@ -119,9 +119,19 @@ class ExceptionInfo(TypedDict):
     機能する。JSON serializable ではないため wire payload に入れる際は
     ``resources.build_schema_payload`` が ``exception_class.__name__`` に展開する。
 
+    .. warning::
+       ``ERROR_CATALOG`` を ``json.dumps`` に直接渡すと ``exception_class`` が
+       ``type`` オブジェクトのため ``TypeError: Object of type type is not JSON
+       serializable`` になる。wire 形式が必要な場合は
+       ``resources._serialize_error_catalog()`` を経由すること。
+
     ``abstract`` が ``True`` の entry は agent-facing payload (``schema://tools``
     の ``errors`` セクション) から除外される。``VaultSearchError`` のような
     基底例外が該当し、agent が pattern-match する対象ではないことを示す (#200)。
+    ``abstract`` フラグは class 属性ではなく CATALOG metadata として管理する —
+    serialize 時の判定は ``_serialize_error_catalog()`` が CATALOG の本フラグを
+    参照するため、class 側に ``abstract = True`` を追加しても二重管理になる
+    だけで動作には影響しない。
     """
 
     exception_class: type[VaultSearchError]
@@ -130,6 +140,10 @@ class ExceptionInfo(TypedDict):
     abstract: NotRequired[bool]
 
 
+# ---------------------------------------------------------------------------
+# ERROR CATALOG
+# ---------------------------------------------------------------------------
+#
 # 例外 metadata の単一 source of truth (#199 / #200 / #201).
 #
 # key は ErrorCode Literal の値 (string literal に統一、live class attr は使わない
@@ -140,6 +154,9 @@ class ExceptionInfo(TypedDict):
 # 新規 ErrorCode 追加時は本 dict と ``ErrorCode`` Literal を必ず同時に更新する。
 # drift guard: tests/test_exceptions.py::TestErrorCatalog が public export / entry
 # shape / abstract フラグ / Literal との整合を検証する。
+#
+# 将来、例外クラスが増えて本ファイルが 300 行を超えるようなら CATALOG と class
+# 定義を別 module に分離することを検討する (現状は YAGNI で同居)。
 ERROR_CATALOG: dict[ErrorCode, ExceptionInfo] = {
     "VAULT_SEARCH_ERROR": {
         "exception_class": VaultSearchError,
@@ -174,7 +191,10 @@ ERROR_CATALOG: dict[ErrorCode, ExceptionInfo] = {
             "``did you mean: <key>?`` の修正候補 (編集距離 suggest) が付く。"
             "schema://tools の frontmatter_keys で有効キー集合を事前確認できる。"
         ),
-        "example": "Unknown frontmatter key 'statu'; did you mean: status?",
+        "example": (
+            "Unknown frontmatter key 'statu'; did you mean: status? "
+            "See schema://tools for the frontmatter_keys list"
+        ),
     },
     "UNSUPPORTED_RANGE_OPERATOR": {
         "exception_class": ValidationError,

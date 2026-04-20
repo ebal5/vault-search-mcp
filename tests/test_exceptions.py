@@ -269,20 +269,30 @@ class TestErrorCatalog:
         assert not extra, f"CATALOG has codes not in ErrorCode Literal: {extra}"
 
     def test_error_catalog_covers_all_concrete_error_codes(self) -> None:
-        """全 ErrorCode (VAULT_SEARCH_ERROR 除く) が CATALOG に含まれる."""
+        """全 ErrorCode (abstract 除く) が CATALOG に含まれる.
+
+        exclusion set は CATALOG の ``abstract=True`` entry から動的に導出する
+        ため、2 個目の abstract code が追加された場合も自動追随する (hardcode
+        しない)。
+        """
         from vault_search.exceptions import ERROR_CATALOG, ErrorCode
 
         declared = set(get_args(ErrorCode))
-        concrete_codes = declared - {"VAULT_SEARCH_ERROR"}
+        abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+        concrete_codes = declared - abstract_codes
         missing = concrete_codes - set(ERROR_CATALOG.keys())
         assert not missing, f"concrete ErrorCode values missing from CATALOG: {missing}"
 
     def test_catalog_exception_class_error_code_in_registry(self) -> None:
-        """各 entry の exception_class.error_code が ErrorCode Literal の値 (drift guard).
+        """各 entry の exception_class.error_code が ErrorCode Literal の値.
 
-        サブコード (UNKNOWN_FRONTMATTER_KEY 等) は ValidationError の kwarg 上書きで
-        emit されるため class-level error_code とは一致しない。最低限「raise 先
-        class の error_code が Literal の値である」ことだけ pin する。
+        本 test は「exception_class の class-level error_code が Literal の値」
+        だけを pin する軽量 drift guard。CATALOG key と class-level error_code
+        の一致は意図的に要求しない: サブコード (UNKNOWN_FRONTMATTER_KEY /
+        UNSUPPORTED_RANGE_OPERATOR) は ValidationError の kwarg 上書きで emit
+        されるため class-level error_code (VALIDATION_ERROR) とは一致しない。
+        CATALOG key と Literal の包含関係は
+        ``test_error_catalog_keys_subset_of_error_code_literal`` が検証する。
         """
         from vault_search.exceptions import ERROR_CATALOG
 
@@ -316,3 +326,17 @@ class TestValidationErrorLocation:
         from vault_search import exceptions
 
         assert "ValidationError" in exceptions.__all__
+
+    def test_validation_module_does_not_re_export_validation_error(self) -> None:
+        """validation.py が ValidationError を再エクスポートしない (#201 regression).
+
+        本 PR で ValidationError は exceptions.py に移動した。validation.py
+        側が後から ``__all__`` に追加し直すと import site が silent に
+        divergent になるため、validation 側で公開されないことを pin する。
+        """
+        from vault_search import validation as val_mod
+
+        assert "ValidationError" not in val_mod.__all__, (
+            "ValidationError must not be re-exported from validation.py; "
+            f"got __all__={val_mod.__all__}"
+        )

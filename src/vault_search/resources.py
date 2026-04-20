@@ -64,7 +64,11 @@ __all__ = ["build_schema_payload"]
 #
 # version format は ``<major>.<minor>`` の semver-like 文字列。bumping policy は
 # payload["version_policy"] として agent に露出する (#193)。
-_SCHEMA_VERSION: str = "2.0"
+# 2.1: errors_wire_format_note top-level key 追加 (additive, #202)、
+# errors から abstract=True entry を除外 (VAULT_SEARCH_ERROR / #200 — agent
+# 視点の destructive subset 変更だが ErrorCode Literal には残るため minor
+# 扱い: agent が version<2.1 を cache していた場合のみ key 集合 diff が出る)。
+_SCHEMA_VERSION: str = "2.1"
 
 # payload["version"] の bumping policy。agent が cache invalidation 判断に使う。
 # version 2.0 はこのポリシーを確立した版であり、同時に 1.x からの破壊的変更
@@ -94,7 +98,10 @@ _OVERVIEW: str = (
     "tools[name].description / input_schema / output_schema を参照する。\n\n"
     "全スカラー frontmatter 値は index 時に文字列へ"
     "正規化される (例: int 5 → '5'、date 2024-01-15 → '2024-01-15'、"
-    "bool true → 'true')。vault 本体を変更するのは vault_reindex のみで、他は全て read-only。"
+    "bool true → 'true')。vault 本体を変更するのは vault_reindex のみで、他は全て read-only。\n\n"
+    "エラー応答は FastMCP により 'Error executing tool <tool>: <message>' 形式で wrap されるため、"
+    "errors セクションを使う前に top-level の errors_wire_format_note を読むこと。"
+    "errors[code].example は wrap 前の raw message を示し、agent は substring matching で判定する。"
 )
 
 # Tool 名は server.mcp.list_tools() 経由で tests/test_schema_resource.py の drift guard が
@@ -174,7 +181,10 @@ _ERRORS_WIRE_FORMAT_NOTE: str = (
     "プレーンテキストに wrap するため、agent が受け取る message 文字列は常に"
     "この prefix を持つ。各 entry の example は wrap 前の raw message を示すので、"
     "agent は substring matching (e.g. 'Unknown frontmatter key' が message に含まれる) "
-    "でエラー種別を判定する。error_code 属性は現状の MCP wire には含まれない。"
+    "でエラー種別を判定する。error_code 属性は現状の MCP wire には含まれない。\n"
+    "本セクションのキーは agent 向けに送出される具体 error_code のみで、"
+    "基底例外 VaultSearchError (ErrorCode Literal には含まれるが abstract) は"
+    "本 payload に含まれない。"
 )
 
 

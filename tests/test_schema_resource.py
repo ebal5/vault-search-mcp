@@ -484,6 +484,7 @@ def test_payload_major_version_2_top_level_keys_pinned(vault_index: VaultIndex) 
         "version_policy",
         "overview",
         "recommended_flow",
+        "errors_wire_format_note",
         "errors",
         "tools",
         "frontmatter_key_info_schema",
@@ -640,20 +641,21 @@ def test_recommended_flow_tools_invocable(vault_index: VaultIndex) -> None:
 def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
     """payload["errors"] が abstract を除く全 ErrorCode をカバーし、必須フィールドを持つこと.
 
-    #200 により ``VAULT_SEARCH_ERROR`` (abstract=True) は payload から除外される。
-    残りの具体 error (NOTE_NOT_FOUND / VALIDATION_ERROR / UNKNOWN_FRONTMATTER_KEY /
-    UNSUPPORTED_RANGE_OPERATOR) は description / raised_by / example を持つ。
+    #200 により ``abstract=True`` entry は payload から除外される (現状は
+    VAULT_SEARCH_ERROR のみ)。exclusion は CATALOG の abstract フラグから動的
+    に導出するため、2 個目の abstract code が追加された場合も自動追随する。
     """
     from typing import get_args
 
-    from vault_search.exceptions import ErrorCode
+    from vault_search.exceptions import ERROR_CATALOG, ErrorCode
     from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     assert "errors" in payload, f"'errors' key missing: keys={list(payload)}"
     errors = payload["errors"]
     assert isinstance(errors, dict), f"errors must be dict, got {type(errors).__name__}"
-    expected_codes = set(get_args(ErrorCode)) - {"VAULT_SEARCH_ERROR"}
+    abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+    expected_codes = set(get_args(ErrorCode)) - abstract_codes
     for code in expected_codes:
         assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
         entry = errors[code]
@@ -668,19 +670,20 @@ def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
 def test_errors_covers_concrete_error_codes(vault_index: VaultIndex) -> None:
     """errors が ErrorCode Literal の具体値 (abstract 除く) を漏れなくカバーすること.
 
-    #200 方針: ``VAULT_SEARCH_ERROR`` は abstract フラグにより payload から外れる
-    が ErrorCode Literal には残る。新規具体 ErrorCode 追加時の ERROR_CATALOG
-    追加忘れを即検知するための drift guard。
+    #200 方針: ``abstract=True`` entry は payload から外れるが ErrorCode Literal
+    には残る。abstract exclusion は CATALOG から動的に導出し、2 個目の abstract
+    code が追加されても test が追随する。
     """
     from typing import get_args
 
-    from vault_search.exceptions import ErrorCode
+    from vault_search.exceptions import ERROR_CATALOG, ErrorCode
     from vault_search.resources import build_schema_payload
 
     payload = build_schema_payload(vault_index.list_frontmatter_keys())
     errors = payload["errors"]
 
-    concrete_codes = set(get_args(ErrorCode)) - {"VAULT_SEARCH_ERROR"}
+    abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+    concrete_codes = set(get_args(ErrorCode)) - abstract_codes
     payload_codes = set(errors.keys())
     missing = concrete_codes - payload_codes
     extra = payload_codes - concrete_codes
@@ -695,12 +698,15 @@ def test_errors_covers_concrete_error_codes(vault_index: VaultIndex) -> None:
 
 
 def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) -> None:
-    """errors[code]['raised_by'] が実クラス名と一致すること (具体 error を pin).
+    """errors[code]['raised_by'] が実クラス名と一致すること + payload が想定 key set と一致.
 
     drift guard: どの Python 例外クラスから raise されるかを class の __name__
     で live 参照。ValidationError サブコード (UNKNOWN_FRONTMATTER_KEY /
     UNSUPPORTED_RANGE_OPERATOR / VALIDATION_ERROR) はいずれも ValidationError
     から raise される。abstract な VAULT_SEARCH_ERROR は payload に含まれない。
+
+    set equality で先に key 集合を pin することで、2 個目の abstract code が
+    追加された際に expected_raised_by との乖離を即検知する (Round 1 C2 対応)。
     """
     from vault_search.exceptions import NoteNotFoundError
     from vault_search.exceptions import ValidationError as VE
@@ -715,6 +721,11 @@ def test_errors_raised_by_matches_live_exception_class(vault_index: VaultIndex) 
         "UNKNOWN_FRONTMATTER_KEY": VE.__name__,
         "UNSUPPORTED_RANGE_OPERATOR": VE.__name__,
     }
+    assert set(errors.keys()) == set(expected_raised_by.keys()), (
+        f"payload['errors'] key set drifted:\n"
+        f"  payload: {sorted(errors.keys())}\n"
+        f"  expected: {sorted(expected_raised_by.keys())}"
+    )
     for code, expected_cls_name in expected_raised_by.items():
         actual = errors[code]["raised_by"]
         assert actual == expected_cls_name, (
@@ -796,6 +807,20 @@ def test_resources_module_does_not_import_validation(vault_index: VaultIndex) ->
                 if bad:
                     offenders.append(
                         f"ImportFrom exceptions: {sorted(bad)} (use ERROR_CATALOG instead)"
+                    )
+        elif isinstance(node, ast.Import):
+            # ``import vault_search.validation [as alias]`` / ``import
+            # vault_search.exceptions [as alias]`` を経由して validation module
+            # や exception class に attribute access する形態も禁止。
+            # alias 経由の ``alias.ValidationError`` まで AST で追跡するのは
+            # 過剰なので、module-level import そのものを禁止する。
+            for alias in node.names:
+                if alias.name.startswith("vault_search.validation"):
+                    offenders.append(f"Import {alias.name} (use exceptions module)")
+                if alias.name.startswith("vault_search.exceptions"):
+                    offenders.append(
+                        f"Import {alias.name} (attribute access to exception classes "
+                        "forbidden; use `from .exceptions import ERROR_CATALOG` only)"
                     )
     assert not offenders, (
         "resources.py must not import exception classes directly (#201). "
