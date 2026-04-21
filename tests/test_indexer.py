@@ -891,6 +891,7 @@ def test_search_under_cap_skips_count_query(
     assert count_calls == 0, "under-cap では COUNT(*) を発行しない"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("query", "extra_filters"),
     [
