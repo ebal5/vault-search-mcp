@@ -40,5 +40,5 @@ select = ["E", "F", "I", "W", "UP", "B"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "slow: 遅いテスト (bulk vault 構築等)。CI で `-m 'not slow'` で skip 可能 (#169)",
+    "slow: 遅いテスト (bulk vault 構築等)。ローカルで `-m 'not slow'` で skip 可 — CI は全件実行 (#169)",
 ]

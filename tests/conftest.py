@@ -1,10 +1,15 @@
-"""共通フィクスチャ: tmp_vault / vault_index / vault_builder.
+"""共通フィクスチャ: tmp_vault / vault_index / vault_builder / bulk_vault_over_cap.
 
 Issue #26: 新規テストでは ``vault_builder`` ファクトリを使ってテスト専用の
 最小ノート集合で独立した vault を構築すること。``tmp_vault`` / ``vault_index``
 の共有サンプル (SAMPLE_NOTES) は広範なテストで再利用されているため、
 内容を変更すると連鎖的に失敗する。目的別の最小 vault を組む方が影響範囲を
 局所化できる。
+
+命名規約: ``_`` prefix の fixture (例: ``_bulk_vault_over_cap_session``) は
+session 共有の内部 fixture で、cache reset 等の副作用を持たない。テストは
+公開 wrapper (例: ``bulk_vault_over_cap``) を使い、内部 fixture を直接
+リクエストしない (#169)。
 """
 
 from __future__ import annotations
@@ -156,19 +161,30 @@ def vault_builder(tmp_path: Path) -> Callable[[dict[str, str]], tuple[Path, Vaul
 # - session scope の内部 fixture (`_bulk_vault_over_cap_session`) が cap+1 件の
 #   ノートを一度だけ書き込んで VaultIndex を build する。
 # - function scope の公開 fixture (`bulk_vault_over_cap`) が内部 fixture を受け、
-#   各テスト実行前に ``idx._cache.invalidate()`` で Tier 0/1 キャッシュを
-#   クリアする。これにより「1 回目は tier=2 miss」系の assertion が
-#   セッション跨ぎの cache 汚染で false fail しない。
+#   各テスト実行前に ``idx._invalidate_caches()`` で全 cache (Tier 0/1 +
+#   frontmatter_keys_cache + known_keys_cache) をクリアする。これにより
+#   「1 回目は tier=2 miss」系の assertion が session 跨ぎの cache 汚染で
+#   false pass/fail しない。``_invalidate_caches()`` 経由で呼ぶのは、
+#   indexer.py の invariant「書込み経路では 3 cache を同時に落とす」と
+#   一致させるため。``_cache.invalidate()`` だけを直接呼ぶと将来 cache 種別が
+#   増えた際に取りこぼす。
 # - `_MAX_RESULTS` が増えても構築回数は 1 で固定のため、pytest 実行時間は
 #   cap 値に対して線形増加しない。
 #
 # 単一 vault で複数シナリオ (over-cap / at-cap / FTS / Jaccard tier-1) を賄う
 # ため、ノート配置を以下に統一:
-# - 全 cap+1 件: tag ``bulk-tag``、body ``"alpha beta gamma delta obsidian-bulk\n"``
-# - 先頭 cap 件のみ: 追加 tag ``at-cap-edge`` (exactly-at-cap テスト用)
+# - 全 cap+1 件: tag ``BULK_TAG``、body ``"alpha beta gamma delta obsidian-bulk\n"``
+# - 先頭 cap 件のみ: 追加 tag ``AT_CAP_EDGE_TAG`` (exactly-at-cap テスト用)
 # - body は FTS5 trigram を通る ``obsidian-bulk`` と、Jaccard >= 0.8 の
 #   類似クエリを組める 5 語セットを含む
 # ---------------------------------------------------------------------------
+
+
+BULK_TAG = "bulk-tag"
+"""cap+1 件全てに付与される基本タグ (bulk_vault_over_cap fixture)."""
+
+AT_CAP_EDGE_TAG = "at-cap-edge"
+"""先頭 ``_MAX_RESULTS`` 件にのみ付与される境界タグ — total==cap シナリオ用."""
 
 
 @pytest.fixture(scope="session")
@@ -182,12 +198,21 @@ def _bulk_vault_over_cap_session(
     root.mkdir()
     (root / "bulk").mkdir()
     body = "alpha beta gamma delta obsidian-bulk\n"
+    at_cap_count = 0
     for i in range(cap + 1):
         # 先頭 cap 件に追加タグを付与することで「total == cap」シナリオを
         # 独立 vault 構築なしで賄う。
-        extra_tag = ", at-cap-edge" if i < cap else ""
-        note = f"---\ntags: [bulk-tag{extra_tag}]\n---\n{body}"
+        if i < cap:
+            tags = f"[{BULK_TAG}, {AT_CAP_EDGE_TAG}]"
+            at_cap_count += 1
+        else:
+            tags = f"[{BULK_TAG}]"
+        note = f"---\ntags: {tags}\n---\n{body}"
         (root / "bulk" / f"note_{i:04d}.md").write_text(note, encoding="utf-8")
+    # 境界件数 invariant を即座に発覚させる guard (loop 条件 off-by-one 防止)。
+    assert at_cap_count == cap, (
+        f"{AT_CAP_EDGE_TAG} の付与数 ({at_cap_count}) が cap ({cap}) と一致しない"
+    )
     idx = VaultIndex(root, db_path=base / "bulk.db")
     idx.build_index()
     return root, idx, cap
@@ -197,12 +222,11 @@ def _bulk_vault_over_cap_session(
 def bulk_vault_over_cap(
     _bulk_vault_over_cap_session: tuple[Path, VaultIndex, int],
 ) -> Iterator[tuple[Path, VaultIndex, int]]:
-    """セッション共有の bulk vault を返し、テスト前後で cache をリセットする (#169).
+    """session 共有の bulk vault を返し、yield 前後で全 cache をリセットする (#169).
 
-    session 共有でも Tier 0/1 キャッシュが汚染すると「1 回目は tier=2 miss」
-    系 assertion が false pass/fail するため、yield 前後で invalidate する。
+    リセット責務と経路の詳細は本 fixture 上部のブロックコメント (SSOT) を参照。
     """
     root, idx, cap = _bulk_vault_over_cap_session
-    idx._cache.invalidate()
+    idx._invalidate_caches()
     yield root, idx, cap
-    idx._cache.invalidate()
+    idx._invalidate_caches()

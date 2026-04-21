@@ -143,6 +143,9 @@ def test_mcp_tool_vault_search_truncated_true_path(
     抑える (#169)。
     """
     _root, idx, cap = bulk_vault_over_cap
+    # autouse な ``_inject_index`` が先に vault_index (小) をセットしている。
+    # 同一 monkeypatch scope で bulk idx に上書きし、teardown は pytest が
+    # autouse 側の値に自動復元する (bulk idx は server._index に残らない)。
     monkeypatch.setattr(server_mod, "_index", idx)
 
     fn = _fn(server_mod.vault_search)

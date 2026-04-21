@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import AT_CAP_EDGE_TAG, BULK_TAG
 from vault_search.cache import TieredCache
 from vault_search.exceptions import ValidationError
 from vault_search.indexer import VaultIndex
@@ -580,7 +581,7 @@ def test_search_total_accurate_beyond_max_results_filter_only(
 ) -> None:
     """Issue #17: filter-only パスで total が cap で truncate されない."""
     _root, idx, cap = bulk_vault_over_cap
-    res = idx.search("", tags=["bulk-tag"], limit=50, offset=0)
+    res = idx.search("", tags=[BULK_TAG], limit=50, offset=0)
     assert res["total"] == cap + 1, (
         f"total は accurate な件数 ({cap + 1}) を返すこと; got {res['total']}"
     )
@@ -617,11 +618,11 @@ def test_search_truncated_flag_false_exactly_at_cap(
     """Issue #17: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
 
     境界判定が `>=` に劣化すると false positive の truncated になる regression。
-    bulk vault の先頭 cap 件に付与された ``at-cap-edge`` タグで filter し、
+    bulk vault の先頭 cap 件に付与された ``AT_CAP_EDGE_TAG`` で filter し、
     総件数が cap ちょうどになるケースを独立 vault 構築なしで再現する (#169)。
     """
     _root, idx, cap = bulk_vault_over_cap
-    res = idx.search("", tags=["at-cap-edge"])
+    res = idx.search("", tags=[AT_CAP_EDGE_TAG])
     assert res["total"] == cap
     assert res["truncated"] is False, (
         f"total=={cap} は cap 以内なので truncated=False; got {res['truncated']}"
@@ -648,9 +649,12 @@ def test_search_cache_hit_preserves_truncated_and_total(
     正しく再構成していることを確認する (cache API の total 伝達 regression guard)。
     """
     _root, idx, cap = bulk_vault_over_cap
-    first = idx.search("", tags=["bulk-tag"], limit=5)
+    # bulk_vault_over_cap は yield 前に ``_invalidate_caches()`` 済みなので
+    # 1 回目は必ず tier=2 (cache miss) から始まる。fixture の reset 契約が
+    # 壊れると本 assert が tier=0 に劣化する。
+    first = idx.search("", tags=[BULK_TAG], limit=5)
     assert first["tier"] == 2
-    second = idx.search("", tags=["bulk-tag"], limit=5)
+    second = idx.search("", tags=[BULK_TAG], limit=5)
     assert second["tier"] == 0, "同一クエリは Tier 0 に乗る"
     assert second["total"] == cap + 1, "cache hit でも total は accurate"
     assert second["truncated"] is True, "cache hit でも truncated が伝達される"
@@ -667,7 +671,8 @@ def test_search_tier1_fuzzy_preserves_truncated(
     確認する (cache.get が entry を返す契約 regression guard)。
     """
     _root, idx, cap = bulk_vault_over_cap
-    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)
+    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)。
+    # fixture の yield 前 invalidate により必ず tier=2 から開始する。
     first = idx.search("alpha beta gamma delta obsidian-bulk", limit=5)
     assert first["tier"] == 2
     assert first["truncated"] is True
