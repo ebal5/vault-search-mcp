@@ -292,16 +292,32 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
             区別できるようにする。
     """
     stats = _get_index().build_index(force=force)
-    watcher_stats: dict[str, Any] = {}
-    if _watcher is not None:
-        watcher_stats.update(_watcher.failure_stats())
-        # _watcher is not None だけでは不足 — main() は start() の返り値に関わらず
-        # assign するため、watchdog 未インストールや inotify 上限で start() が
-        # False を返しても _watcher は残る。実際の監視状態は is_active() で判定 (#173)。
-        watcher_stats["watcher_active"] = _watcher.is_active()
+    watcher_stats = _compute_watcher_stats(_watcher)
     # dict spread の key 衝突は fail-loud 方針で TypeError 維持 (#210 / fastmcp-gotchas.md)。
     # 両辺の key は test_vault_reindex_stats_and_watcher_keys_are_disjoint で disjoint を CI lock。
     return ReindexStats(**stats, **watcher_stats).model_dump(mode="json")
+
+
+def _compute_watcher_stats(watcher: VaultWatcher | None) -> dict[str, Any]:
+    """``vault_reindex`` response にマージする watcher 由来 stats を組み立てる.
+
+    ``watcher`` が ``None`` (``--no-watch`` または未初期化) の場合は空 dict。
+    この関数を ``vault_reindex`` と regression test
+    (``test_vault_reindex_stats_and_watcher_keys_are_disjoint``) の双方から
+    呼び出すことで、call site に新 key が追加されたときに test 側の key 集合が
+    自動追従する (#210 review D-1).
+
+    ``_watcher is not None`` だけでは不足 — ``main()`` は ``start()`` の返り値に
+    関わらず assign するため、watchdog 未インストールや inotify 上限で
+    ``start()`` が False を返しても ``_watcher`` は残る。実際の監視状態は
+    ``is_active()`` で判定 (#173)。
+    """
+    if watcher is None:
+        return {}
+    stats: dict[str, Any] = {}
+    stats.update(watcher.failure_stats())
+    stats["watcher_active"] = watcher.is_active()
+    return stats
 
 
 @mcp.tool(annotations=TOOL_SPECS["vault_stats"].annotations)
