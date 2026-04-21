@@ -299,6 +299,8 @@ def vault_reindex(force: bool = False) -> dict[str, Any]:
         # assign するため、watchdog 未インストールや inotify 上限で start() が
         # False を返しても _watcher は残る。実際の監視状態は is_active() で判定 (#173)。
         watcher_stats["watcher_active"] = _watcher.is_active()
+    # dict spread の key 衝突は fail-loud 方針で TypeError 維持 (#210 / fastmcp-gotchas.md)。
+    # 両辺の key は test_vault_reindex_stats_and_watcher_keys_are_disjoint で disjoint を CI lock。
     return ReindexStats(**stats, **watcher_stats).model_dump(mode="json")
 
 
