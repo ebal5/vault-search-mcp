@@ -767,19 +767,37 @@ def test_search_total_accurate_beyond_max_results_fts_path(
 @pytest.mark.slow
 def test_search_truncated_flag_false_exactly_at_cap(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #17: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
+    """Issue #17 + #166: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
 
-    境界判定が `>=` に劣化すると false positive の truncated になる regression。
+    境界判定が `>=` に劣化すると false positive の truncated になる regression (Issue #17)。
     bulk vault の先頭 cap 件に付与された ``AT_CAP_EDGE_TAG`` で filter し、
     総件数が cap ちょうどになるケースを独立 vault 構築なしで再現する (#169)。
+    加えて #166 の COUNT(*) skip 最適化も cap 境界で動作すること (`_count_matches`
+    を発行しない) を spy で確認する (C3: 同一 fixture を使う 2 契約を 1 テストに集約)。
     """
     _root, idx, cap = bulk_vault_over_cap
+    # Tier 0 / Tier 1 キャッシュが前テストの遺留値を返さないようリセット
+    # (`_count_matches` 呼出 0 の assertion は cache miss 経路 = Tier 2 で意味を持つ)。
+    idx._invalidate_caches()
+
+    count_calls = 0
+    original = idx._count_matches
+
+    def spy(*args: object, **kwargs: object) -> int:
+        nonlocal count_calls
+        count_calls += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(idx, "_count_matches", spy)
+
     res = idx.search("", tags=[AT_CAP_EDGE_TAG])
     assert res["total"] == cap
     assert res["truncated"] is False, (
         f"total=={cap} は cap 以内なので truncated=False; got {res['truncated']}"
     )
+    assert count_calls == 0, f"exactly-at-cap は COUNT(*) を skip する (#166); got {count_calls}"
 
 
 def test_search_truncated_flag_false_below_cap(
@@ -873,62 +891,62 @@ def test_search_under_cap_skips_count_query(
     assert count_calls == 0, "under-cap では COUNT(*) を発行しない"
 
 
+@pytest.mark.parametrize(
+    ("query", "extra_filters"),
+    [
+        pytest.param("", {"tags": ["bulk-tag"]}, id="filter-only"),
+        # "obsidian-bulk" は fixture 本文の FTS5 trigram marker (13 文字)。
+        # FTS5 JOIN 経路を通すことで filter-only と別 SQL 構造を別途 cover する。
+        pytest.param("obsidian-bulk", {}, id="fts"),
+    ],
+)
 def test_search_over_cap_issues_count_query(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
     monkeypatch: pytest.MonkeyPatch,
+    query: str,
+    extra_filters: dict[str, object],
 ) -> None:
     """Issue #166: 結果が cap を超えたとき ``_count_matches`` で accurate total を取得する.
 
     cap+1 件ある vault で ``_count_matches`` がちょうど 1 回呼ばれ、
     truncated=True と accurate total が維持されることを確認する。
+    filter-only / FTS5 両パス (``_build_match_clause`` の ``FROM notes n`` vs
+    ``FROM notes_fts f JOIN notes n``) を parametrize で cover する (A2/C2)。
+
+    また ``_fts5_search`` に渡る ``limit`` が ``_MAX_RESULTS + 1`` である
+    こと (= over-cap sentinel fetch) を別 spy で pin する。これを外すと
+    旧 ``limit=_MAX_RESULTS`` の挙動でも本テストが通ってしまい vacuous に
+    なる (C1): under-cap テストだけでなく over-cap 側でも LIMIT 変更自体を
+    regression guard する狙い。
     """
     _root, idx, cap = bulk_vault_over_cap
 
     count_calls = 0
-    original = idx._count_matches
+    original_count = idx._count_matches
 
-    def spy(*args: object, **kwargs: object) -> int:
+    def count_spy(*args: object, **kwargs: object) -> int:
         nonlocal count_calls
         count_calls += 1
-        return original(*args, **kwargs)  # type: ignore[arg-type]
+        return original_count(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(idx, "_count_matches", spy)
+    fetch_limits: list[int] = []
+    original_fts = idx._fts5_search
 
-    res = idx.search("", tags=["bulk-tag"], limit=10)
+    def fts_spy(*args: object, **kwargs: object) -> list[dict[str, object]]:
+        fetch_limits.append(int(kwargs.get("limit", -1)))
+        return original_fts(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(idx, "_count_matches", count_spy)
+    monkeypatch.setattr(idx, "_fts5_search", fts_spy)
+
+    res = idx.search(query, limit=10, **extra_filters)  # type: ignore[arg-type]
     assert res["total"] == cap + 1
     assert res["truncated"] is True
     assert len(res["results"]) == 10
     assert count_calls == 1, "over-cap でのみ COUNT(*) を発行する"
-
-
-def test_search_exactly_at_cap_skips_count_query(
-    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Issue #166: total == cap ちょうどのケースでも COUNT(*) を skip する.
-
-    境界判定が ``>= cap`` に劣化すると cap ちょうどで COUNT(*) が走る
-    regression が起きる。LIMIT を cap+1 にして「cap+1 件取れたときだけ
-    COUNT」の契約が守られることを pin する。
-    """
-    cap = VaultIndex._MAX_RESULTS
-    notes = {f"edge/note_{i:04d}.md": "---\ntags: [edge]\n---\nbody\n" for i in range(cap)}
-    _root, idx = vault_builder(notes)
-
-    count_calls = 0
-    original = idx._count_matches
-
-    def spy(*args: object, **kwargs: object) -> int:
-        nonlocal count_calls
-        count_calls += 1
-        return original(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(idx, "_count_matches", spy)
-
-    res = idx.search("", tags=["edge"])
-    assert res["total"] == cap
-    assert res["truncated"] is False
-    assert count_calls == 0, "exactly-at-cap でも COUNT(*) を発行しない"
+    assert fetch_limits == [cap + 1], (
+        f"over-cap detect には LIMIT=_MAX_RESULTS+1 必須; got {fetch_limits}"
+    )
 
 
 def test_folder_prefix_does_not_match_sibling(vault_index: VaultIndex, tmp_vault: Path) -> None:

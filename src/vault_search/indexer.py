@@ -185,9 +185,13 @@ class VaultIndex:
     """SQLite + FTS5 によるインデックスと検索エンジン."""
 
     # FTS5 / filter-only 結果をキャッシュに保持する上限 (Issue #17)。
-    # ``total`` は別途 COUNT(*) で取得するため ``_MAX_RESULTS`` を超えても
-    # accurate な件数がクライアントに届く。``truncated`` フラグで
-    # 「cache 側で切り詰められたか」を明示する。
+    # ``total`` は ``search()`` 内で under-cap なら ``len(results)``、
+    # over-cap なら COUNT(*) クエリ由来で確定する (Issue #166)。
+    # いずれも近似ではなく、``_MAX_RESULTS`` を超えた場合でも accurate な
+    # 件数がクライアントに届く。``truncated`` フラグで「cache 側で切り詰め
+    # られたか」を明示する。
+    # `validation.LIMIT_MAX` と同値。乖離すると over-cap の total が
+    # 入力 cap を超えうるため常に同期すること。
     _MAX_RESULTS = 500
 
     def __init__(self, vault_root: str | Path, db_path: str | Path | None = None):
@@ -499,6 +503,12 @@ class VaultIndex:
         ``query`` が空でも ``tags`` / ``folder`` / ``metadata_filter`` の
         いずれかが指定されていれば、DB 全体を対象に構造化フィルタだけで
         絞り込む。全引数が空の場合は空結果を返す。
+
+        ``total`` は tier 0/2 いずれでも近似ではなく常に accurate な件数を
+        返す。Tier 2 の cache miss では結果件数が内部 cap (``_MAX_RESULTS``)
+        以内なら ``len(results)`` を、cap を超えた場合は COUNT(*) クエリから
+        確定する (#166)。Tier 1 fuzzy hit のみ別クエリの ``total`` を再利用
+        するため近似値 (``schema://tools`` 参照)。
         """
         # folder を canonical 形式に正規化する。先頭 '/' や '\\' 区切りの
         # 入力を吸収し、スラッシュのみの場合は None (フィルタなし) にする。
@@ -810,6 +820,11 @@ class VaultIndex:
 
         ``_MAX_RESULTS`` での truncation を避け、ページング終端をエージェントに
         正しく伝えるために別クエリで発行する。
+
+        ``search()`` からは **over-cap 時のみ** 呼ばれる (#166): under-cap では
+        ``len(results)`` が accurate な total と一致するため COUNT(*) は不要。
+        直接呼び出すテスト / 他 caller は条件付きでない精確な件数が欲しい
+        場合に利用する。
 
         ``conn`` を渡せば caller と同一接続 (= 同一 WAL snapshot) で実行される。
         ``_fts5_search`` と pair で呼ぶときは必ず同じ接続を使うこと。

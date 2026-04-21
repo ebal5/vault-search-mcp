@@ -112,8 +112,9 @@ class SearchResponse(BaseModel):
     total: int = Field(
         description=(
             "フィルタ後の総件数 (limit/offset 適用前)。"
-            "tier=0 (完全一致) / tier=2 (FTS5) では内部結果上限での truncate なしに正確な件数。"
-            "tier=1 (fuzzy cache hit) のみ類似クエリの件数を近似値として返す点に注意"
+            "tier=0 (完全一致) / tier=2 (FTS5) では truncated=false/true を問わず"
+            "accurate な件数。truncated=true (over-cap) のときは別 COUNT(*) クエリで取得される。"
+            "tier=1 (fuzzy cache hit) のみ類似クエリの件数を再利用する近似値である点に注意"
         ),
     )
     truncated: bool = Field(
