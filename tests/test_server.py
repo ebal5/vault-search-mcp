@@ -347,14 +347,26 @@ def test_vault_reindex_stats_and_watcher_keys_are_disjoint(vault_index: VaultInd
     の dict spread key 衝突 (fail-loud 方針)」)。
 
     当該 TypeError を runtime で発火させないため、ここでは ``build_index()``
-    の返す key set と watcher 側 (``failure_stats()`` + ``watcher_active``) の
-    key set が disjoint であることを CI で lock する。将来どちらかの key を
-    追加するときに相手側と衝突すれば、このテストが事前に落ちて設計者を
-    強制的に stop させる。
+    の返す key set と watcher 側 dict の key set が disjoint であることを CI
+    で lock する。将来どちらかの key を追加するときに相手側と衝突すれば、
+    このテストが事前に落ちて設計者を強制的に stop させる。
+
+    - watcher 側 key 集合は ``server._compute_watcher_stats`` 経由で取得する
+      ことで、``vault_reindex`` の実装が新 inline key を追加したときに test
+      側も自動追従する (#210 review D-1 対応)
+    - indexer 側 key 集合は ``build_index()`` の契約どおり完全一致で固定する
+      (#210 review A-1 対応)。将来 build_index が key を条件付きで返すように
+      なっても、この等式で早期検知する
     """
     stats = vault_index.build_index()
+    assert set(stats.keys()) == {"added", "updated", "deleted", "skipped", "errors"}, (
+        "build_index() の戻り key 集合が想定と異なる (#210 A-1). "
+        "stats の key を増減させた場合、ReindexStats の schema も更新が必要。"
+        f"actual={set(stats.keys())}"
+    )
+
     watcher = VaultWatcher(vault_index)
-    watcher_keys = set(watcher.failure_stats().keys()) | {"watcher_active"}
+    watcher_keys = set(server_mod._compute_watcher_stats(watcher).keys())
     stats_keys = set(stats.keys())
     assert stats_keys.isdisjoint(watcher_keys), (
         "build_index() と watcher_stats で key が重複している (#210). "
