@@ -644,6 +644,8 @@ def test_build_index_differential_invalidates_frontmatter_keys_cache(
     # tiered cache は a.md を結果に含む entry を保全 — 旧コードでは Tier 2 になる
     res_alpha_after = idx.search("alpha")
     assert res_alpha_after["tier"] == 0, "a.md のみの alpha cache は granular で残る"
+    # 保全された cache 内容が a.md を指していることを確認 (C6 パターンに一致)
+    assert {r["path"] for r in res_alpha_after["results"]} == {"a.md"}
 
 
 def test_search_empty_query_returns_empty(vault_index: VaultIndex) -> None:
