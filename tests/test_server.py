@@ -336,6 +336,34 @@ def test_vault_reindex_does_not_mutate_build_index_return(
     )
 
 
+def test_vault_reindex_stats_and_watcher_keys_are_disjoint(vault_index: VaultIndex) -> None:
+    """``ReindexStats(**stats, **watcher_stats)`` の key 衝突回避を構造的に保証する (#210).
+
+    server.py の ``vault_reindex`` は ``build_index()`` の戻り dict と watcher
+    由来 dict を ``**`` 展開で ``ReindexStats`` に渡す。Python の関数呼び出しは
+    同名 kwarg が重複すると ``TypeError: got multiple values for keyword argument``
+    で即死する (fail-loud) — これは silent override ではなく fail-loud を
+    選んだ設計判断 (詳細: ``.claude/rules/fastmcp-gotchas.md`` の「vault_reindex
+    の dict spread key 衝突 (fail-loud 方針)」)。
+
+    当該 TypeError を runtime で発火させないため、ここでは ``build_index()``
+    の返す key set と watcher 側 (``failure_stats()`` + ``watcher_active``) の
+    key set が disjoint であることを CI で lock する。将来どちらかの key を
+    追加するときに相手側と衝突すれば、このテストが事前に落ちて設計者を
+    強制的に stop させる。
+    """
+    stats = vault_index.build_index()
+    watcher = VaultWatcher(vault_index)
+    watcher_keys = set(watcher.failure_stats().keys()) | {"watcher_active"}
+    stats_keys = set(stats.keys())
+    assert stats_keys.isdisjoint(watcher_keys), (
+        "build_index() と watcher_stats で key が重複している (#210). "
+        "ReindexStats(**stats, **watcher_stats) が TypeError で落ちるため、"
+        "どちらか一方を rename するか ReindexStats の schema を見直すこと。"
+        f"overlap={stats_keys & watcher_keys}"
+    )
+
+
 def test_main_stops_watcher_on_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """mcp.run() が例外を起こしても _watcher.stop() が呼ばれる (#39 try/finally)."""
     import sys as _sys
