@@ -78,6 +78,37 @@
 - 撤去候補: MCP 2.0 / FastMCP 上流で `ToolError` が structured payload を
   サポートした時点で本 Gotcha は解消
 
+## vault_reindex の dict spread key 衝突 (fail-loud 方針)
+
+- **経緯**: PR #209 (#174 修正) で `stats.update(watcher_stats)` から
+  `ReindexStats(**stats, **watcher_stats)` に変更。同名 kwarg が重複した
+  場合の挙動が `silent override` (watcher 勝ち) から
+  `TypeError: got multiple values for keyword argument` に変わった
+- **採用方針 (#210)**: `TypeError` 維持 (fail-loud)。silent override は
+  復元しない
+- **根拠**:
+  - key 衝突は indexer が watcher 所管の key を誤って返しているバグで、
+    user-visible error ではなく developer error として扱う方が適切
+  - silent override は「watcher 側が勝つ」という挙動を agent / user に
+    暗黙に押しつける。将来 indexer が新 key を返すようになったとき、
+    watcher 値が勝ち続ける現在の挙動は silent な regression 源になりうる
+  - 本プロジェクトの一般方針 (frontmatter-normalization.md の
+    `_normalize_scalar` の「silent coercion を許さない」等) も fail-loud 寄り
+- **MCP 経路での副作用**: `TypeError` は FastMCP の `ToolError` wrap により
+  平文 `Tool execution failed` として agent に届く (上の `Tool error —
+  構造化属性の wire 消失` 参照)。agent 側での復旧は不可能だが、これは
+  CI / dev で検出すべき programmer error であり、production wire で
+  graceful degrade する必要はない
+- **regression guard**:
+  `tests/test_server.py::test_vault_reindex_stats_and_watcher_keys_are_disjoint`
+  が `build_index()` の key と watcher `failure_stats()` + `watcher_active`
+  の key が disjoint であることを CI で検証。将来 `ReindexStats` の key を
+  追加するとき、どちらの dict が owns するかを設計者に強制的に選ばせる
+- **再評価のトリガ**: `watcher_active` 的な派生 key を両側から返したい
+  ユースケース (例: indexer が watcher の健全性を踏まえた complex stat
+  を返す) が出てきたとき。その時は `ReindexStats(**{**stats, **watcher_stats})`
+  で明示的に merge 方向を宣言する案を再考する
+
 ## Tool annotations
 
 - **付与経路**: `mcp_contract.py` の `_TOOL_SPECS[name].annotations` に
