@@ -89,7 +89,10 @@ from .schema_meta import FrontmatterKeyInfo
 # errors から abstract=True entry を除外 (VAULT_SEARCH_ERROR / #200 — agent
 # 視点の destructive subset 変更だが ErrorCode Literal には残るため minor
 # 扱い: agent が version<2.1 を cache していた場合のみ key 集合 diff が出る)。
-_SCHEMA_VERSION: str = "2.1"
+# 2.2: errors[code] に wire_prefix field 追加 (additive, #214) — entry 単独で
+# FastMCP wrap 形式を理解できるよう top-level errors_wire_format_note への
+# backreference を per-entry に置く。
+_SCHEMA_VERSION: str = "2.2"
 
 # payload["version"] の bumping policy。agent が cache invalidation 判断に使う。
 # version 2.0 はこのポリシーを確立した版であり、同時に 1.x からの破壊的変更
@@ -128,6 +131,8 @@ _OVERVIEW: str = (
     "エラー応答は FastMCP により 'Error executing tool <tool>: <message>' 形式で wrap されるため、"
     "errors セクションを使う前に top-level の errors_wire_format_note を読むこと。"
     "errors[code].example は wrap 前の raw message を示し、agent は substring matching で判定する。"
+    "exact wire message が必要な場合は "
+    "errors[code].wire_prefix.replace('<tool>', tool_name) + errors[code].example で構築できる。"
 )
 
 # Tool 名は server.mcp.list_tools() 経由で tests/test_schema_resource.py の drift guard が

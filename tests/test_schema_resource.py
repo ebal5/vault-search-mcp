@@ -661,7 +661,7 @@ def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
         assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
         entry = errors[code]
         assert isinstance(entry, dict), f"errors['{code}'] must be dict: {entry!r}"
-        for field in ("description", "raised_by", "example"):
+        for field in ("description", "raised_by", "example", "wire_prefix"):
             assert field in entry, f"errors['{code}'] missing '{field}': {entry!r}"
             assert isinstance(entry[field], str) and entry[field].strip(), (
                 f"errors['{code}']['{field}'] must be non-empty str: {entry[field]!r}"
@@ -778,6 +778,89 @@ def test_payload_has_errors_wire_format_note(vault_index: VaultIndex) -> None:
     assert isinstance(note, str) and note.strip(), f"note must be non-empty str: {note!r}"
     assert "Error executing tool" in note, (
         "wire-format note must document the FastMCP wrap prefix explicitly"
+    )
+
+
+def test_payload_errors_entries_have_wire_prefix(vault_index: VaultIndex) -> None:
+    """各 error entry に共通の ``wire_prefix`` が付与される (#214).
+
+    entry に直接 dict access した agent が top-level ``errors_wire_format_note``
+    を skim しなくても FastMCP の wrap 形式を理解できるようにする。全 entry
+    共通の定数文字列で、``<tool>`` placeholder を含むことで template 形式を
+    明示する (agent が ``wire_prefix.replace('<tool>', name) + example`` を
+    構築できる)。
+    """
+    from typing import get_args
+
+    from vault_search.exceptions import ERROR_CATALOG, ErrorCode
+    from vault_search.resources import build_schema_payload
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    errors = payload["errors"]
+
+    abstract_codes = {c for c, info in ERROR_CATALOG.items() if info.get("abstract", False)}
+    concrete_codes = set(get_args(ErrorCode)) - abstract_codes
+
+    prefixes: set[str] = set()
+    for code in concrete_codes:
+        entry = errors[code]
+        assert "wire_prefix" in entry, f"errors['{code}'] missing 'wire_prefix' (#214): {entry!r}"
+        prefix = entry["wire_prefix"]
+        assert isinstance(prefix, str) and prefix.strip(), (
+            f"errors['{code}']['wire_prefix'] must be non-empty str: {prefix!r}"
+        )
+        assert "Error executing tool" in prefix, (
+            f"wire_prefix must document FastMCP wrap shape: {prefix!r}"
+        )
+        assert "<tool>" in prefix, (
+            f"wire_prefix must expose '<tool>' placeholder so agent can "
+            f"construct wrapped message per tool name: {prefix!r}"
+        )
+        prefixes.add(prefix)
+
+    assert len(prefixes) == 1, (
+        f"wire_prefix must be a single shared constant across all entries, "
+        f"got {len(prefixes)} distinct values: {prefixes}"
+    )
+
+
+def test_wire_prefix_matches_actual_fastmcp_wrap(
+    vault_index: VaultIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``wire_prefix`` template が実 FastMCP の wrap 形式と一致する (#214 drift guard).
+
+    ``_ERROR_WIRE_PREFIX_TEMPLATE`` は hardcode 文字列なので、FastMCP upgrade で
+    ``ToolError(f"Error executing tool {name}: {e}")`` の wrap 形式が変わった
+    場合に silent に嘘をつく (agent は実 wire と異なる prefix を期待する) リスク
+    がある。実際にエラーを誘発して FastMCP の出力を捕捉し、``wire_prefix`` を
+    ``<tool>`` 展開した文字列が prefix として一致することを assert する。
+
+    本テストが失敗したら ``src/vault_search/resources.py`` の
+    ``_ERROR_WIRE_PREFIX_TEMPLATE`` を実 wrap 形式に追随させる。
+    """
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from vault_search import server as server_mod
+    from vault_search.resources import build_schema_payload
+
+    monkeypatch.setattr(server_mod, "_index", vault_index)
+
+    payload = build_schema_payload(vault_index.list_frontmatter_keys())
+    # 全 entry 共通の定数なので任意の concrete entry から 1 件取り出す
+    wire_prefix_template = next(iter(payload["errors"].values()))["wire_prefix"]
+
+    tool_name = "vault_get_note"
+    with pytest.raises(ToolError) as exc_info:
+        asyncio.run(server_mod.mcp.call_tool(tool_name, {"path": "__does_not_exist__.md"}))
+
+    expected_prefix = wire_prefix_template.replace("<tool>", tool_name)
+    actual = str(exc_info.value)
+    assert actual.startswith(expected_prefix), (
+        "wire_prefix template drifted from FastMCP actual wrap shape.\n"
+        f"  expected prefix: {expected_prefix!r}\n"
+        f"  actual message:  {actual!r}\n"
+        "Update _ERROR_WIRE_PREFIX_TEMPLATE in src/vault_search/resources.py "
+        "to match the current FastMCP wrap format."
     )
 
 
