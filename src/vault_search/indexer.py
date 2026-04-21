@@ -331,7 +331,8 @@ class VaultIndex:
                 stats["deleted"] = len(deleted_paths)
 
             # 追加・更新 — 差分 rebuild では UPSERT した path を収集し
-            # granular invalidate に渡す (#219)。
+            # granular invalidate に渡す (#219)。force=True は全 clear なので
+            # touched を populate しない (dead work 回避)。
             touched: set[str] = set(deleted_paths)
             for rel_path, mtime in current_files.items():
                 if not force and rel_path in existing:
@@ -346,7 +347,8 @@ class VaultIndex:
                     continue
 
                 self._upsert_note(conn, note, mtime)
-                touched.add(rel_path)
+                if not force:
+                    touched.add(rel_path)
 
                 if rel_path in existing:
                     stats["updated"] += 1
