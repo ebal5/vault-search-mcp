@@ -531,6 +531,10 @@ def test_build_index_differential_granular_invalidate_preserves_unrelated(
     res_beta_after = idx.search("beta")
     assert res_alpha_after["tier"] == 2, "a.md を含む alpha cache は drop される"
     assert res_beta_after["tier"] == 0, "b.md のみの beta cache は granular で残る"
+    # Tier 2 再実行で a.md がまだヒットすることを確認 (FTS 再索引の健全性)
+    assert {r["path"] for r in res_alpha_after["results"]} == {"a.md"}
+    # 保全された beta cache の内容が正しいことを確認
+    assert {r["path"] for r in res_beta_after["results"]} == {"b.md"}
 
 
 def test_build_index_differential_granular_invalidate_on_deletion(
@@ -559,6 +563,8 @@ def test_build_index_differential_granular_invalidate_on_deletion(
     assert res_alpha["tier"] == 2
     assert res_beta["tier"] == 0
     assert res_alpha["results"] == []
+    # 保全された beta cache の内容が正しいことを確認
+    assert {r["path"] for r in res_beta["results"]} == {"b.md"}
 
 
 def test_build_index_force_true_clears_all_caches(
@@ -578,47 +584,65 @@ def test_build_index_force_true_clears_all_caches(
     idx.search("alpha")
     idx.search("beta")
 
+    # aggregate cache も warm up
+    idx.list_frontmatter_keys()
+    idx.known_keys_set()
+
     idx.build_index(force=True)
 
-    # どちらも drop されて Tier 2 再実行
+    # どちらの tiered cache も drop されて Tier 2 再実行
     res_alpha = idx.search("alpha")
     res_beta = idx.search("beta")
     assert res_alpha["tier"] == 2
     assert res_beta["tier"] == 2
+    # force=True は aggregate cache も全 clear
+    assert idx._frontmatter_keys_cache is None
+    assert idx._known_keys_cache is None
 
 
 def test_build_index_differential_invalidates_frontmatter_keys_cache(
     vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
 ) -> None:
-    """Issue #219: 差分 rebuild でも frontmatter_keys / known_keys cache は full clear.
+    """Issue #219: 差分 rebuild は tiered cache を granular に保全しつつ aggregate は必ず全 clear.
 
-    granular invalidate は tiered cache のみに適用し、aggregate 依存の
-    frontmatter_keys / known_keys cache は従来通り全 clear する (1 note の
-    frontmatter 変化が aggregate 全体に波及しうるため)。
+    b.md のみ編集した差分 rebuild 後:
+    - ``frontmatter_keys_cache`` / ``known_keys_cache`` は全 clear (aggregate 依存)
+    - a.md のみを結果に含む tiered cache entry は保全 (granular invalidate の効果)
+
+    後者のアサーションは「旧コードでは Tier 2 (全 clear) になる」ため、このテストは
+    旧コードでは FAIL する — テスト自体が PR #219 固有の新動作を確かめている。
     """
     root, idx = vault_builder(
         {
-            "a.md": "---\nstatus: active\n---\n\nbody\n",
-            "b.md": "---\nstatus: draft\n---\n\nbody\n",
+            "a.md": "---\nstatus: active\n---\n\nalpha specific body\n",
+            "b.md": "---\nstatus: draft\n---\n\nbeta specific body\n",
         }
     )
-    # cache を warm up
+    # tiered cache と aggregate cache を warm up
+    res_alpha = idx.search("alpha")
+    assert res_alpha["tier"] == 2
+    assert {r["path"] for r in res_alpha["results"]} == {"a.md"}
     idx.list_frontmatter_keys()
     idx.known_keys_set()
     assert idx._frontmatter_keys_cache is not None
     assert idx._known_keys_cache is not None
 
-    # 差分 rebuild — b.md を編集 (status 値を変える)
+    # 差分 rebuild — b.md のみ編集 (a.md は mtime 変化なし → skip)
     b_path = root / "b.md"
-    b_path.write_text("---\nstatus: archived\n---\n\nbody\n", encoding="utf-8")
+    b_path.write_text("---\nstatus: archived\n---\n\nbeta specific body\n", encoding="utf-8")
     future = time.time() + 10.0
     os.utime(b_path, (future, future))
 
-    idx.build_index(force=False)
+    stats = idx.build_index(force=False)
+    assert stats["updated"] == 1
+    assert stats["skipped"] == 1  # a.md は skip
 
-    # aggregate cache は常に clear
+    # aggregate cache は常に clear (granular invalidate の対象外)
     assert idx._frontmatter_keys_cache is None
     assert idx._known_keys_cache is None
+    # tiered cache は a.md を結果に含む entry を保全 — 旧コードでは Tier 2 になる
+    res_alpha_after = idx.search("alpha")
+    assert res_alpha_after["tier"] == 0, "a.md のみの alpha cache は granular で残る"
 
 
 def test_search_empty_query_returns_empty(vault_index: VaultIndex) -> None:
