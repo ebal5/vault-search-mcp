@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import AT_CAP_EDGE_TAG, BULK_TAG
 from vault_search.cache import TieredCache
 from vault_search.exceptions import ValidationError
 from vault_search.indexer import VaultIndex
@@ -568,33 +569,19 @@ def test_list_folders_root_uses_empty_string(vault_index: VaultIndex) -> None:
 # 巨大 vault で agent がページング終端を誤認しないよう accurate な total と
 # truncated フラグを返すことを検証する。
 # cap 値変更への耐性のため VaultIndex._MAX_RESULTS を参照する (ハードコード回避)。
+#
+# bulk_vault_over_cap fixture は conftest.py で session-scoped (#169) に移管
+# 済みで、pytest 1 セッションあたり cap+1 件の vault 構築は 1 回のみ。
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def bulk_vault_over_cap(
-    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
-) -> tuple[Path, VaultIndex, int]:
-    """cap+1 件の tag + FTS 可能トークンを持つ vault を 1 度だけ構築する.
-
-    本文に 5 語の共通トークンを入れてあるのは、tier=1 fuzzy cache hit
-    (Jaccard >= 0.8) を成立させる類似クエリを組めるようにするため。
-    """
-    cap = VaultIndex._MAX_RESULTS
-    # "obsidian-bulk" は FTS5 trigram (3 文字以上) を通るマーカー。
-    # alpha/beta/gamma/delta は tier=1 テストで Jaccard 閾値を跨ぐために追加。
-    body = "alpha beta gamma delta obsidian-bulk\n"
-    notes = {f"bulk/note_{i:04d}.md": f"---\ntags: [bulk-tag]\n---\n{body}" for i in range(cap + 1)}
-    root, idx = vault_builder(notes)
-    return root, idx, cap
-
-
+@pytest.mark.slow
 def test_search_total_accurate_beyond_max_results_filter_only(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
 ) -> None:
     """Issue #17: filter-only パスで total が cap で truncate されない."""
     _root, idx, cap = bulk_vault_over_cap
-    res = idx.search("", tags=["bulk-tag"], limit=50, offset=0)
+    res = idx.search("", tags=[BULK_TAG], limit=50, offset=0)
     assert res["total"] == cap + 1, (
         f"total は accurate な件数 ({cap + 1}) を返すこと; got {res['total']}"
     )
@@ -602,6 +589,7 @@ def test_search_total_accurate_beyond_max_results_filter_only(
     assert len(res["results"]) == 50
 
 
+@pytest.mark.slow
 def test_search_total_accurate_beyond_max_results_fts_path(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
 ) -> None:
@@ -623,17 +611,18 @@ def test_search_total_accurate_beyond_max_results_fts_path(
     assert len(res["results"]) == 10
 
 
+@pytest.mark.slow
 def test_search_truncated_flag_false_exactly_at_cap(
-    vault_builder: Callable[[dict[str, str]], tuple[Path, VaultIndex]],
+    bulk_vault_over_cap: tuple[Path, VaultIndex, int],
 ) -> None:
     """Issue #17: total == _MAX_RESULTS (ちょうど cap) のとき truncated=False.
 
     境界判定が `>=` に劣化すると false positive の truncated になる regression。
+    bulk vault の先頭 cap 件に付与された ``AT_CAP_EDGE_TAG`` で filter し、
+    総件数が cap ちょうどになるケースを独立 vault 構築なしで再現する (#169)。
     """
-    cap = VaultIndex._MAX_RESULTS
-    notes = {f"edge/note_{i:04d}.md": "---\ntags: [edge]\n---\nbody\n" for i in range(cap)}
-    _root, idx = vault_builder(notes)
-    res = idx.search("", tags=["edge"])
+    _root, idx, cap = bulk_vault_over_cap
+    res = idx.search("", tags=[AT_CAP_EDGE_TAG])
     assert res["total"] == cap
     assert res["truncated"] is False, (
         f"total=={cap} は cap 以内なので truncated=False; got {res['truncated']}"
@@ -650,6 +639,7 @@ def test_search_truncated_flag_false_below_cap(
     assert res["truncated"] is False
 
 
+@pytest.mark.slow
 def test_search_cache_hit_preserves_truncated_and_total(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
 ) -> None:
@@ -659,14 +649,18 @@ def test_search_cache_hit_preserves_truncated_and_total(
     正しく再構成していることを確認する (cache API の total 伝達 regression guard)。
     """
     _root, idx, cap = bulk_vault_over_cap
-    first = idx.search("", tags=["bulk-tag"], limit=5)
+    # bulk_vault_over_cap は yield 前に ``_invalidate_caches()`` 済みなので
+    # 1 回目は必ず tier=2 (cache miss) から始まる。fixture の reset 契約が
+    # 壊れると本 assert が tier=0 に劣化する。
+    first = idx.search("", tags=[BULK_TAG], limit=5)
     assert first["tier"] == 2
-    second = idx.search("", tags=["bulk-tag"], limit=5)
+    second = idx.search("", tags=[BULK_TAG], limit=5)
     assert second["tier"] == 0, "同一クエリは Tier 0 に乗る"
     assert second["total"] == cap + 1, "cache hit でも total は accurate"
     assert second["truncated"] is True, "cache hit でも truncated が伝達される"
 
 
+@pytest.mark.slow
 def test_search_tier1_fuzzy_preserves_truncated(
     bulk_vault_over_cap: tuple[Path, VaultIndex, int],
 ) -> None:
@@ -677,7 +671,8 @@ def test_search_tier1_fuzzy_preserves_truncated(
     確認する (cache.get が entry を返す契約 regression guard)。
     """
     _root, idx, cap = bulk_vault_over_cap
-    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)
+    # prime cache: 5 tokens (filter 無し → tier 1 候補になる)。
+    # fixture の yield 前 invalidate により必ず tier=2 から開始する。
     first = idx.search("alpha beta gamma delta obsidian-bulk", limit=5)
     assert first["tier"] == 2
     assert first["truncated"] is True
