@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.conftest import BULK_TAG
 from vault_search import server as server_mod
 from vault_search.exceptions import NoteNotFoundError
 from vault_search.indexer import VaultIndex
@@ -149,7 +150,7 @@ def test_mcp_tool_vault_search_truncated_true_path(
     monkeypatch.setattr(server_mod, "_index", idx)
 
     fn = _fn(server_mod.vault_search)
-    res = fn("", tags=["bulk-tag"], limit=10)
+    res = fn("", tags=[BULK_TAG], limit=10)
     assert res["total"] == cap + 1, f"accurate total 期待: {cap + 1}, got {res['total']}"
     assert res["truncated"] is True
     assert len(res["results"]) == 10
