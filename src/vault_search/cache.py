@@ -72,8 +72,9 @@ class TieredCache:
 
         ヒット時に ``CacheEntry`` 丸ごとを返すのは、``entry.total`` が
         ``len(entry.result)`` より大きいケース (結果が内部 cap で truncate
-        されたが COUNT(*) 経由で accurate な総件数が取れている状態) を
-        呼び出し側に伝えるため (#17)。
+        された over-cap エントリで accurate な総件数が別途取得された状態) を
+        呼び出し側に伝えるため (#17)。under-cap エントリでは
+        ``entry.total == len(entry.result)`` が成立する (#166)。
         """
         now = time.monotonic()
         key = self._cache_key(query, filters)
@@ -117,10 +118,11 @@ class TieredCache:
     ) -> None:
         """(query, filters) に対する結果を total 付きで格納する.
 
-        ``total`` は backend が報告した accurate な件数 (COUNT(*) 経由)。
-        ``len(result)`` が内部 cap (``_MAX_RESULTS``) で truncate された場合
-        でも ``total`` は実件数を保持するため、ページング終端判定は
-        ``entry.total`` を見ること (#17)。
+        ``total`` は呼び出し元が確定した accurate な件数。``VaultIndex.search``
+        では under-cap で ``len(result)`` を、over-cap で COUNT(*) クエリの
+        値をそれぞれ渡す (#166)。いずれも近似ではなく、``len(result)`` が内部
+        cap (``_MAX_RESULTS``) で truncate された場合でも ``total`` は実件数を
+        保持するため、ページング終端判定は ``entry.total`` を見ること (#17)。
 
         **Precondition (#31)**: ``result`` の各要素は rel-path を ``"path"`` キー
         で含むこと。含まれない要素は ``entry.paths`` から silent に抜け、
