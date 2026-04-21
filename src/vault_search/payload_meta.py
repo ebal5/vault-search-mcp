@@ -131,6 +131,8 @@ _OVERVIEW: str = (
     "エラー応答は FastMCP により 'Error executing tool <tool>: <message>' 形式で wrap されるため、"
     "errors セクションを使う前に top-level の errors_wire_format_note を読むこと。"
     "errors[code].example は wrap 前の raw message を示し、agent は substring matching で判定する。"
+    "exact wire message が必要な場合は "
+    "errors[code].wire_prefix.replace('<tool>', tool_name) + errors[code].example で構築できる。"
 )
 
 # Tool 名は server.mcp.list_tools() 経由で tests/test_schema_resource.py の drift guard が

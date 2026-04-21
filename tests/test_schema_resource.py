@@ -661,7 +661,7 @@ def test_payload_has_errors_section(vault_index: VaultIndex) -> None:
         assert code in errors, f"errors['{code}'] missing: got {sorted(errors)}"
         entry = errors[code]
         assert isinstance(entry, dict), f"errors['{code}'] must be dict: {entry!r}"
-        for field in ("description", "raised_by", "example"):
+        for field in ("description", "raised_by", "example", "wire_prefix"):
             assert field in entry, f"errors['{code}'] missing '{field}': {entry!r}"
             assert isinstance(entry[field], str) and entry[field].strip(), (
                 f"errors['{code}']['{field}'] must be non-empty str: {entry[field]!r}"
